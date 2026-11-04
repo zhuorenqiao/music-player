@@ -328,8 +328,9 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
 
   const onStageClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
-    // 歌词行 = 定位播放；按钮 = 各自的交互（封面放大、重试）
-    if (target.closest('.lyrics__line, button, a, input, [role="button"]')) {
+    // 歌词文字 = 定位播放；按钮 = 各自的交互（封面放大、重试）。
+    // 行内留白不算歌词，点它照常进歌词页。
+    if (target.closest('.lyrics__text, button, a, input, [role="button"]')) {
       return;
     }
     if (window.getSelection()?.toString()) {
@@ -458,6 +459,26 @@ function Panel({ onClose, onNavigate }: {
   // 两个列表各自滚动，滚动条都在滚动时才浮现
   const playlistScroll = useAutoHideScroll<HTMLUListElement>();
   const recentScroll = useAutoHideScroll<HTMLUListElement>();
+
+  /**
+   * 打开播放列表时把正在播放的那首滚到可视区中间。
+   * 只在挂载（弹层打开 / 页面载入）与切回「播放列表」标签时执行；
+   * 不跟当前曲目变化联动，避免播放中自动切歌把用户正在翻看的列表拽走。
+   */
+  useEffect(() => {
+    if (tab !== 'playlist') {
+      return;
+    }
+    const list = playlistScroll.ref.current;
+    const item = list?.querySelector<HTMLElement>('.track.is-active');
+    if (!list || !item) {
+      return;
+    }
+    // 用相对位置算，别依赖 offsetTop 的定位祖先
+    const listRect = list.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+    list.scrollTop += itemRect.top - listRect.top - (list.clientHeight - itemRect.height) / 2;
+  }, [tab, playlistScroll.ref]);
 
   /**
    * 总时长就地算，不要 useMemo。
@@ -849,8 +870,23 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
   const { status, state, showRetry, retry } = useLyrics();
   const cover = useCover(current);
 
+  /**
+   * 点歌词以外的空白处也返回播放界面：按钮、输入框、歌词文字各有自己的交互；
+   * 歌词行的左右留白算空白，点它会返回（但不会跳转进度）。
+   */
+  const onBlankClick = (event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target as Element;
+    if (window.getSelection()?.toString()) {
+      return;
+    }
+    if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status')) {
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('app:close-lyrics-page'));
+  };
+
   return (
-    <section className="lyrics-page" aria-label="完整歌词">
+    <section className="lyrics-page" aria-label="完整歌词" onClick={onBlankClick}>
       <header className="lyrics-page__head">
         <button className="lyrics-page__back" type="button" aria-label="返回播放界面（Esc）" onClick={() => window.dispatchEvent(new CustomEvent('app:close-lyrics-page'))}>
           <BackIcon />
@@ -861,12 +897,6 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
           <p className="lyrics-page__artist">{[current?.artist, current?.album].filter(Boolean).join(' · ') || '未知歌手'}</p>
         </div>
       </header>
-      {/* 已有歌词时，顶部保留来源 / 纯文本提示；未就绪 / 失败的状态放到下方内容区 */}
-      {status && state === 'ready' && (
-        <div className="lyrics-page__status-row">
-          <p className="lyrics-page__status" role="status" aria-live="polite">{status}</p>
-        </div>
-      )}
       {/* 左歌词、右封面；封面在这页只是展示用，不参与旋转（没有 is-spinning） */}
       <div className="lyrics-page__body">
         {state === 'loading' || state === 'missing' || state === 'error' ? (
@@ -906,6 +936,10 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
           </button>
           {/* 律动波形收在右栏最下面 */}
           <WaveStrip />
+          {/* 歌词来源：桌面放在封面/频谱下方；窄屏该栏隐藏，也就不再显示这行说明 */}
+          {status && state === 'ready' && (
+            <p className="lyrics-page__status lyrics-page__status--art" role="status" aria-live="polite">{status}</p>
+          )}
         </aside>
       </div>
     </section>

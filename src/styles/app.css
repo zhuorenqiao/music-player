@@ -1157,6 +1157,8 @@ h2 {
 /* 弹层里的一版面板：脱掉自己的卡片皮肤，让列表吃满弹层高度 */
 .panel--sheet {
   flex: 1 1 auto;
+  /* 关键：不设 0 的话 min-height:auto 会让面板顶到内容全高，卡片裁掉后列表滚不动 */
+  min-height: 0;
   gap: 8px;
   padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
   border: none;
@@ -1165,10 +1167,19 @@ h2 {
   box-shadow: none;
 }
 
+/* 卡片高度不够时只让列表收缩；标题行、统计行、提示条保持原高，别被压扁盖字 */
+.panel--sheet .panel__head,
+.panel--sheet .panel__count,
+.panel--sheet .panel__notice {
+  flex: 0 0 auto;
+}
+
 .panel--sheet .panel__list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* 滚到边界不要带着页面一起弹（body 已经锁滚动，双保险） */
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -1682,20 +1693,17 @@ body.is-sheet-open {
   font-variant-numeric: tabular-nums;
 }
 
-.lyrics-page__status-row {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  margin: 0 2px;
-}
-
 .lyrics-page__status {
   flex: 0 0 auto;
   margin: 0;
   font-size: 12px;
   color: var(--text-faint);
+}
+
+/* 右栏（封面 + 频谱）下方的来源脚注 */
+.lyrics-page__status--art {
+  text-align: center;
+  line-height: 1.4;
 }
 
 /* 与主页紧凑歌词条的重试按钮同款；出现在「未找到 / 匹配失败」时 */
@@ -2479,6 +2487,11 @@ body.is-lightbox-open {
   .lyrics--compact {
     height: clamp(160px, 22vh, 220px);
     max-height: clamp(160px, 22vh, 220px);
+  }
+
+  /* 小屏不显示「歌词自动匹配自…」这行来源说明；加载 / 失败状态仍保留 */
+  .stage__lyrics-status[data-state="ready"] {
+    display: none;
   }
 
   /* 歌词页在手机上：控制区不再吸附（整页锁定高度、歌词自己滚动） */
