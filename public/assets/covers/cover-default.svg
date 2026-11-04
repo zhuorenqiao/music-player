@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-label="默认封面">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#16202b"/>
+      <stop offset="55%" stop-color="#1f2c3a"/>
+      <stop offset="100%" stop-color="#0c1219"/>
+    </linearGradient>
+    <linearGradient id="note4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#9fb4c7"/>
+      <stop offset="100%" stop-color="#5d7183"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#bg4)"/>
+  <g fill="none" stroke="#3f5265" stroke-width="1.4" opacity="0.8">
+    <circle cx="200" cy="200" r="118"/>
+    <circle cx="200" cy="200" r="150"/>
+    <circle cx="200" cy="200" r="86"/>
+  </g>
+  <g fill="url(#note4)">
+    <ellipse cx="172" cy="238" rx="26" ry="19" transform="rotate(-18 172 238)"/>
+    <rect x="192" y="140" width="9" height="98" rx="4"/>
+    <path d="M201 140 q 34 8 30 42 q -6 -22 -30 -26 z"/>
+  </g>
+  <rect x="28" y="28" width="42" height="4" rx="2" fill="#7f95a8"/>
+  <text x="28" y="372" font-family="Helvetica, Arial, sans-serif" font-size="13" letter-spacing="4" fill="#7f95a8">LOCAL TRACK</text>
+</svg>

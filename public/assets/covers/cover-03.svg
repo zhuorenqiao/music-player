@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-label="海边书店 封面">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2b1410"/>
+      <stop offset="52%" stop-color="#6d2c1d"/>
+      <stop offset="100%" stop-color="#1a0d0b"/>
+    </linearGradient>
+    <linearGradient id="sun3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffcf6b"/>
+      <stop offset="100%" stop-color="#ff8a5c"/>
+    </linearGradient>
+    <linearGradient id="sea3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffb37a" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#7a2f1c" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#bg3)"/>
+  <circle cx="200" cy="196" r="82" fill="url(#sun3)"/>
+  <rect x="0" y="196" width="400" height="204" fill="url(#sea3)"/>
+  <g stroke="#ffd9a8" stroke-width="2" stroke-linecap="round" opacity="0.75">
+    <path d="M40 240 H 360"/>
+    <path d="M68 262 H 332"/>
+    <path d="M96 284 H 304"/>
+    <path d="M124 306 H 276"/>
+    <path d="M152 328 H 248"/>
+  </g>
+  <path d="M0 196 H 400" stroke="#ffe6c2" stroke-width="1.5" opacity="0.6"/>
+  <g fill="none" stroke="#ffcf6b" stroke-width="2" opacity="0.95">
+    <path d="M96 120 q 24 -30 48 0"/>
+    <path d="M256 120 q 24 -30 48 0"/>
+    <path d="M176 92 q 24 -30 48 0"/>
+  </g>
+  <rect x="28" y="28" width="42" height="4" rx="2" fill="#ffcf6b"/>
+  <text x="28" y="372" font-family="Helvetica, Arial, sans-serif" font-size="13" letter-spacing="4" fill="#ffcfa0">SEASIDE BOOKS</text>
+</svg>

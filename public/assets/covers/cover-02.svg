@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-label="霓虹夜行 封面">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1030"/>
+      <stop offset="50%" stop-color="#3a1358"/>
+      <stop offset="100%" stop-color="#100a20"/>
+    </linearGradient>
+    <linearGradient id="beam2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#b06bff"/>
+      <stop offset="100%" stop-color="#ff5fc8"/>
+    </linearGradient>
+    <radialGradient id="glow2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff7ad9" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ff7ad9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#bg2)"/>
+  <circle cx="132" cy="270" r="170" fill="url(#glow2)"/>
+  <g stroke="url(#beam2)" stroke-width="10" stroke-linecap="round" opacity="0.85">
+    <line x1="40" y1="330" x2="150" y2="120"/>
+    <line x1="96" y1="340" x2="206" y2="130"/>
+    <line x1="152" y1="350" x2="262" y2="140"/>
+    <line x1="208" y1="360" x2="318" y2="150"/>
+  </g>
+  <g fill="none" stroke="#ffb3ec" stroke-width="1" opacity="0.5">
+    <path d="M24 200 H 376"/>
+    <path d="M24 216 H 376"/>
+    <path d="M24 232 H 376"/>
+  </g>
+  <circle cx="288" cy="112" r="54" fill="none" stroke="#ff5fc8" stroke-width="2" opacity="0.9"/>
+  <circle cx="288" cy="112" r="30" fill="none" stroke="#b06bff" stroke-width="2" opacity="0.9"/>
+  <circle cx="288" cy="112" r="7" fill="#ffd8f4"/>
+  <path d="M40 268 l16 -40 16 40 16 -40 16 40" fill="none" stroke="#d9a6ff" stroke-width="3" stroke-linejoin="round" opacity="0.9"/>
+  <rect x="28" y="28" width="42" height="4" rx="2" fill="#ff5fc8"/>
+  <text x="28" y="372" font-family="Helvetica, Arial, sans-serif" font-size="13" letter-spacing="4" fill="#d9a6ff">NEON NIGHT</text>
+</svg>
