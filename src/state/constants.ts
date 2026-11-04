@@ -17,6 +17,8 @@ export const STORAGE_KEYS = Object.freeze({
   muted: 'muted',
   /** 完整播放顺序（含本地曲目的 id），用于跨会话还原歌单顺序 */
   order: 'order',
+  /** 歌词页右上角选中的波形样式 id */
+  waveStyle: 'waveStyle',
 });
 
 /** 方向键快进/快退步长（秒）。 */

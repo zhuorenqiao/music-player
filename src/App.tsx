@@ -16,9 +16,11 @@ import { ToastProvider, useToast } from './state/toast';
 import { PlayerProvider, usePlayer, usePlaybackTime, useBufferedEnd } from './state/player';
 import { CoverProvider, coverForDisplay, useCover } from './state/covers';
 import { LyricsProvider, useLyrics, findActiveCue } from './state/lyrics';
+import { WaveStyleProvider } from './state/wave-style';
 import { useLibrary } from './state/library';
 import { useAutoHideScroll } from './state/useAutoHideScroll';
 import { WaveStrip } from './components/WaveStrip';
+import { WaveStylePicker } from './components/WaveStylePicker';
 import { clearRecent as clearRecentStore, formatRelativeTime } from './lib/recent-store.js';
 import { remove as removeLocalRecord } from './lib/local-store.js';
 import { DEFAULT_COVER } from './lib/demo-data.js';
@@ -777,6 +779,10 @@ function Transport({ onOpenQueue, queueOpen }: {
 
   return (
     <section className="transport" aria-label="播放控制">
+      {/* 小屏歌词页：频谱从右栏挪到进度条上方（桌面隐藏，右栏自带一条） */}
+      <div className="transport__wave">
+        <WaveStrip />
+      </div>
       <div className="progress">
         <span className="progress__time">{formatTime(shownTime)}</span>
         <div className="progress__slider">
@@ -879,7 +885,7 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
     if (window.getSelection()?.toString()) {
       return;
     }
-    if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status')) {
+    if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status, .wave-style')) {
       return;
     }
     window.dispatchEvent(new CustomEvent('app:close-lyrics-page'));
@@ -896,6 +902,8 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
           <p className="lyrics-page__title">{current?.title ?? '—'}</p>
           <p className="lyrics-page__artist">{[current?.artist, current?.album].filter(Boolean).join(' · ') || '未知歌手'}</p>
         </div>
+        {/* 右上角：选下面那条波形的样式 */}
+        <WaveStylePicker />
       </header>
       {/* 左歌词、右封面；封面在这页只是展示用，不参与旋转（没有 is-spinning） */}
       <div className="lyrics-page__body">
@@ -1511,11 +1519,13 @@ function WithLyrics() {
 export default function App() {
   return (
     <ToastProvider>
-      <PlayerProvider>
-        <CoverProvider>
-          <WithLyrics />
-        </CoverProvider>
-      </PlayerProvider>
+      <WaveStyleProvider>
+        <PlayerProvider>
+          <CoverProvider>
+            <WithLyrics />
+          </CoverProvider>
+        </PlayerProvider>
+      </WaveStyleProvider>
     </ToastProvider>
   );
 }
