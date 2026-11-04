@@ -5,8 +5,8 @@
  * 差别只在「谁驱动渲染」：vanilla 是命令式改 DOM，这里是 React 状态。
  *
  * 几个刻意保留的细节：
- * · 三张圆碟（主封面 / 歌词页头部 / 控制条）由 CSS 动画驱动，播放时 running、
- *   暂停时 paused —— 停在当前角度而不是跳回 0deg；相位由 spin.ts 对齐。
+ * · 主封面 / 歌词页头部封面由 CSS 动画驱动，播放时 running、
+ *   暂停时 paused —— 停在当前角度而不是跳回 0deg。
  * · 点封面 = 放大看完整方图；点曲目区其它位置 = 进完整歌词页；点歌词行 = 定位播放。
  * · 进度值走 usePlaybackTime()（useSyncExternalStore），不会带着整棵树每帧重渲染。
  */
@@ -17,7 +17,6 @@ import { PlayerProvider, usePlayer, usePlaybackTime, useBufferedEnd } from './st
 import { CoverProvider, coverForDisplay, useCover } from './state/covers';
 import { LyricsProvider, useLyrics, findActiveCue } from './state/lyrics';
 import { useLibrary } from './state/library';
-import { useSpinFollower } from './state/spin';
 import { useAutoHideScroll } from './state/useAutoHideScroll';
 import { WaveStrip } from './components/WaveStrip';
 import { clearRecent as clearRecentStore, formatRelativeTime } from './lib/recent-store.js';
@@ -98,6 +97,14 @@ const CloseIcon = () => (
   </svg>
 );
 
+/** 播放列表入口：三行列表 + 向上箭头，提示「从这里往上弹出」。 */
+const QueueIcon = () => (
+  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 6.5h9M4 12h9M4 17.5h6" />
+    <path d="M15 15.5l3-3 3 3" />
+  </svg>
+);
+
 // ---------------------------------------------------------------------------
 // 工具
 // ---------------------------------------------------------------------------
@@ -111,6 +118,25 @@ const formatTime = (seconds: number): string => {
   const rest = total % 60;
   return `${minutes}:${String(rest).padStart(2, '0')}`;
 };
+
+/**
+ * 移动端断点，必须与 CSS 的 `max-width: 899px` 保持一致：
+ * 这个宽度以下面板改为底部弹层，桌面右栏才常驻。
+ */
+const COMPACT_LAYOUT_QUERY = '(max-width: 899px)';
+
+function useCompactLayout(): boolean {
+  const [compact, setCompact] = useState(() => window.matchMedia(COMPACT_LAYOUT_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(COMPACT_LAYOUT_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setCompact(event.matches);
+    // 首帧到 effect 之间可能已经转过一次屏，补读一次
+    setCompact(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+  return compact;
+}
 
 // ---------------------------------------------------------------------------
 // 顶部栏
@@ -252,10 +278,15 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
             index === activeIndex ? 'is-active' : '',
             index < activeIndex ? 'is-past' : '',
           ].filter(Boolean).join(' ')}
-          title={current ? `跳到 ${formatTime(cue.time)}` : undefined}
-          onClick={() => seek(cue.time)}
         >
-          <span className="lyrics__text">{cue.text || '·'}</span>
+          {/* 只有点中文字才跳转：行内的左右留白不算 */}
+          <span
+            className="lyrics__text"
+            title={current ? `跳到 ${formatTime(cue.time)}` : undefined}
+            onClick={() => seek(cue.time)}
+          >
+            {cue.text || '·'}
+          </span>
         </li>
       ))}
     </ul>
@@ -266,7 +297,7 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
 // 曲目区
 // ---------------------------------------------------------------------------
 
-function Stage({ onOpenLightbox, discRef, masterRef }: { onOpenLightbox: (trigger?: HTMLElement | null) => void; discRef: React.RefObject<HTMLImageElement>; masterRef: React.RefObject<HTMLImageElement> }) {
+function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLElement | null) => void; discRef: React.RefObject<HTMLImageElement> }) {
   const { current, playing, loading, seek } = usePlayer();
   const { cues, status, state, showRetry, retry } = useLyrics();
   const time = usePlaybackTime();
@@ -294,9 +325,6 @@ function Stage({ onOpenLightbox, discRef, masterRef }: { onOpenLightbox: (trigge
       list.scrollTo({ top: line.offsetTop - (list.clientHeight - line.clientHeight) / 2, behavior: 'smooth' });
     }
   }, [activeIndex, compactScroll.ref]);
-
-  // 从歌词页回来时主封面元素是重新挂载的，动画会从 0deg 开始 —— 与母钟对齐一次
-  useSpinFollower(discRef, masterRef, [current?.id]);
 
   const onStageClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
@@ -403,9 +431,9 @@ function Stage({ onOpenLightbox, discRef, masterRef }: { onOpenLightbox: (trigge
             <li
               key={`${cue.time}-${index}`}
               className={['lyrics__line', index === activeIndex ? 'is-active' : '', index < activeIndex ? 'is-past' : ''].filter(Boolean).join(' ')}
-              onClick={() => seek(cue.time)}
             >
-              <span className="lyrics__text">{cue.text || '·'}</span>
+              {/* 只有点中文字才跳转：行内的左右留白不算 */}
+              <span className="lyrics__text" onClick={() => seek(cue.time)}>{cue.text || '·'}</span>
             </li>
           ))}
         </ul>
@@ -418,7 +446,12 @@ function Stage({ onOpenLightbox, discRef, masterRef }: { onOpenLightbox: (trigge
 // 右侧面板（播放列表 / 最近）
 // ---------------------------------------------------------------------------
 
-function Panel() {
+function Panel({ onClose, onNavigate }: {
+  /** 传了就以「底部弹层里的一版」呈现：隐藏提示、右上角出关闭按钮 */
+  onClose?: () => void;
+  /** 选中曲目开始播放后调用（弹层据此收起） */
+  onNavigate?: () => void;
+} = {}) {
   const { tracks, currentIndex, playing, playAt, removeTrack, removeRecent, recent, syncRecent, failedIds, notice, hideNotice, resumeAutoplay } = usePlayer();
   const { show } = useToast();
   const [tab, setTab] = useState<'playlist' | 'recent'>('playlist');
@@ -437,7 +470,7 @@ function Panel() {
   );
 
   return (
-    <aside className="panel" aria-label="播放列表与最近播放">
+    <aside className={`panel${onClose ? ' panel--sheet' : ''}`} aria-label="播放列表与最近播放">
       <div className="panel__head">
         <div
           className="panel__tabs"
@@ -461,7 +494,13 @@ function Panel() {
             最近<span className="panel__tab-count">{recent.length}</span>
           </button>
         </div>
-        <span className="panel__hint">拖入音频 / .lrc 即可添加</span>
+        {onClose ? (
+          <button className="panel__close" type="button" aria-label="收起播放列表" title="收起" onClick={onClose}>
+            <CloseIcon />
+          </button>
+        ) : (
+          <span className="panel__hint">拖入音频 / .lrc 即可添加</span>
+        )}
       </div>
 
       <p className="panel__count">
@@ -494,7 +533,7 @@ function Panel() {
                     data-action="play"
                     aria-label={`播放《${track.title}》`}
                     aria-current={isActive ? 'true' : undefined}
-                    onClick={() => playAt(index, { autoplay: true })}
+                    onClick={() => { playAt(index, { autoplay: true }); onNavigate?.(); }}
                   >
                     <img className="track__cover" src={coverForDisplay(track)} alt="" width={44} height={44} loading="lazy" />
                     <span className="track__info">
@@ -552,6 +591,7 @@ function Panel() {
                     const at = tracks.findIndex((track) => track.id === entry.id);
                     if (at >= 0) {
                       playAt(at, { autoplay: true });
+                      onNavigate?.();
                     } else {
                       show('这首歌已经不在播放列表里了', 'info');
                     }
@@ -589,10 +629,106 @@ function Panel() {
 }
 
 // ---------------------------------------------------------------------------
+// 移动端播放列表弹层（桌面不出场：右栏常驻）
+// ---------------------------------------------------------------------------
+
+/** 关闭时的滑落时长，略短于入场（退出不能拖沓）。与 CSS 的 sheet 动画时长一致。 */
+const SHEET_EXIT_MS = 220;
+
+function PlaylistSheet({ open, onClose, children }: {
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  /** 保留到退场动画结束再卸载，否则面板会瞬间消失 */
+  const [mounted, setMounted] = useState(open);
+  const [phase, setPhase] = useState<'in' | 'out'>('in');
+  const cardRef = useRef<HTMLDivElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setMounted(true);
+      setPhase('in');
+      document.body.classList.add('is-sheet-open');
+      return () => document.body.classList.remove('is-sheet-open');
+    }
+    setPhase('out');
+    const timer = window.setTimeout(() => setMounted(false), SHEET_EXIT_MS);
+    const back = returnFocus.current;
+    returnFocus.current = null;
+    if (back) {
+      window.requestAnimationFrame(() => {
+        if (document.contains(back)) {
+          back.focus({ preventScroll: true });
+        }
+      });
+    }
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  // 卡片挂载之后才聚焦：依赖 mounted 而不是在开层那次 effect 里抢先跑
+  useEffect(() => {
+    if (open && mounted) {
+      cardRef.current?.focus({ preventScroll: true });
+    }
+  }, [open, mounted]);
+
+  if (!mounted) {
+    return null;
+  }
+
+  /** 简易焦点环：Tab / Shift+Tab 在弹层内循环，不跑到背后的播放器上 */
+  const trapFocus = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Tab' || !cardRef.current) {
+      return;
+    }
+    const items = Array.from(
+      cardRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+    ).filter((element) => element.offsetParent !== null);
+    if (items.length === 0) {
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !cardRef.current.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !cardRef.current.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  return (
+    <div className={`sheet sheet--${phase}`}>
+      <div className="sheet__scrim" onClick={onClose} />
+      <div
+        ref={cardRef}
+        id="playlistSheet"
+        className="sheet__card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="播放列表"
+        tabIndex={-1}
+        onKeyDown={trapFocus}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 控制区
 // ---------------------------------------------------------------------------
 
-function Transport({ masterDiscRef }: { masterDiscRef: React.RefObject<HTMLImageElement> }) {
+function Transport({ onOpenQueue, queueOpen }: {
+  /** 打开播放列表弹层（只在移动端渲染入口） */
+  onOpenQueue: () => void;
+  queueOpen: boolean;
+}) {
   const { current, playing, loading, duration, volume, muted, mode, modeLabel, togglePlay, playNext, playPrev, seek, setVolume, toggleMute, cycleMode } = usePlayer();
   const { importFiles } = useLibrary();
   const time = usePlaybackTime();
@@ -613,7 +749,6 @@ function Transport({ masterDiscRef }: { masterDiscRef: React.RefObject<HTMLImage
   const total = Number.isFinite(duration) && duration > 0 ? duration : metaDuration;
   const percent = total > 0 ? Math.min(100, (shownTime / total) * 100) : 0;
   const bufferedPercent = total > 0 ? Math.min(100, (buffered / total) * 100) : 0;
-  const cover = useCover(current);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const volumePercent = muted ? 0 : Math.round(volume * 100);
@@ -651,31 +786,6 @@ function Transport({ masterDiscRef }: { masterDiscRef: React.RefObject<HTMLImage
       </div>
 
       <div className="controls">
-        <button
-          ref={undefined}
-          className={`controls__disc${playing ? ' is-spinning' : ''}`}
-          type="button"
-          aria-label="打开完整歌词页"
-          title="查看完整歌词"
-          onClick={() => window.dispatchEvent(new CustomEvent('app:toggle-lyrics-page'))}
-        >
-          <img
-            ref={masterDiscRef}
-            className="controls__disc-img"
-            src={cover}
-            alt=""
-            width={46}
-            height={46}
-            decoding="async"
-            onError={(event) => {
-              const img = event.currentTarget;
-              if (img.dataset.fallbackApplied === '1') return;
-              img.dataset.fallbackApplied = '1';
-              img.src = DEFAULT_COVER;
-            }}
-          />
-        </button>
-
         <button className="btn btn--icon" type="button" aria-label={`播放模式：${modeLabel}`} title={modeLabel} onClick={cycleMode}>
           <ModeIcon name={mode === 'one' ? 'one' : mode === 'shuffle' ? 'shuffle' : 'list'} />
         </button>
@@ -685,6 +795,23 @@ function Transport({ masterDiscRef }: { masterDiscRef: React.RefObject<HTMLImage
           <span className="btn__spinner" aria-hidden="true" />
         </button>
         <button className="btn btn--icon" type="button" aria-label="下一首" title="下一首" onClick={() => playNext()}><NextIcon /></button>
+
+        {/* 移动端：列表入口在最右侧，点开底部弹层；桌面右栏常驻列表，这里隐藏 */}
+        <button
+          className="btn btn--icon controls__queue"
+          type="button"
+          aria-label="播放列表"
+          title="播放列表"
+          aria-haspopup="dialog"
+          aria-expanded={queueOpen}
+          onClick={(event) => {
+            // 触摸设备点按按钮不会自动聚焦，先钉住焦点，关闭弹层时才能还回来
+            event.currentTarget.focus({ preventScroll: true });
+            onOpenQueue();
+          }}
+        >
+          <QueueIcon />
+        </button>
 
         <div className="volume">
           <button className="btn btn--icon" type="button" aria-label={muted ? '取消静音' : '静音'} title={muted ? '取消静音' : '静音'} onClick={toggleMute}>
@@ -704,6 +831,7 @@ function Transport({ masterDiscRef }: { masterDiscRef: React.RefObject<HTMLImage
           />
         </div>
       </div>
+
       <input ref={fileRef} type="file" accept="audio/*,.lrc" multiple hidden onChange={(event) => {
         if (event.target.files?.length) void importFiles(event.target.files);
         event.target.value = '';
@@ -812,7 +940,44 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
     setOffset(nextOffset);
   }, []);
   const dragging = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  /** 当前按在图片上的指针：双指缩放要同时跟踪两根手指 */
+  const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  /**
+   * 双指缩放的基准：起始指距、起始缩放、未位移的图片中心，
+   * 以及起始两指中点在图片坐标系里的位置（保证缩放时指间内容不漂移）。
+   */
+  const pinch = useRef<{
+    distance: number;
+    scale: number;
+    center: { x: number; y: number };
+    local: { x: number; y: number };
+  } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  const beginPinch = useCallback(() => {
+    const img = imgRef.current;
+    const fingers = [...pointers.current.values()];
+    if (!img || fingers.length < 2) {
+      pinch.current = null;
+      return;
+    }
+    const [a, b] = fingers;
+    const rect = img.getBoundingClientRect();
+    const viewX = rect.left + rect.width / 2;
+    const viewY = rect.top + rect.height / 2;
+    const currentScale = scaleRef.current;
+    const currentOffset = offsetRef.current;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    pinch.current = {
+      distance: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      scale: currentScale,
+      // getBoundingClientRect 的中心含位移，减掉 offset 才是图片自身的中心
+      center: { x: viewX - currentOffset.x, y: viewY - currentOffset.y },
+      local: { x: (mid.x - viewX) / currentScale, y: (mid.y - viewY) / currentScale },
+    };
+    dragging.current = null;
+    setIsDragging(false);
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -823,6 +988,10 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
   // 每次打开 / 换图都回到 1×居中，不把上一首的缩放状态带过去
   useEffect(() => {
     applyView(1, { x: 0, y: 0 });
+    pointers.current.clear();
+    pinch.current = null;
+    dragging.current = null;
+    setIsDragging(false);
   }, [applyView, open, cover]);
 
   /**
@@ -885,6 +1054,19 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
   }, [applyView, clampOffset, open]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLImageElement>) => {
+    try {
+      // 指针捕获让手指/鼠标移出图片后仍能继续拖；个别环境会抛 NotFoundError，不该影响拖拽
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // 忽略：没有捕获时，指针离开图片会中断拖拽，属于可接受的降级
+    }
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    if (pointers.current.size >= 2) {
+      // 第二根手指落下：从单指拖拽切到双指缩放
+      beginPinch();
+      return;
+    }
     // 1× 时没有可拖的内容，交给外层「点空白关闭」的逻辑
     if (scaleRef.current <= 1) {
       return;
@@ -897,15 +1079,31 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
       baseY: offsetRef.current.y,
     };
     setIsDragging(true);
-    try {
-      // 指针捕获让手指/鼠标移出图片后仍能继续拖；个别环境会抛 NotFoundError，不该影响拖拽
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // 忽略：没有捕获时，指针离开图片会中断拖拽，属于可接受的降级
-    }
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLImageElement>) => {
+    if (!pointers.current.has(event.pointerId)) {
+      return;
+    }
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    const pinchState = pinch.current;
+    if (pinchState && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const nextScale = Math.min(
+        LIGHTBOX_MAX_SCALE,
+        Math.max(1, pinchState.scale * (distance / pinchState.distance)),
+      );
+      // 两指中点对应的图片内容保持不动：中点的移动同时当作平移
+      applyView(nextScale, clampOffset({
+        x: mid.x - pinchState.center.x - pinchState.local.x * nextScale,
+        y: mid.y - pinchState.center.y - pinchState.local.y * nextScale,
+      }, nextScale));
+      return;
+    }
+
     const state = dragging.current;
     if (!state || state.pointerId !== event.pointerId) {
       return;
@@ -916,15 +1114,38 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
     }, scaleRef.current));
   };
 
-  const endDrag = (event: React.PointerEvent<HTMLImageElement>) => {
-    if (dragging.current?.pointerId === event.pointerId) {
-      try {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      } catch {
-        // 没捕获成功过，忽略
-      }
+  const onPointerEnd = (event: React.PointerEvent<HTMLImageElement>) => {
+    pointers.current.delete(event.pointerId);
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // 没捕获成功过，忽略
     }
-    dragging.current = null;
+
+    if (pointers.current.size >= 2) {
+      // 三指变两指等场景：按剩下的两指重新定基准
+      beginPinch();
+      return;
+    }
+    pinch.current = null;
+
+    if (pointers.current.size === 1 && scaleRef.current > 1) {
+      // 双指松开一根：剩下那根继续平移，不跳回
+      const [pointerId, point] = [...pointers.current.entries()][0];
+      dragging.current = {
+        pointerId,
+        startX: point.x,
+        startY: point.y,
+        baseX: offsetRef.current.x,
+        baseY: offsetRef.current.y,
+      };
+      setIsDragging(true);
+      return;
+    }
+
+    if (dragging.current?.pointerId === event.pointerId) {
+      dragging.current = null;
+    }
     setIsDragging(false);
   };
 
@@ -957,8 +1178,8 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
         style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
       />
       <p className="lightbox__caption">{[current.title, current.artist, current.album].filter(Boolean).join(' · ')}</p>
     </div>
@@ -1020,11 +1241,18 @@ function Shell() {
   }, []);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
+  const compact = useCompactLayout();
+  /** 移动端播放列表弹层；切回桌面时立刻收起（右栏会接管） */
+  const [queueOpen, setQueueOpen] = useState(false);
+  useEffect(() => {
+    if (!compact) {
+      setQueueOpen(false);
+    }
+  }, [compact]);
   /** 打开歌词页前的焦点元素，返回时还回去 —— 键盘用户按 Esc 后不该掉到 body 上。
       必须声明在组件顶层，放 useEffect 回调里就是非法 hook 调用（会把整棵树弄崩）。 */
   const returnFocus = useRef<HTMLElement | null>(null);
   const stageDiscRef = useRef<HTMLImageElement>(null);
-  const masterDiscRef = useRef<HTMLImageElement>(null);
 
   // 视图切换：body 上的类决定布局（与 vanilla 同一套 CSS 开关）
   useEffect(() => {
@@ -1088,7 +1316,7 @@ function Shell() {
     };
   }, [resumeAutoplay]);
 
-  // 快捷键：放大层开着时只认 Esc
+  // 快捷键：放大层 / 弹层开着时只认 Esc
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (lightbox) {
@@ -1096,6 +1324,14 @@ function Shell() {
           event.preventDefault();
           // 走 closeLightbox 而不是 setLightbox(false)：要触发焦点归还
           closeLightbox();
+        }
+        return;
+      }
+      if (queueOpen) {
+        // 弹层盖住播放器时，别的快捷键不该在背后改播放状态
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setQueueOpen(false);
         }
         return;
       }
@@ -1154,7 +1390,7 @@ function Shell() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [closeLightbox, lightbox, lyricsPage, playNext, playPrev, seekBy, setVolume, togglePlay, volume]);
+  }, [closeLightbox, lightbox, lyricsPage, playNext, playPrev, queueOpen, seekBy, setVolume, togglePlay, volume]);
 
   // 整页拖放导入
   useEffect(() => {
@@ -1201,14 +1437,24 @@ function Shell() {
       <div className="app">
         <Header />
         <main className="app__main">
-          {lyricsPage
-            ? <LyricsPage onOpenLightbox={openLightbox} />
-            : <Stage onOpenLightbox={openLightbox} discRef={stageDiscRef} masterRef={masterDiscRef} />}
-          <Panel />
-          <Transport masterDiscRef={masterDiscRef} />
+          <div className="player">
+            {lyricsPage
+              ? <LyricsPage onOpenLightbox={openLightbox} />
+              : <Stage onOpenLightbox={openLightbox} discRef={stageDiscRef} />}
+            <Transport
+              onOpenQueue={() => setQueueOpen(true)}
+              queueOpen={queueOpen}
+            />
+          </div>
+          {!compact && <Panel />}
         </main>
       </div>
       <Lightbox open={lightbox} onClose={closeLightbox} />
+      {compact && (
+        <PlaylistSheet open={queueOpen} onClose={() => setQueueOpen(false)}>
+          <Panel onClose={() => setQueueOpen(false)} onNavigate={() => setQueueOpen(false)} />
+        </PlaylistSheet>
+      )}
       <DropOverlay visible={dragging} />
       <Toasts />
     </>

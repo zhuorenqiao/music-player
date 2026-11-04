@@ -121,8 +121,8 @@ h2 {
   max-width: 1180px;
   min-height: 100vh;
   margin: 0 auto;
-  /* 底部不留白：控制区自己带上安全区内边距，吸附时才能贴住视口底边 */
-  padding: 16px 14px 0;
+  /* 底部留白：整张播放卡浮在页面里，底边圆角与边距都要露出来 */
+  padding: 16px 14px 14px;
 }
 
 .app__main {
@@ -131,6 +131,35 @@ h2 {
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+}
+
+/* 曲目区 / 歌词页 + 控制区合在一张卡里：卡片只留一套圆角、边框与玻璃底，
+   内部的 stage / transport 不再各带一套卡片外观（否则中间会多出一道缝） */
+.player {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(16px);
+}
+
+.player > .stage {
+  flex: 1 1 auto;
+}
+
+.player > .stage,
+.player > .lyrics-page,
+.player > .transport {
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 /* 移动端用 svh 兜底，避免地址栏收起时多出一条滚动 */
@@ -795,61 +824,50 @@ h2 {
     0 2px 8px rgba(0, 0, 0, 0.65);
 }
 
-/* 传输按钮组 */
+/* 传输按钮组（移动端：一整行、等距分布；桌面回到网格 + 右侧音量） */
 .controls {
-  display: grid;
-  grid-template-columns: repeat(5, auto);
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 0;
   min-width: 0;
 }
 
-/* 控制条上的小圆碟：跟主封面一样，播放转、暂停冻在当前角度 */
-.controls__disc {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
+/* 控制行里的按钮统一成同样大小的圆钮（含主播放键与音量键） */
+.controls > .btn,
+.volume > .btn {
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+}
+
+/* 播放键不再用大号实心绿：与其它控制键同款描边圆钮，避免一行里两种规格 */
+.controls > .btn--play {
+  border: 1px solid var(--border);
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.controls > .btn--play:hover {
+  border-color: var(--border-strong);
   background: var(--surface-2);
-  cursor: pointer;
-  transition:
-    transform 0.16s var(--ease),
-    border-color 0.2s var(--ease);
 }
 
-.controls__disc:hover {
-  border-color: var(--accent);
+.controls > .btn--play .icon {
+  width: 18px;
+  height: 18px;
 }
 
-.controls__disc:active {
-  transform: scale(0.94);
+.controls > .btn--play .btn__spinner {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+  border-color: rgba(46, 230, 168, 0.25);
+  border-top-color: var(--accent);
 }
 
-.controls__disc:focus-visible {
-  outline: 2px solid var(--accent-light);
-  outline-offset: 3px;
-}
-
-.controls__disc-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 50%;
-  transform-origin: center;
-  animation: cover-rotate var(--cover-spin-duration) linear infinite;
-  animation-play-state: paused;
-}
-
-.controls__disc.is-spinning .controls__disc-img {
-  animation-play-state: running;
-}
-
+/* 控制条上的小圆碟已移除：歌词页入口靠点曲目区 / 快捷键 L */
 .volume {
   display: flex;
   grid-column: 1 / -1;
@@ -919,6 +937,11 @@ h2 {
 
 .volume__input:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px rgba(46, 230, 168, 0.35);
+}
+
+/* 移动端右侧的「播放列表」按钮：桌面右栏常驻列表，这里不显示 */
+.controls__queue {
+  display: none;
 }
 
 /* --------------------------------------------------------------------------
@@ -1131,6 +1154,151 @@ h2 {
   border-radius: var(--radius-lg);
 }
 
+/* 弹层里的一版面板：脱掉自己的卡片皮肤，让列表吃满弹层高度 */
+.panel--sheet {
+  flex: 1 1 auto;
+  gap: 8px;
+  padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.panel--sheet .panel__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.panel__close {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.2s var(--ease),
+    border-color 0.2s var(--ease),
+    background-color 0.2s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+.panel__close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.panel__close:active {
+  transform: scale(0.94);
+}
+
+.panel__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.panel__close .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* --------------------------------------------------------------------------
+   8.6 移动端播放列表弹层
+   入场减速落位、退场加速滑出；遮罩同步淡入淡出
+   -------------------------------------------------------------------------- */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 8, 12, 0.66);
+  backdrop-filter: blur(3px);
+  animation: sheet-scrim-in 0.24s var(--ease) both;
+}
+
+.sheet--out .sheet__scrim {
+  animation: sheet-scrim-out 0.2s ease-in both;
+}
+
+.sheet__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 560px;
+  max-height: min(78vh, 640px);
+  max-height: min(78dvh, 640px);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-bottom: none;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  background: linear-gradient(180deg, #0d1219 0%, #090c11 100%);
+  box-shadow: 0 -24px 60px -30px rgba(0, 0, 0, 0.95);
+  animation: sheet-slide-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.sheet--out .sheet__card {
+  animation: sheet-slide-out 0.22s cubic-bezier(0.5, 0, 0.9, 0.4) both;
+}
+
+@keyframes sheet-slide-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes sheet-slide-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes sheet-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* 弹层打开时锁住背景滚动（与放大层同一套做法） */
+body.is-sheet-open {
+  overflow: hidden;
+}
+
 /* --------------------------------------------------------------------------
    8.5 歌词（紧凑版在封面下方，完整版在歌词页里）
    -------------------------------------------------------------------------- */
@@ -1193,10 +1361,22 @@ h2 {
   background-color: rgba(255, 255, 255, 0.28);
 }
 
+/* 歌词区不出现滚动条：紧凑版和完整页都不显示（手动滑动也不显示），
+   播放列表 / 最近播放仍然保留「滚动时浮现」的行为 */
+.lyrics {
+  scrollbar-width: none;
+}
+
+.lyrics::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* 紧凑版：固定 ≈3 行高度，内部可滚动（默认跟随当前行，也可手动滑动预览整首） */
 .lyrics--compact {
-  height: 100px;
-  max-height: 100px;
+  /* 桌面留给歌词的高度由封面与信息区挤出来，随视口高度伸缩，且不顶破 stage */
+  height: clamp(112px, 15vh, 132px);
+  max-height: clamp(112px, 15vh, 132px);
   padding: 8px 4px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1221,15 +1401,10 @@ h2 {
   color: var(--text-faint);
   text-align: center;
   border-radius: 10px;
-  cursor: pointer;
+  cursor: default;
   transition:
     color 0.28s var(--ease),
     opacity 0.28s var(--ease);
-}
-
-.lyrics__line:hover {
-  color: var(--text-dim);
-  background: rgba(255, 255, 255, 0.04);
 }
 
 /* 已经唱过的行略微压暗，制造时间流逝感 */
@@ -1243,8 +1418,19 @@ h2 {
   opacity: 1;
 }
 
+/* 文字收缩到内容宽度：点击热区只覆盖歌词本身，行内左右留白不算 */
 .lyrics__text {
-  display: block;
+  display: inline-block;
+  transition: color 0.2s var(--ease);
+}
+
+/* 可跳转的行只在文字上给手型和悬停反馈，行内留白不误导成可点 */
+.lyrics__line:not(.lyrics__line--plain) .lyrics__text {
+  cursor: pointer;
+}
+
+.lyrics__line:not(.is-active):not(.lyrics__line--plain) .lyrics__text:hover {
+  color: var(--text-dim);
 }
 
 .lyrics__line.is-active .lyrics__text {
@@ -1272,15 +1458,11 @@ h2 {
   cursor: default;
 }
 
-.lyrics__line--plain:hover {
-  color: var(--text-dim);
-  background: none;
-}
-
 /* 紧凑版字号略小，完整版明显更大 */
 .lyrics--compact .lyrics__line {
   padding: 6px 8px;
-  font-size: 13px;
+  /* 与完整歌词页同字号（详情页 17px），只把行内边距收小以多放几行 */
+  font-size: 17px;
 }
 
 .lyrics--compact .lyrics__line.is-active .lyrics__text {
@@ -1487,11 +1669,7 @@ h2 {
   letter-spacing: 0.01em;
 }
 
-/* 只加一层淡底色：加粗由 .lyrics__line.is-active .lyrics__text 负责（650） */
-.lyrics-page .lyrics--full .lyrics__line.is-active {
-  background: rgba(46, 230, 168, 0.08);
-}
-
+/* 当前行的高亮（颜色 / 加粗 / 文字辉光）见 .lyrics__line.is-active，两处共用；这里只管歌词页的字号与压暗 */
 .lyrics-page .lyrics--full .lyrics__line.is-past {
   opacity: 0.5;
 }
@@ -1573,9 +1751,10 @@ h2 {
   font-size: 13px;
 }
 
-/* 切到歌词页：曲目区与列表面板让位，控制区（transport）保持可见可操作 */
+/* 切到歌词页：曲目区与列表面板让位，控制区（transport）保持可见可操作。
+   弹层里的那一版面板（.panel--sheet）不算，它是用户主动叫出来的 */
 body.is-lyrics-page .stage,
-body.is-lyrics-page .panel {
+body.is-lyrics-page .panel:not(.panel--sheet) {
   display: none;
 }
 
@@ -2020,6 +2199,8 @@ body.is-lyrics-page .app__main {
   background: rgba(4, 8, 12, 0.86);
   backdrop-filter: blur(10px);
   cursor: zoom-out;
+  /* 双指缩放交给图片自己的 pointer 手势，别让页面跟着缩放/滚动 */
+  touch-action: none;
   animation: page-in 0.22s var(--ease);
 }
 
@@ -2271,13 +2452,38 @@ body.is-lightbox-open {
     padding: 14px 14px 16px;
   }
 
+  /* 移动端：音量交给系统实体键，列表入口收到按钮行最右侧 */
+  .volume {
+    display: none;
+  }
+
+  .controls__queue {
+    display: inline-flex;
+  }
+
+  /* 列表面板让位后，控制区贴在视口底边，曲目卡吃掉中间的高度（内容垂直居中，不留下黑洞） */
+  .player > .stage {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .player > .transport {
+    margin-top: auto;
+  }
+
   :root {
     --cover-size: clamp(108px, 24vh, 150px);
   }
 
+  /* 手机单栏空间足：歌词区再拉长一档，约 4.5~5 行 */
   .lyrics--compact {
-    height: 96px;
-    max-height: 96px;
+    height: clamp(160px, 22vh, 220px);
+    max-height: clamp(160px, 22vh, 220px);
+  }
+
+  /* 歌词页在手机上：控制区不再吸附（整页锁定高度、歌词自己滚动） */
+  body.is-lyrics-page .transport {
+    position: static;
   }
 
   /* 歌词页在手机上吃掉除控制区以外的整屏，字号略降一档 */
@@ -2324,10 +2530,15 @@ body.is-lightbox-open {
   }
 }
 
-/* 中大屏：传输按钮回归单行（小圆碟 + 四个按钮），音量靠右 */
-@media (min-width: 560px) {
+/* 桌面：传输按钮回归单行（小圆碟 + 四个按钮），音量靠右。
+   899px 以下音量和右栏列表都换成弹层入口，所以这里从 900px 起生效。 */
+@media (min-width: 900px) {
   .controls {
-    grid-template-columns: auto auto auto auto auto minmax(120px, 1fr);
+    display: grid;
+    /* 模式 / 上一首 / 播放 / 下一首 + 右侧音量 */
+    grid-template-columns: auto auto auto auto minmax(120px, 1fr);
+    /* 桌面是网格排布，间距要单独给（移动端靠 space-between 均分） */
+    gap: 12px;
     justify-content: initial;
     justify-items: center;
   }
@@ -2370,20 +2581,21 @@ body.is-lightbox-open {
 
   .app__main {
     display: grid;
-    grid-template-areas:
-      "stage panel"
-      "transport panel";
+    /* 左列是一整块播放卡（曲目区 + 控制区），右列是列表 */
+    grid-template-areas: "player panel";
     grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
-    /* 左列：曲目区吃掉剩余高度，控制区贴底，从而与右栏列表底边对齐 */
-    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr);
     align-items: stretch;
     gap: 18px;
     /* 允许被压缩到视口高度内，列表改为内部滚动，避免整页滚动 */
     min-height: 0;
   }
 
+  .player {
+    grid-area: player;
+  }
+
   .stage {
-    grid-area: stage;
     justify-content: center;
     min-height: 0;
     padding: 26px 24px;
@@ -2404,10 +2616,6 @@ body.is-lightbox-open {
 
   .transport {
     position: static;
-    grid-area: transport;
-    border-bottom: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-card);
   }
 
   .panel {
@@ -2426,15 +2634,13 @@ body.is-lightbox-open {
     padding-right: 4px;
   }
 
-  /* 歌词页：切过去时横跨两列（列表面板让位），控制区仍贴在下方 */
+  /* 歌词页：切过去时横跨两列（列表面板让位），播放卡仍是同一张卡 */
   body.is-lyrics-page .app__main {
-    grid-template-areas:
-      "lyrics lyrics"
-      "transport transport";
+    grid-template-areas: "player";
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .lyrics-page {
-    grid-area: lyrics;
     min-height: 0;
     padding: 18px 20px 6px;
   }
@@ -2442,11 +2648,6 @@ body.is-lightbox-open {
   /* 桌面端歌曲信息区留白更舒展 */
   .stage__lyrics {
     max-width: 460px;
-  }
-
-  .lyrics--compact {
-    height: 104px;
-    max-height: 104px;
   }
 
   /* 桌面允许删除按钮视觉上小一点，但用伪元素把热区补到 44×44 */

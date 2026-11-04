@@ -178,6 +178,87 @@ await run('id3v1', blobOf(bytes(MPEG_FRAME, id3v1)), {
   year: '1966',
 });
 
+// Windows 下大量中文音频的标签是 GBK 写的：ID3v1 根本没有编码位，
+// ID3v2 的 encoding=0 也常被工具当作「本地编码」塞 GBK。
+const gbkDecoder = new TextDecoder('gbk');
+const gbkReverse = new Map();
+for (let lead = 0x81; lead <= 0xfe; lead += 1) {
+  for (let trail = 0x40; trail <= 0xfe; trail += 1) {
+    if (trail === 0x7f) continue;
+    const ch = gbkDecoder.decode(new Uint8Array([lead, trail]));
+    if (ch.length === 1 && ch !== '\ufffd') gbkReverse.set(ch, [lead, trail]);
+  }
+}
+/** 把字符串转成 GBK 字节（覆盖 GBK 双字节区）。 */
+const gbk = (text) => Uint8Array.from([...text].flatMap((ch) => gbkReverse.get(ch) ?? [ch.charCodeAt(0)]));
+/** 指定编码字节的文本帧（用于「声明与字节不符」的样本）。 */
+function rawTextFrame(id, payload, encodingByte = 0, version = 3) {
+  const body = bytes([encodingByte], payload);
+  const sizeField = version === 4 ? synchsafe(body.length) : u32be(body.length);
+  return bytes(fourcc(id), sizeField, [0, 0], body);
+}
+
+console.log('== ID3v2.3 encoding=0 但字节是 GBK（中文 MP3 常见）==');
+await run('id3v23-enc0-gbk', blobOf(bytes(
+  id3v2([
+    rawTextFrame('TIT2', gbk('夜曲')),
+    rawTextFrame('TPE1', gbk('周杰伦')),
+  ]),
+  MPEG_FRAME,
+)), {
+  title: '夜曲',
+  artist: '周杰伦',
+});
+
+console.log('== ID3v2.3 encoding=0 但字节是 UTF-8（有工具写错编码位）==');
+await run('id3v23-enc0-utf8', blobOf(bytes(
+  id3v2([
+    rawTextFrame('TIT2', enc.encode('夜曲')),
+    rawTextFrame('TPE1', enc.encode('周杰伦')),
+  ]),
+  MPEG_FRAME,
+)), {
+  title: '夜曲',
+  artist: '周杰伦',
+});
+
+console.log('== encoding=0 的真 Latin-1（重音字母不许被当 GBK 解）==');
+await run('id3v23-enc0-latin1', blobOf(bytes(
+  id3v2([rawTextFrame('TIT2', latin1('Café del Mar'))]),
+  MPEG_FRAME,
+)), {
+  title: 'Café del Mar',
+});
+// Motörhead 的 ö(0xF6)+r(0x72) 恰好是合法 GBK 双字节，必须有别的信号挡住误判
+await run('id3v23-enc0-latin1-ambig', blobOf(bytes(
+  id3v2([rawTextFrame('TIT2', latin1('Motörhead')), rawTextFrame('TPE1', latin1('Sigur Rós'))]),
+  MPEG_FRAME,
+)), {
+  title: 'Motörhead',
+  artist: 'Sigur Rós',
+});
+
+console.log('== 只有 ID3v1 且是 GBK ==');
+/** ID3v1 字段是定长字节（补 0x20），不是定长字符。 */
+const v1Field = (text) => {
+  const raw = gbk(text);
+  return bytes(raw, new Uint8Array(Math.max(0, 30 - raw.length))); // NUL 填充同样合法
+};
+const id3v1Gbk = bytes(
+  fourcc('TAG'),
+  v1Field('夜曲'),
+  v1Field('周杰伦'),
+  v1Field('十一月的萧邦'),
+  latin1('2005'),
+  new Uint8Array(31),
+);
+await run('id3v1-gbk', blobOf(bytes(MPEG_FRAME, id3v1Gbk)), {
+  title: '夜曲',
+  artist: '周杰伦',
+  album: '十一月的萧邦',
+  year: '2005',
+});
+
 console.log('== FLAC（Vorbis Comment + PICTURE 块）==');
 function vorbisComment(entries) {
   const vendor = cstr('test-tagging');
@@ -213,6 +294,27 @@ await run('flac', new Blob([flac], { type: 'audio/flac' }), {
   year: '2005',
   albumArtist: '周杰伦',
   picture: { k: 'type', v: 'image/png' },
+});
+
+console.log('== FLAC 的 Vorbis Comment 被工具写成 GBK（非标准但真实存在）==');
+function vorbisCommentGbk(entries) {
+  const vendor = cstr('test-tagging');
+  const lines = entries.map((line) => {
+    const raw = gbk(line);
+    return bytes(u32le(raw.length), raw);
+  });
+  return bytes(u32le(vendor.length), vendor, u32le(entries.length), ...lines);
+}
+const flacGbk = bytes(
+  fourcc('fLaC'),
+  metaBlock(0x00, streaminfo),
+  metaBlock(0x84, vorbisCommentGbk(['TITLE=夜曲', 'ARTIST=周杰伦', 'ALBUM=十一月的萧邦'])),
+);
+await run('flac-gbk', new Blob([flacGbk], { type: 'audio/flac' }), {
+  format: 'flac',
+  title: '夜曲',
+  artist: '周杰伦',
+  album: '十一月的萧邦',
 });
 
 console.log('== M4A（ftyp + moov.udta.meta.ilst：©nam / ©ART / covr）==');

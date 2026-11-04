@@ -60,6 +60,81 @@ function decodeText(bytes, encoding) {
 }
 
 /**
+ * 字节能否按某种编码严格解开（遇到非法序列直接抛错）。
+ * @param {Uint8Array} bytes 原始字节
+ * @param {string} encoding 编码名
+ * @returns {boolean}
+ */
+function canDecodeStrictly(bytes, encoding) {
+  try {
+    new TextDecoder(encoding, { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 是否出现「连续两个以上高位字节」。
+ * GBK 的汉字 / 全角符号都是双字节且两字节都 ≥0x80，成串出现；
+ * 真正的西文 Latin-1（Motörhead、Café）重音字母是孤立的，
+ * 用这个特征把「恰好也是合法 GBK 的拉丁文」挡在 GBK 之外。
+ * @param {Uint8Array} bytes 文本字节
+ * @returns {boolean}
+ */
+function hasHighByteRun(bytes) {
+  let run = 0;
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (bytes[i] >= 0x80) {
+      run += 1;
+      if (run >= 2) {
+        return true;
+      }
+    } else {
+      run = 0;
+    }
+  }
+  return false;
+}
+
+/**
+ * 解码「编码声明不可信」的文本。
+ *
+ * 中文音频文件的标签大量不符合规范：ID3v1 压根没有编码位，老工具一律按
+ * GBK 写；ID3v2 的 encoding=0（名义 ISO-8859-1）有的工具塞 GBK，有的工具
+ * 塞 UTF-8。盲信声明就会解出「Ò¹Çú」「å¤œæ›²」这类乱码。
+ * 所以按 ASCII → UTF-8 → GBK（需有高位字节串）嗅探，都不成立才用
+ * Latin-1 兜底 —— 西文重音字母不会被误判成汉字。
+ * @param {Uint8Array} bytes 文本字节（不含 encoding 字节）
+ * @returns {string}
+ */
+function decodeLegacyText(bytes) {
+  if (!bytes || bytes.length === 0) {
+    return '';
+  }
+  let ascii = true;
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (bytes[i] >= 0x80) {
+      ascii = false;
+      break;
+    }
+  }
+  if (ascii) {
+    return decodeText(bytes, 'utf-8');
+  }
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return decodeText(bytes.subarray(3), 'utf-8');
+  }
+  if (canDecodeStrictly(bytes, 'utf-8')) {
+    return decodeText(bytes, 'utf-8');
+  }
+  if (hasHighByteRun(bytes) && canDecodeStrictly(bytes, 'gbk')) {
+    return decodeText(bytes, 'gbk');
+  }
+  return decodeText(bytes, 'iso-8859-1');
+}
+
+/**
  * 判断某偏移处是否是指定字节序列。
  * @param {Uint8Array} view 数据
  * @param {number} offset 偏移
@@ -138,7 +213,8 @@ function decodeId3Text(bytes, encoding) {
   if (encoding === 3) {
     return decodeText(bytes, 'utf-8');
   }
-  return decodeText(bytes, 'iso-8859-1');
+  // encoding=0 名义上是 ISO-8859-1，但中文文件常被写成 GBK / UTF-8
+  return decodeLegacyText(bytes);
 }
 
 /**
@@ -335,9 +411,9 @@ function parseId3v1(tail) {
   if (tail.length < 128 || !matchText(tail, tail.length - 128, 'TAG')) {
     return empty;
   }
-  // 'TAG' 占 3 字节，字段从它后面开始
+  // 'TAG' 占 3 字节，字段从它后面开始；ID3v1 没有编码位，中文通常是 GBK
   const start = tail.length - 128 + 3;
-  const field = (offset, length) => cleanText(decodeText(tail.subarray(start + offset, start + offset + length), 'iso-8859-1'));
+  const field = (offset, length) => cleanText(decodeLegacyText(tail.subarray(start + offset, start + offset + length)));
   return { title: field(0, 30), artist: field(30, 30), album: field(60, 30), year: field(90, 4) };
 }
 
@@ -366,14 +442,16 @@ function parseVorbisComment(bytes) {
     if (length <= 0 || offset + length > bytes.length) {
       break;
     }
-    const entry = decodeText(bytes.subarray(offset, offset + length), 'utf-8');
+    const raw = bytes.subarray(offset, offset + length);
     offset += length;
-    const eq = entry.indexOf('=');
+    // '=' 只可能是 ASCII（GBK 尾字节最小 0x40），按字节切分再解值，
+    // 这样 GBK 写的 Vorbis 注释（非标准但真实存在）也能救回来
+    const eq = raw.indexOf(0x3d);
     if (eq <= 0) {
       continue;
     }
-    const key = entry.slice(0, eq).toUpperCase();
-    const value = cleanText(entry.slice(eq + 1));
+    const key = decodeText(raw.subarray(0, eq), 'iso-8859-1').toUpperCase();
+    const value = cleanText(decodeLegacyText(raw.subarray(eq + 1)));
     if (value && !(key in fields)) {
       fields[key] = value;
     }

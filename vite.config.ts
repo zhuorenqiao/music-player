@@ -13,7 +13,7 @@ import { musicApi } from './src/server/music-api';
 export default defineConfig({
   plugins: [react(), musicApi()],
   server: {
-    host: '127.0.0.1',
+    host: true,
     port: 5173,
     strictPort: false,
   },
