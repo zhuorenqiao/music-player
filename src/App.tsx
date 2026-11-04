@@ -20,6 +20,7 @@ import { WaveStyleProvider } from './state/wave-style';
 import { useLibrary } from './state/library';
 import { useAutoHideScroll } from './state/useAutoHideScroll';
 import { WaveStrip } from './components/WaveStrip';
+import { BilingualToggle } from './components/BilingualToggle';
 import { WaveStylePicker } from './components/WaveStylePicker';
 import { clearRecent as clearRecentStore, formatRelativeTime } from './lib/recent-store.js';
 import { remove as removeLocalRecord } from './lib/local-store.js';
@@ -211,7 +212,7 @@ function Header() {
 // ---------------------------------------------------------------------------
 
 function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
-  const { cues, plain } = useLyrics();
+  const { cues, plain, plainLines, trans } = useLyrics();
   const { seek, current } = usePlayer();
   const time = usePlaybackTime();
   const activeIndex = useMemo(() => findActiveCue(cues, time), [cues, time]);
@@ -232,31 +233,22 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
   }, [activeIndex]);
 
   if (cues.length === 0 && plain) {
-    // 纯文本歌词按原文换行拆成行：直接塞进容器会被 HTML 折叠成一整段
-    const lines = plain.replace(/\r\n/g, '\n').split('\n');
-    while (lines.length > 0 && lines[0].trim() === '') {
-      lines.shift();
-    }
-    while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
-      lines.pop();
-    }
+    // 纯文本歌词已在 provider 里按原文换行拆好：直接塞进容器会被 HTML 折叠成一整段
     return (
       <ul
         ref={listRef}
         className={`lyrics lyrics--${variant} lyrics--plain${scrolling ? ' is-scrolling' : ''}`}
         aria-label="歌词"
       >
-        {lines.map((line, index) => {
-          const text = line.trim();
-          return (
-            <li
-              key={index}
-              className={`lyrics__line lyrics__line--plain${text ? '' : ' lyrics__line--gap'}`}
-            >
-              <span className="lyrics__text">{text || '·'}</span>
-            </li>
-          );
-        })}
+        {plainLines.map((text, index) => (
+          <li
+            key={index}
+            className={`lyrics__line lyrics__line--plain${text ? '' : ' lyrics__line--gap'}`}
+          >
+            <span className="lyrics__text">{text || '·'}</span>
+            {trans[index] && <span className="lyrics__text lyrics__trans">{trans[index]}</span>}
+          </li>
+        ))}
       </ul>
     );
   }
@@ -281,7 +273,7 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
             index < activeIndex ? 'is-past' : '',
           ].filter(Boolean).join(' ')}
         >
-          {/* 只有点中文字才跳转：行内的左右留白不算 */}
+          {/* 只有点中文字才跳转：行内的左右留白不算（译文也算文字） */}
           <span
             className="lyrics__text"
             title={current ? `跳到 ${formatTime(cue.time)}` : undefined}
@@ -289,6 +281,9 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
           >
             {cue.text || '·'}
           </span>
+          {trans[index] && (
+            <span className="lyrics__text lyrics__trans" onClick={() => seek(cue.time)}>{trans[index]}</span>
+          )}
         </li>
       ))}
     </ul>
@@ -301,7 +296,7 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
 
 function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLElement | null) => void; discRef: React.RefObject<HTMLImageElement> }) {
   const { current, playing, loading, seek } = usePlayer();
-  const { cues, status, state, showRetry, retry } = useLyrics();
+  const { cues, status, state, showRetry, retry, trans, transNote } = useLyrics();
   const time = usePlaybackTime();
   const cover = useCover(current);
   const activeIndex = useMemo(() => findActiveCue(cues, time), [cues, time]);
@@ -413,9 +408,12 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
       </div>
 
       <div className="stage__lyrics">
-        {status && (
+        {(transNote || status) && (
           <p className="stage__lyrics-status" data-state={state} role="status" aria-live="polite">
-            <span className="stage__lyrics-status-text">{status}</span>
+            {/* 译文有话要说时先说译文：来源标注是背景信息，取不到译文才是要处理的 */}
+            <span className="stage__lyrics-status-text">{transNote || status}</span>
+            {/* 组件自己判断要不要出现（只有非中文歌词才有意义） */}
+            <BilingualToggle variant="inline" />
             {showRetry && (
               <button className="stage__lyrics-retry" type="button" onClick={(event) => { event.stopPropagation(); retry(); }}>
                 重试
@@ -435,8 +433,11 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
               key={`${cue.time}-${index}`}
               className={['lyrics__line', index === activeIndex ? 'is-active' : '', index < activeIndex ? 'is-past' : ''].filter(Boolean).join(' ')}
             >
-              {/* 只有点中文字才跳转：行内的左右留白不算 */}
+              {/* 只有点中文字才跳转：行内的左右留白不算（译文也算文字） */}
               <span className="lyrics__text" onClick={() => seek(cue.time)}>{cue.text || '·'}</span>
+              {trans[index] && (
+                <span className="lyrics__text lyrics__trans" onClick={() => seek(cue.time)}>{trans[index]}</span>
+              )}
             </li>
           ))}
         </ul>
@@ -873,7 +874,7 @@ function Transport({ onOpenQueue, queueOpen }: {
 
 function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement | null) => void }) {
   const { current } = usePlayer();
-  const { status, state, showRetry, retry } = useLyrics();
+  const { status, state, showRetry, retry, transNote } = useLyrics();
   const cover = useCover(current);
 
   /**
@@ -902,7 +903,8 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
           <p className="lyrics-page__title">{current?.title ?? '—'}</p>
           <p className="lyrics-page__artist">{[current?.artist, current?.album].filter(Boolean).join(' · ') || '未知歌手'}</p>
         </div>
-        {/* 右上角：选下面那条波形的样式 */}
+        {/* 右上角两个同款控件：双语开关 + 选下面那条波形的样式 */}
+        <BilingualToggle variant="head" />
         <WaveStylePicker />
       </header>
       {/* 左歌词、右封面；封面在这页只是展示用，不参与旋转（没有 is-spinning） */}
@@ -945,8 +947,8 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
           {/* 律动波形收在右栏最下面 */}
           <WaveStrip />
           {/* 歌词来源：桌面放在封面/频谱下方；窄屏该栏隐藏，也就不再显示这行说明 */}
-          {status && state === 'ready' && (
-            <p className="lyrics-page__status lyrics-page__status--art" role="status" aria-live="polite">{status}</p>
+          {state === 'ready' && (transNote || status) && (
+            <p className="lyrics-page__status lyrics-page__status--art" role="status" aria-live="polite">{transNote || status}</p>
           )}
         </aside>
       </div>

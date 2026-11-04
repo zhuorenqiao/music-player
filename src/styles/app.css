@@ -1460,6 +1460,23 @@ body.is-sheet-open {
   text-shadow: 0 0 26px rgba(46, 230, 168, 0.42);
 }
 
+/* 中文译文：跟在原文下面另起一行。
+   用 fit-content + auto 边距把可点热区收回文字本身，行内左右留白仍然算「空白」。 */
+.lyrics__trans {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 2px auto 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  opacity: 0.85;
+}
+
+/* 当前行只有原文加粗，译文保持常规字重：一行里也要分得出主次 */
+.lyrics__line.is-active .lyrics__text.lyrics__trans {
+  font-weight: 400;
+}
+
 .lyrics__line--gap {
   cursor: default;
 }
@@ -1489,6 +1506,12 @@ body.is-sheet-open {
 
 .lyrics--compact .lyrics__line.is-active .lyrics__text {
   text-shadow: 0 0 18px rgba(46, 230, 168, 0.35);
+}
+
+/* 紧凑区留给歌词的高度有限，译文再小一档、贴紧原文 */
+.lyrics--compact .lyrics__trans {
+  margin-top: 1px;
+  font-size: 13px;
 }
 
 .lyrics--full .lyrics__line {
@@ -1629,12 +1652,12 @@ body.is-sheet-open {
   flex-direction: column;
   gap: 2px;
   box-sizing: border-box;
-  width: 246px;
+  width: 219px;
   max-width: calc(100vw - 32px);
   max-height: min(360px, 58vh);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 6px;
+  padding: 6px 0px 6px 8px;
   border: 1px solid var(--border-strong);
   border-radius: 14px;
   background: linear-gradient(180deg, #121924 0%, #0a0e14 100%);
@@ -1846,6 +1869,11 @@ body.is-sheet-open {
   opacity: 0.5;
 }
 
+.lyrics-page .lyrics--full .lyrics__trans {
+  margin-top: 3px;
+  font-size: 14px;
+}
+
 /* 数字等宽：时间 / 时长变化时不会左右抽动 */
 .progress__time,
 .track__duration,
@@ -1865,6 +1893,66 @@ body.is-sheet-open {
 .lyrics-page__status--art {
   text-align: center;
   line-height: 1.4;
+}
+
+/* --------------------------------------------------------------------------
+   双语开关（只有非中文歌词才出现）
+   首页状态行里跟「重试」同尺寸，歌词页右上角跟「波形样式」同尺寸；
+   开 = 薄荷绿，关 = 灰，一眼能分出来。
+   -------------------------------------------------------------------------- */
+.lyrics-bilingual {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+  color: var(--text-dim);
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.lyrics-bilingual .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.lyrics-bilingual--inline {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 11.5px;
+}
+
+.lyrics-bilingual--head {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.lyrics-bilingual:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.lyrics-bilingual[aria-checked="true"] {
+  color: var(--accent-light);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.lyrics-bilingual[aria-checked="true"]:hover {
+  background: rgba(46, 230, 168, 0.22);
+}
+
+.lyrics-bilingual:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
 }
 
 /* 与主页紧凑歌词条的重试按钮同款；出现在「未找到 / 匹配失败」时 */

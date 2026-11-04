@@ -1,10 +1,12 @@
 /**
- * music-api.ts —— 开发期的三个同源代理（Vite 中间件版）
+ * music-api.ts —— 开发期的四个同源代理（Vite 中间件版）
  *
- * 这是 ../tools/serve.py 里那三个端口的 Node/TS 移植，行为对齐、响应结构一致，
- * 所以前端那几个图源模块（lyrics-source / cover-source / artist-image）可以原样复用：
+ * 前三个是 ../tools/serve.py 里那三个端口的 Node/TS 移植，行为对齐、响应结构一致，
+ * 所以前端那几个图源模块（lyrics-source / cover-source / artist-image）可以原样复用；
+ * `/api/translate` 是后加的，serve.py 里没有对应实现：
  *
  *   GET /api/lyrics?track_name&artist_name&duration   → LRCLIB
+ *   GET /api/translate?track_name&artist_name&duration → 网易云中文译文库（人工翻译）
  *   GET /api/cover?title&artist&duration              → iTunes Search + 图片落盘
  *   GET /api/cover/img?id=<40hex>                     → 已缓存的封面字节
  *   GET /api/artist-image?name                        → 维基百科条目配图
@@ -28,12 +30,16 @@ import type { ServerResponse } from 'node:http';
 /** 缓存根目录；想用绝对路径就设环境变量 MUSIC_CACHE_ROOT。 */
 const CACHE_ROOT = resolve(process.env.MUSIC_CACHE_ROOT ?? '.cache');
 const LYRICS_DIR = join(CACHE_ROOT, 'lyrics');
+const TRANSLATE_DIR = join(CACHE_ROOT, 'translate');
 const COVER_META_DIR = join(CACHE_ROOT, 'covers', 'meta');
 const COVER_IMG_DIR = join(CACHE_ROOT, 'covers', 'img');
 const ARTIST_META_DIR = join(CACHE_ROOT, 'artists', 'meta');
 const ARTIST_IMG_DIR = join(CACHE_ROOT, 'artists', 'img');
 
 const LYRICS_UPSTREAM = 'https://lrclib.net/api';
+/** 中文译文：网易云的 tlyric 是人工翻译且带时间轴，本机实测 0.2s 可达、免密钥。 */
+const NETEASE_SEARCH = 'https://music.163.com/api/search/get';
+const NETEASE_LYRIC = 'https://music.163.com/api/song/lyric';
 const ITUNES_SEARCH = 'https://itunes.apple.com/search';
 
 /** 命中留 30 天；「没找到」只留 3 天（曲库随时可能补录）。 */
@@ -44,6 +50,7 @@ const TTL_MISS = 3 * 24 * 60 * 60 * 1000;
 const LYRICS_GET_TIMEOUT = 12_000;
 const LYRICS_GET_ATTEMPTS = 2;
 const LYRICS_SEARCH_TIMEOUT = 26_000;
+const TRANSLATE_TIMEOUT = 8_000;
 const COVER_TIMEOUT = 10_000;
 const ARTIST_TIMEOUT = 8_000;
 const IMAGE_TIMEOUT = 15_000;
@@ -383,6 +390,151 @@ async function fetchLyrics(trackName: string, artistName: string, duration: stri
   return { status: 'not-found' };
 }
 
+// -- 中文译文 ---------------------------------------------------------------
+
+interface NetEaseArtist { name?: string }
+
+interface NetEaseSong {
+  id?: number;
+  name?: string;
+  /** 毫秒 */
+  duration?: number;
+  artists?: NetEaseArtist[];
+  alias?: string[];
+}
+
+interface TranslateResult extends CacheEntry {
+  status: 'ok' | 'not-found';
+  reason?: string;
+  translatedLyrics?: string;
+  originalLyrics?: string;
+  source?: string;
+  songId?: number;
+  songName?: string;
+  songArtist?: string;
+}
+
+/** 匹配用的归一化：小写、去空白与常见标点，括号说明留着（靠前缀判断）。 */
+const normText = (value: unknown): string => String(value ?? '')
+  .toLowerCase()
+  .replace(/[\s　]/g, '')
+  .replace(/[,.;:!?·、。，．：；！？"'«»『』「」]/g, '');
+
+const artistNames = (song: NetEaseSong): string[] => (song.artists ?? [])
+  .map((artist) => String(artist?.name ?? ''))
+  .filter(Boolean);
+
+/**
+ * 从搜索结果里挑唯一可信的一条。
+ *
+ * 译文库错配比歌词错配更糟——整页中文都是别的歌的，用户很难当场发现。
+ * 所以门槛收紧：歌名必须完全一致，且歌手对得上或时长差在 6 秒内。
+ */
+function pickTranslatableSong(songs: NetEaseSong[], trackName: string, artistName: string, duration: number): NetEaseSong | null {
+  const wantTitle = normText(trackName);
+  const wantArtist = normText(artistName);
+  if (!wantTitle) {
+    return null;
+  }
+
+  let best: NetEaseSong | null = null;
+  let bestScore = 0;
+  for (const song of songs) {
+    const name = normText(song.name);
+    if (!name || !song.id) {
+      continue;
+    }
+    const titleExact = name === wantTitle || (song.alias ?? []).some((alias) => normText(alias) === wantTitle);
+    // 「Yellow (Acoustic)」「Yellow (Live)」这类带后缀的版本
+    const titlePrefix = !titleExact && wantTitle.length >= 3 && name.startsWith(wantTitle);
+    if (!titleExact && !titlePrefix) {
+      continue;
+    }
+    const names = artistNames(song);
+    const artistHit = Boolean(wantArtist)
+      && names.some((value) => { const n = normText(value); return n === wantArtist || n.includes(wantArtist) || wantArtist.includes(n); });
+    const seconds = Number(song.duration);
+    const diff = duration > 0 && Number.isFinite(seconds) && seconds > 0 ? Math.abs(seconds / 1000 - duration) : Number.POSITIVE_INFINITY;
+    const durHit = diff <= 6;
+    if (!titleExact) {
+      // 前缀命中必须靠时长或歌手背书，否则「Yellow」会配上「Yellow (Live)」那种 6 分钟版本
+      if (!artistHit && !durHit) {
+        continue;
+      }
+      if (diff > 20) {
+        continue;
+      }
+    } else if (!artistHit && !durHit) {
+      continue;
+    }
+    const score = (titleExact ? 40 : 18) + (artistHit ? 25 : 0) + (durHit ? 25 : 0);
+    if (score > bestScore) {
+      best = song;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+async function searchNetEaseSongs(keyword: string): Promise<NetEaseSong[]> {
+  const url = `${NETEASE_SEARCH}?${new URLSearchParams({ s: keyword, type: '1', limit: '20' })}`;
+  const data = await fetchJsonWithRetry(url, TRANSLATE_TIMEOUT, 2);
+  const songs = (data as { result?: { songs?: unknown } })?.result?.songs;
+  return Array.isArray(songs) ? songs as NetEaseSong[] : [];
+}
+
+async function fetchTranslation(trackName: string, artistName: string, duration: number): Promise<TranslateResult> {
+  const keywords = [
+    [artistName, trackName].filter(Boolean).join(' '),
+    // 「歌手 歌名」在网易的分词里常常搜不到，退回只搜歌名
+    artistName ? trackName : '',
+  ].filter(Boolean);
+
+  let song: NetEaseSong | null = null;
+  const errors: UpstreamError[] = [];
+  for (const keyword of keywords) {
+    try {
+      song = pickTranslatableSong(await searchNetEaseSongs(keyword), trackName, artistName, duration);
+    } catch (error) {
+      errors.push(classifyError(error, '译文库'));
+      continue;
+    }
+    if (song) {
+      break;
+    }
+  }
+  if (!song) {
+    /**
+     * 搜索全失败（超时/连不上）时报错而不是「未收录」：
+     * 把网络问题说成「这首歌没有译文」，用户就会以为功能坏了。
+     */
+    if (errors.length > 0) {
+      throw worstError(errors);
+    }
+    return { status: 'not-found', reason: 'song-not-matched' };
+  }
+
+  const data = await fetchJsonWithRetry(
+    `${NETEASE_LYRIC}?${new URLSearchParams({ id: String(song.id), lv: '1', tv: '1' })}`,
+    TRANSLATE_TIMEOUT,
+    2,
+  ) as { lrc?: { lyric?: string }; tlyric?: { lyric?: string } } | null;
+  const translated = typeof data?.tlyric?.lyric === 'string' ? data.tlyric.lyric : '';
+  const original = typeof data?.lrc?.lyric === 'string' ? data.lrc.lyric : '';
+  if (!translated.trim()) {
+    return { status: 'not-found', reason: 'no-translation' };
+  }
+  return {
+    status: 'ok',
+    translatedLyrics: translated,
+    originalLyrics: original,
+    source: '网易云译文库（人工翻译）',
+    songId: song.id,
+    songName: song.name ?? '',
+    songArtist: artistNames(song).join(' / '),
+  };
+}
+
 // -- 封面 -------------------------------------------------------------------
 
 interface ItunesItem {
@@ -591,6 +743,40 @@ async function handleLyrics(url: URL, res: ServerResponse): Promise<void> {
   sendJson(res, 200, result);
 }
 
+async function handleTranslate(url: URL, res: ServerResponse): Promise<void> {
+  const trackName = param(url, 'track_name');
+  const artistName = param(url, 'artist_name');
+  const duration = Number(param(url, 'duration')) || 0;
+  if (!trackName) {
+    sendJson(res, 400, { status: 'error', message: '缺少 track_name' });
+    return;
+  }
+  const key = sha1(`${trackName}|${artistName}|${duration}`.toLowerCase());
+  const refresh = param(url, 'refresh') === '1';
+  if (!refresh) {
+    const cached = await readCache(TRANSLATE_DIR, key);
+    if (cached) {
+      sendJson(res, 200, cached);
+      return;
+    }
+  }
+  let result: TranslateResult;
+  try {
+    result = await fetchTranslation(trackName, artistName, duration);
+  } catch (error) {
+    const stale = await readCache(TRANSLATE_DIR, key, { allowStale: true });
+    if (stale) {
+      sendJson(res, 200, { ...stale, source: `${String(stale.source ?? '')}（离线缓存）` });
+      return;
+    }
+    const classified = classifyError(error, '译文库');
+    sendJson(res, 200, { status: 'error', reason: classified.reason, message: classified.message });
+    return;
+  }
+  await writeCache(TRANSLATE_DIR, key, result);
+  sendJson(res, 200, result);
+}
+
 async function handleCover(url: URL, res: ServerResponse): Promise<void> {
   const title = param(url, 'title');
   const artist = param(url, 'artist');
@@ -644,6 +830,8 @@ async function route(res: ServerResponse, reqUrl: string): Promise<boolean> {
   try {
     if (path === '/api/lyrics') {
       await handleLyrics(url, res);
+    } else if (path === '/api/translate') {
+      await handleTranslate(url, res);
     } else if (path === '/api/cover') {
       await handleCover(url, res);
     } else if (path === '/api/cover/img') {

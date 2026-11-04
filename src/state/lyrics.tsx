@@ -1,22 +1,53 @@
 /**
- * lyrics.tsx —— 当前曲目的歌词：解析、状态行、自动匹配与自动重试
+ * lyrics.tsx —— 当前曲目的歌词：解析、状态行、自动匹配、自动重试与中文译文
  *
  * 高频的「当前第几行」不放在这里，而是由组件用 usePlaybackTime() 自己算 ——
  * 否则 timeupdate 会带着整个 Provider 子树重渲染。
+ *
+ * 译文（非中文歌词的中文对照）走另一条链：原文到位后按需异步取，
+ * 取回的是「整份译文 LRC」，落到哪一行由 alignTranslation 现算，
+ * 所以歌词从纯文本升级成带时间轴时不必重新联网。
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { parseLRC } from '../lib/lyrics.js';
 import { matchLyrics, isOnline } from '../lib/lyrics-source.js';
+import { alignTranslation, fetchTranslation, needsTranslation } from '../lib/translate-source.js';
 import { toSimplified } from '../lib/chinese';
 import type { LyricsState, Track } from './types';
 
 /** 匹配失败后自动补一次的间隔（毫秒）。 */
 const AUTO_RETRY_DELAY = 25000;
 
+/** 双语显示偏好的存储键（默认开）。 */
+const BILINGUAL_KEY = 'light-music.bilingual';
+
 export interface Cue {
   time: number;
   text: string;
+}
+
+/** 取回的一份译文：原文 + 译文都用得上（原文行用来估时间轴偏移）。 */
+interface Translation {
+  translatedLrc: string;
+  originalLrc: string;
+  source: string;
+}
+
+/** 译文这一路的进度，界面只在 loading / none / error / unavailable 时给提示。 */
+export type TranslationState = 'idle' | 'off' | 'loading' | 'ready' | 'none' | 'unavailable' | 'error';
+
+/** 歌词文本指纹：同一首歌词在本次会话里只取一次译文。 */
+function fingerprint(text: string): string {
+  return `${text.length}:${text.slice(0, 24)}:${text.slice(-24)}`;
+}
+
+function readBilingualPref(): boolean {
+  try {
+    return window.localStorage.getItem(BILINGUAL_KEY) !== '0';
+  } catch {
+    return true;
+  }
 }
 
 interface LyricsContextValue {
@@ -24,11 +55,22 @@ interface LyricsContextValue {
   cues: Cue[];
   /** 无时间轴时的纯文本 */
   plain: string;
+  /** 纯文本按行拆开（去掉首尾空行），与 trans 对齐 */
+  plainLines: string[];
   status: string;
   state: LyricsState;
   showRetry: boolean;
   /** 手动指定歌词优先级最高，界面据此决定要不要显示「自动匹配」字样 */
   isManual: boolean;
+  /** 与当前显示行一一对齐的中文译文；关双语、无需翻译或还没取到 → 全空串 */
+  trans: string[];
+  /** 这首歌词需不需要中文译文（非中文才为真） */
+  translatable: boolean;
+  transState: TranslationState;
+  /** 显示在状态行里的译文说明，没有要说明的就是空串 */
+  transNote: string;
+  bilingual: boolean;
+  setBilingual: (value: boolean) => void;
   retry: () => void;
 }
 
@@ -78,6 +120,139 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
     const raw = track?.lyricsPlain || '';
     return raw && track?.lyricsSource !== 'manual' ? toSimplified(raw) : raw;
   }, [track?.lyricsPlain, track?.lyricsSource]);
+
+  /** 纯文本歌词拆行：组件里不再自己 split，否则译文对齐会对不上。 */
+  const plainLines = useMemo(() => {
+    if (!plain) {
+      return [];
+    }
+    const lines = plain.replace(/\r\n/g, '\n').split('\n');
+    while (lines.length > 0 && lines[0].trim() === '') {
+      lines.shift();
+    }
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+      lines.pop();
+    }
+    return lines.map((line) => line.trim());
+  }, [plain]);
+
+  /** 当前真正显示的行：有时间轴用 cues，否则用纯文本行。译文按这一套对齐。 */
+  const displayLines = useMemo(
+    () => (cues.length > 0 ? cues : plainLines.map((text) => ({ text }))),
+    [cues, plainLines],
+  );
+
+  const lyricsText = track?.lyrics || track?.lyricsPlain || '';
+  const translatable = useMemo(
+    () => displayLines.length > 0 && needsTranslation(lyricsText),
+    [displayLines.length, lyricsText],
+  );
+
+  const [bilingual, setBilingualState] = useState(readBilingualPref);
+  const [translation, setTranslation] = useState<Translation | null>(null);
+  const [transState, setTransState] = useState<TranslationState>('idle');
+  const [transTick, setTransTick] = useState(0);
+  const transAbortRef = useRef<AbortController | null>(null);
+  /** 用户手动打开双语时绕过缓存再要一次（关掉又打开就是「重新获取」） */
+  const transForceRef = useRef(false);
+  /** 本次会话内每首歌词只取一次译文；null 表示问过、确实没有 */
+  const transCacheRef = useRef(new Map<string, Translation | null>());
+
+  const trans = useMemo<string[]>(() => {
+    if (!bilingual || !translation || displayLines.length === 0) {
+      return displayLines.map(() => '');
+    }
+    return alignTranslation(displayLines, translation.translatedLrc, translation.originalLrc);
+  }, [bilingual, displayLines, translation]);
+
+  const setBilingual = useCallback((value: boolean) => {
+    setBilingualState(value);
+    try {
+      window.localStorage.setItem(BILINGUAL_KEY, value ? '1' : '0');
+    } catch {
+      // 隐私模式下写不进去，本次会话内仍然有效
+    }
+    if (value) {
+      transForceRef.current = true;
+      setTransTick((current) => current + 1);
+    }
+  }, []);
+
+  useEffect(() => {
+    transAbortRef.current?.abort();
+    const controller = new AbortController();
+    transAbortRef.current = controller;
+    const force = transForceRef.current;
+    transForceRef.current = false;
+
+    if (!track || !translatable) {
+      setTranslation(null);
+      setTransState('idle');
+      return () => controller.abort();
+    }
+    if (!bilingual) {
+      setTranslation(null);
+      setTransState('off');
+      return () => controller.abort();
+    }
+
+    const cacheKey = `${track.id}|${fingerprint(lyricsText)}`;
+    const hit = transCacheRef.current.get(cacheKey);
+    if (hit !== undefined) {
+      setTranslation(hit);
+      setTransState(hit ? 'ready' : 'none');
+      return () => controller.abort();
+    }
+
+    setTranslation(null);
+    setTransState('loading');
+    void fetchTranslation(track, { signal: controller.signal, useCache: !force }).then((result: {
+      status: string; reason?: string; message?: string; source?: string; translatedLyrics?: string; originalLyrics?: string;
+    }) => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (result.status === 'ok' && result.translatedLyrics) {
+        const value: Translation = {
+          translatedLrc: result.translatedLyrics,
+          originalLrc: result.originalLyrics || '',
+          source: result.source || '网易云译文库',
+        };
+        transCacheRef.current.set(cacheKey, value);
+        setTranslation(value);
+        setTransState('ready');
+        return;
+      }
+      // 「没有译文」和「静态部署」短期内不必再问；网络/超时类失败留下一次机会
+      if (result.status === 'not-found' || result.status === 'unavailable') {
+        transCacheRef.current.set(cacheKey, null);
+      }
+      setTransState(result.status === 'not-found'
+        ? 'none'
+        : (result.status === 'unavailable' ? 'unavailable' : 'error'));
+    }).catch(() => {
+      // 只有主动取消会抛到这里，界面已经切到别的歌了
+    });
+
+    return () => controller.abort();
+    // lyricsText 变（首次匹配到 / 纯文本升级成带时间轴）才需要重新对齐一次
+  }, [track, track?.id, lyricsText, bilingual, translatable, transTick]);
+
+  const transNote = useMemo(() => {
+    if (transState === 'loading') {
+      return '正在匹配中文译文…';
+    }
+    if (transState === 'none') {
+      return '译文库里没有这首歌的中文译文';
+    }
+    if (transState === 'unavailable') {
+      return '中文译文需要本地代理服务（npm run dev）';
+    }
+    if (transState === 'error') {
+      return '中文译文获取失败，关掉再打开「双语」可重试';
+    }
+    return '';
+  }, [transState]);
 
   const retry = useCallback(() => {
     if (track) {
@@ -255,12 +430,22 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
   const value = useMemo<LyricsContextValue>(() => ({
     cues,
     plain,
+    plainLines,
     status,
     state,
     showRetry,
     isManual: track?.lyricsSource === 'manual',
+    trans,
+    translatable,
+    transState,
+    transNote,
+    bilingual,
+    setBilingual,
     retry,
-  }), [cues, plain, retry, showRetry, state, status, track?.lyricsSource]);
+  }), [
+    cues, plain, plainLines, retry, setBilingual, showRetry, state, status,
+    trans, transNote, transState, bilingual, track?.lyricsSource, translatable,
+  ]);
 
   return <LyricsContext.Provider value={value}>{children}</LyricsContext.Provider>;
 }
