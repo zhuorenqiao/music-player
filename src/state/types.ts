@@ -52,4 +52,6 @@ export interface ToastItem {
   message: string;
   kind: ToastKind;
   duration: number;
+  /** 去重键：同 key 只保留一条（例如连续点播放模式按钮） */
+  key?: string;
 }

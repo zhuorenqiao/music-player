@@ -8,28 +8,84 @@
    1. 主题变量
    -------------------------------------------------------------------------- */
 :root {
+  color-scheme: dark;
   --bg: #080b10;
   --glow-a: rgba(46, 230, 168, 0.16);
   --glow-b: rgba(96, 132, 255, 0.13);
 
-  --surface: rgba(255, 255, 255, 0.045);
+  --surface: var(--tint-1);
   --surface-2: rgba(255, 255, 255, 0.075);
-  --surface-3: rgba(255, 255, 255, 0.11);
+  --surface-3: var(--tint-3);
 
-  --border: rgba(255, 255, 255, 0.09);
-  --border-strong: rgba(255, 255, 255, 0.16);
+  --border: var(--tint-2);
+  --border-strong: var(--line-strong);
 
   --text: #e9f1f7;
   --text-dim: #8b9cab;
   --text-faint: #66788c;
 
   --accent: #2ee6a8;
+  --accent-rgb: 46 230 168;
   --accent-light: #b9ffe9;
+  /* 歌词当前行的高亮色：用户可在频谱左侧的「T」里改（空 = 跟随 --accent-light） */
+  --lyric-hl: var(--accent-light);
   --accent-ink: #04231b;
   --accent-soft: rgba(46, 230, 168, 0.14);
   --accent-line: rgba(46, 230, 168, 0.32);
 
+  /* ---- 层次 token ----
+     深色主题里是「白色薄提亮」，浅色主题里翻成「深色薄压暗」；
+     同一套控件在两种底色下都有「底 → 面 → 浮层」三档。 */
+  --tint-1: rgba(255, 255, 255, 0.04);
+  --tint-2: rgba(255, 255, 255, 0.07);
+  --tint-3: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --scroll-thumb: rgba(255, 255, 255, 0.28);
+  --ring-soft: rgba(255, 255, 255, 0.4);
+  --ring-strong: rgba(255, 255, 255, 0.7);
+  --knob: rgba(255, 255, 255, 0.72);
+  --inset-hi: rgba(255, 255, 255, 0.55);
+  --swatch-ring: rgba(10, 14, 20, 0.9);
+
+  /* 面：页面底 / 卡面 / 浮层 / 底栏 */
+  --app-a: #0a0e14;
+  --app-b: #070a0f;
+  /* 整屏对角渐变的两端色：左上带主题色，右下回到夜色 */
+  --bg-grad-a: #0b1c1a;
+  --bg-grad-b: #070a10;
+  --card-a: rgba(255, 255, 255, 0.07);
+  --card-b: rgba(255, 255, 255, 0.015);
+  --panel-a: #121924;
+  --panel-b: #0a0e14;
+  --sheet-a: #0d1219;
+  --sheet-b: #090c11;
+  --bar-a: rgba(14, 19, 26, 0.88);
+  --bar-b: rgba(9, 12, 17, 0.97);
+  --scrim: rgba(4, 8, 12, 0.66);
+  --scrim-strong: rgba(4, 8, 12, 0.74);
+  --shadow-pop: 0 24px 52px -24px rgba(0, 0, 0, 0.95);
+  --shadow-sheet: 0 -24px 60px -30px rgba(0, 0, 0, 0.95);
+
+  /* 黑胶是「实体唱片」：两套主题下都保持深色反光 */
+  --vinyl-low: rgba(255, 255, 255, 0.06);
+  --vinyl-mid: rgba(255, 255, 255, 0.09);
+  --vinyl-hi: rgba(255, 255, 255, 0.16);
+  --vinyl-line: rgba(255, 255, 255, 0.16);
+
   --danger: #ff6b81;
+  /* 危险态文字/底：深色主题是淡红字配深底，白色主题要翻成深红字配浅底 */
+  --danger-ink: #ffc9d1;
+  --danger-ink-strong: #ffd7dd;
+  --danger-badge-ink: #ffb3bf;
+  --danger-soft: rgba(255, 107, 129, 0.12);
+  --danger-line: rgba(255, 107, 129, 0.36);
+  --danger-action-ink: #fff2f4;
+  --danger-action-bg: rgba(255, 107, 129, 0.24);
+  --danger-action-line: rgba(255, 107, 129, 0.5);
+  --danger-action-bg-hover: rgba(255, 107, 129, 0.38);
+  --danger-action-line-hover: rgba(255, 107, 129, 0.7);
+  --toast-bg: rgba(18, 24, 32, 0.95);
+  --toast-error-bg: rgba(48, 19, 25, 0.96);
 
   --radius-xl: 24px;
   --radius-lg: 16px;
@@ -51,6 +107,200 @@
 }
 
 /* --------------------------------------------------------------------------
+   浅色模式：同一套变量换值，主题色默认薄荷；粉 / 蓝在下面按 data-accent 覆写。
+   层次靠三档面拉开 —— 页面底（带冷调的灰蓝）< 卡面（近白）< 浮层（纯白 + 阴影），
+   边框与阴影都调淡，避免浅底上出现「脏灰边」。
+   -------------------------------------------------------------------------- */
+:root[data-mode="light"] {
+  /* only light：告诉手机浏览器「这一页自己画浅色」，系统深色时别再自动压暗画布/控件 */
+  color-scheme: only light;
+  --bg: #dfe8f2;
+  --glow-a: rgba(46, 230, 168, 0.22);
+  --glow-b: rgba(96, 132, 255, 0.18);
+
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-2: #ffffff;
+  --surface-3: #ffffff;
+
+  --border: rgba(18, 38, 58, 0.12);
+  --border-strong: rgba(18, 38, 58, 0.2);
+
+  --text: #16202b;
+  --text-dim: #4b5e70;
+  --text-faint: #5d7083;
+
+  --accent: #12b98c;
+  --accent-rgb: 18 185 140;
+  --accent-light: #0a7a5d;
+  --accent-soft: rgba(18, 185, 140, 0.14);
+  --accent-line: rgba(18, 185, 140, 0.34);
+
+  --tint-1: rgba(18, 38, 58, 0.045);
+  --tint-2: rgba(18, 38, 58, 0.07);
+  --tint-3: rgba(18, 38, 58, 0.11);
+  --line-strong: rgba(18, 38, 58, 0.2);
+  --scroll-thumb: rgba(18, 38, 58, 0.26);
+  --ring-soft: rgba(18, 38, 58, 0.3);
+  --ring-strong: rgba(18, 38, 58, 0.55);
+  --knob: #ffffff;
+  --inset-hi: rgba(255, 255, 255, 0.9);
+  --swatch-ring: rgba(255, 255, 255, 0.95);
+
+  --app-a: #eef3f9;
+  --app-b: #e2e9f2;
+  /* 左上薄荷、右下偏蓝紫，整屏斜着过渡 */
+  --bg-grad-a: #d3efe6;
+  --bg-grad-b: #dee5f6;
+  /* 卡面留一点透明度：背景对角渐变能透上来，整页是同一块色，不是白卡盖住背景 */
+  --card-a: rgba(255, 255, 255, 0.84);
+  --card-b: rgba(248, 251, 254, 0.9);
+  --panel-a: #ffffff;
+  --panel-b: #f7fafd;
+  --sheet-a: #ffffff;
+  --sheet-b: #f6f9fc;
+  --bar-a: rgba(255, 255, 255, 0.88);
+  --bar-b: rgba(247, 250, 253, 0.97);
+  --scrim: rgba(28, 42, 56, 0.3);
+  --scrim-strong: rgba(28, 42, 56, 0.38);
+
+  --shadow-card: 0 22px 46px -24px rgba(24, 42, 60, 0.32);
+  --shadow-bar: 0 -12px 36px -22px rgba(24, 42, 60, 0.28);
+  --shadow-pop: 0 20px 44px -22px rgba(24, 42, 60, 0.32);
+  --shadow-sheet: 0 -20px 50px -26px rgba(24, 42, 60, 0.32);
+
+  /* 白底上「唱过的行」压太狠会读不出来 */
+  --past-opacity: 0.82;
+  --past-opacity-page: 0.8;
+
+  /* 危险态：深红字 + 浅红底，白底上要读得清 */
+  --danger: #c9253f;
+  --danger-ink: #9d1b30;
+  --danger-ink-strong: #8d1329;
+  --danger-badge-ink: #9d1b30;
+  --danger-soft: rgba(201, 37, 63, 0.09);
+  --danger-line: rgba(201, 37, 63, 0.3);
+  --danger-action-ink: #7d1223;
+  --danger-action-bg: rgba(201, 37, 63, 0.12);
+  --danger-action-line: rgba(201, 37, 63, 0.34);
+  --danger-action-bg-hover: rgba(201, 37, 63, 0.2);
+  --danger-action-line-hover: rgba(201, 37, 63, 0.5);
+
+  --toast-bg: #ffffff;
+  --toast-error-bg: #fff1f3;
+}
+
+/* 浅色底上的粉 / 蓝：只换强调色和背景光斑，面仍然用浅色那套。
+   accent-light 是文字色，必须压深到白底上读得清 */
+:root[data-mode="light"][data-accent="pink"] {
+  --glow-a: rgba(255, 106, 168, 0.2);
+  --glow-b: rgba(150, 96, 255, 0.14);
+  --bg-grad-a: #f8dfea;
+  --bg-grad-b: #e8e3f7;
+  --accent: #ec4f92;
+  --accent-rgb: 236 79 146;
+  --accent-light: #a3175a;
+  --accent-soft: rgba(236, 79, 146, 0.13);
+  --accent-line: rgba(236, 79, 146, 0.34);
+}
+
+:root[data-mode="light"][data-accent="blue"] {
+  --glow-a: rgba(77, 141, 255, 0.2);
+  --glow-b: rgba(56, 189, 248, 0.14);
+  --bg-grad-a: #dbe8fb;
+  --bg-grad-b: #e3eef7;
+  --accent: #3b7cf6;
+  --accent-rgb: 59 124 246;
+  --accent-light: #1b4fae;
+  --accent-soft: rgba(59, 124, 246, 0.12);
+  --accent-line: rgba(59, 124, 246, 0.34);
+}
+
+/* --------------------------------------------------------------------------
+   粉色主题色（深色底）：强调色换玫瑰粉；
+   面和阴影仍是深色那套，只把页面底 / 卡面 / 浮层的黑调往紫里偏一点。
+   -------------------------------------------------------------------------- */
+:root[data-mode="dark"][data-accent="pink"] {
+  --bg: #100a11;
+  --bg-grad-a: #1d0d17;
+  --bg-grad-b: #0b070d;
+  --glow-a: rgba(255, 106, 168, 0.22);
+  --glow-b: rgba(150, 96, 255, 0.16);
+
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-2: rgba(255, 255, 255, 0.085);
+  --surface-3: rgba(255, 255, 255, 0.12);
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.17);
+
+  --text: #f8edf4;
+  --text-dim: #b3a1ad;
+  --text-faint: #9a8796;
+
+  --accent: #ff6aa8;
+  --accent-rgb: 255 106 168;
+  --accent-light: #ffd2e4;
+  --accent-soft: rgba(255, 106, 168, 0.15);
+  --accent-line: rgba(255, 106, 168, 0.34);
+
+  --app-a: #191019;
+  --app-b: #0c070c;
+  --card-a: rgba(255, 255, 255, 0.075);
+  --card-b: rgba(255, 255, 255, 0.02);
+  --panel-a: #211420;
+  --panel-b: #120a11;
+  --sheet-a: #1c1119;
+  --sheet-b: #0e080d;
+  --bar-a: rgba(26, 16, 24, 0.88);
+  --bar-b: rgba(14, 9, 13, 0.97);
+  --scrim: rgba(10, 4, 10, 0.68);
+  --scrim-strong: rgba(10, 4, 10, 0.76);
+  --shadow-pop: 0 24px 52px -24px rgba(0, 0, 0, 0.95);
+}
+
+/* --------------------------------------------------------------------------
+   蓝色主题色（深色底）：深夜蓝底 + 靛蓝强调色；同样只换色系，不换层次结构。
+   -------------------------------------------------------------------------- */
+:root[data-mode="dark"][data-accent="blue"] {
+  --bg: #070d17;
+  --bg-grad-a: #0b1727;
+  --bg-grad-b: #050a12;
+  --glow-a: rgba(77, 141, 255, 0.22);
+  --glow-b: rgba(56, 189, 248, 0.16);
+
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-2: rgba(255, 255, 255, 0.085);
+  --surface-3: rgba(255, 255, 255, 0.12);
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.17);
+
+  --text: #e9f1fb;
+  --text-dim: #9db0c6;
+  --text-faint: #7488a0;
+
+  --accent: #4d8dff;
+  --accent-rgb: 77 141 255;
+  --accent-light: #d3e4ff;
+  --accent-soft: rgba(77, 141, 255, 0.16);
+  --accent-line: rgba(141, 180, 255, 0.34);
+
+  --app-a: #0c1726;
+  --app-b: #050a12;
+  --card-a: rgba(255, 255, 255, 0.07);
+  --card-b: rgba(255, 255, 255, 0.015);
+  --panel-a: #101d30;
+  --panel-b: #070d17;
+  --sheet-a: #0d1726;
+  --sheet-b: #060b13;
+  --bar-a: rgba(12, 22, 36, 0.88);
+  --bar-b: rgba(6, 11, 18, 0.97);
+  --scrim: rgba(3, 7, 13, 0.68);
+  --scrim-strong: rgba(3, 7, 13, 0.76);
+  --shadow-pop: 0 24px 52px -24px rgba(0, 0, 0, 0.95);
+}
+
+/* --------------------------------------------------------------------------
    2. 基础重置
    -------------------------------------------------------------------------- */
 *,
@@ -66,6 +316,12 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  /* 手机浏览器（尤其三星/Android）会把「可点击祖先」整块刷成半透明蓝，
+     点歌名旁的双语按钮时整张曲目卡会泛蓝。反馈交给 :active / :focus-visible */
+  -webkit-tap-highlight-color: transparent;
+  /* 画布底色也跟主题走：系统深色时画布默认是深色，页面滚动回弹 / 安全区露出来的
+     就是它，浅色模式下会看到一圈深色边。这里显式铺上当前主题的页面底 */
+  background-color: var(--bg);
 }
 
 body {
@@ -75,22 +331,22 @@ body {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
-  background-color: var(--bg);
+  /* 底色交给 html（画布）和 body::before（对角渐变），这里不要再铺一层，
+     否则会把固定在后面的渐变整个盖住 */
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* 背景光斑：固定定位，不参与滚动，不产生横向滚动 */
+/* 背景：固定定位，不参与滚动，不产生横向滚动。
+   一整面从左上到右下的对角渐变，两端取各主题自己的色（--bg-grad-a/b），
+   卡面带一点透明度，渐变能透上来 */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background-image:
-    radial-gradient(880px 620px at 10% -12%, var(--glow-a), transparent 62%),
-    radial-gradient(760px 520px at 94% 4%, var(--glow-b), transparent 60%),
-    linear-gradient(180deg, #0a0e14 0%, #070a0f 100%);
+  background-image: linear-gradient(135deg, var(--bg-grad-a) 0%, var(--bg-grad-b) 100%);
 }
 
 button {
@@ -143,7 +399,7 @@ h2 {
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  background: linear-gradient(165deg, var(--card-a), var(--card-b));
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(16px);
 }
@@ -197,8 +453,8 @@ h2 {
   color: var(--accent);
   border: 1px solid var(--accent-line);
   border-radius: 13px;
-  background: linear-gradient(150deg, rgba(46, 230, 168, 0.24), rgba(46, 230, 168, 0.04));
-  box-shadow: 0 0 26px -10px rgba(46, 230, 168, 0.75);
+  background: linear-gradient(150deg, rgb(var(--accent-rgb) / 0.24), rgb(var(--accent-rgb) / 0.04));
+  box-shadow: 0 0 26px -10px rgb(var(--accent-rgb) / 0.75);
 }
 
 .brand__text {
@@ -227,6 +483,20 @@ h2 {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+}
+
+/* 顶栏动作按钮与页面内的胶囊控件（双语 / 波形样式）同档：
+   36px 高、12.5px 字、16px 图标。否则上面一排比下面一排粗一圈，看着像两套控件。 */
+.app__actions .btn {
+  min-height: 36px;
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+.app__actions .btn .icon {
+  width: 16px;
+  height: 16px;
 }
 
 /* --------------------------------------------------------------------------
@@ -272,8 +542,8 @@ h2 {
 }
 
 .btn--soft:hover {
-  background: rgba(46, 230, 168, 0.2);
-  border-color: rgba(46, 230, 168, 0.45);
+  background: rgb(var(--accent-rgb) / 0.2);
+  border-color: rgb(var(--accent-rgb) / 0.45);
 }
 
 .btn--ghost {
@@ -300,14 +570,14 @@ h2 {
   /* 播放三角形的光学右移量：0px = 与按钮圆心严格同心；想恢复经典「视觉右移」只改这一个值 */
   --play-optical-nudge: 0px;
   color: var(--accent-ink);
-  background: linear-gradient(160deg, #71ffd4, var(--accent) 56%, #14bb8c);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 42%, #ffffff), var(--accent) 56%, color-mix(in srgb, var(--accent) 74%, #000000));
   box-shadow:
-    0 14px 30px -12px rgba(46, 230, 168, 0.8),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    0 14px 30px -12px rgb(var(--accent-rgb) / 0.8),
+    inset 0 1px 0 var(--inset-hi);
 }
 
 .btn--play:hover {
-  background: linear-gradient(160deg, #8dffe0, var(--accent) 52%, #18c997);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 34%, #ffffff), var(--accent) 52%, color-mix(in srgb, var(--accent) 82%, #000000));
 }
 
 .btn--play:active {
@@ -393,9 +663,11 @@ h2 {
   cursor: pointer;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  background: linear-gradient(165deg, var(--card-a), var(--card-b));
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(16px);
+  /* 纵向手势滚歌词、双指仍可缩放，横向手势留给「左右滑切歌」 */
+  touch-action: pan-y pinch-zoom;
 }
 
 .stage__cover-wrap {
@@ -421,11 +693,11 @@ h2 {
   inset: 0;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.13), transparent 46%),
-    radial-gradient(circle at 72% 80%, rgba(255, 255, 255, 0.05), transparent 44%),
+    radial-gradient(circle at 30% 25%, var(--vinyl-hi), transparent 46%),
+    radial-gradient(circle at 72% 80%, var(--vinyl-low), transparent 44%),
     repeating-radial-gradient(
       circle at 50% 50%,
-      rgba(255, 255, 255, 0.04) 0 0.6px,
+      var(--vinyl-low) 0 0.6px,
       rgba(255, 255, 255, 0) 0.6px 1.7px
     ),
     repeating-radial-gradient(
@@ -435,8 +707,8 @@ h2 {
       #0a0b0d 3px 4.4px
     );
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
-    inset 0 0 38px rgba(255, 255, 255, 0.035),
+    inset 0 0 0 1px var(--vinyl-hi),
+    inset 0 0 38px var(--vinyl-low),
     0 30px 60px -30px rgba(0, 0, 0, 0.98);
   pointer-events: none;
 }
@@ -453,7 +725,7 @@ h2 {
     rgba(255, 255, 255, 0.085) 34deg,
     transparent 78deg,
     transparent 220deg,
-    rgba(255, 255, 255, 0.05) 268deg,
+    var(--vinyl-low) 268deg,
     transparent 320deg
   );
   mix-blend-mode: screen;
@@ -473,18 +745,19 @@ h2 {
   transform-origin: 97% 3%;
   transform: rotate(-45deg);
   transition:
-    /* 过冲曲线：落到 -3° 前会先略微多探一点，再和杆头一起回退 */
+    /* 过冲曲线：落到 -17° 前会先略微多探一点，再和杆头一起回退 */
     transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1),
     filter 0.65s var(--ease);
   filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.6));
 }
 
 .stage__cover-wrap.is-playing .stage__tonearm {
-  transform: rotate(-3deg);
+  /* -17°：唱头落在封面标签与外圈之间的黑胶纹路正中间，而不是贴着封面边缘 */
+  transform: rotate(-17deg);
   /* 落针时给一点薄荷色微光，和播放光晕呼应 */
   filter:
     drop-shadow(0 3px 5px rgba(0, 0, 0, 0.6))
-    drop-shadow(0 0 5px rgba(46, 230, 168, 0.18));
+    drop-shadow(0 0 5px rgb(var(--accent-rgb) / 0.18));
 }
 
 .stage__cover-wrap:focus-visible {
@@ -527,7 +800,7 @@ h2 {
   height: 10px;
   margin-right: 6px;
   vertical-align: -1px;
-  border: 1.5px solid rgba(46, 230, 168, 0.35);
+  border: 1.5px solid rgb(var(--accent-rgb) / 0.35);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
@@ -535,7 +808,7 @@ h2 {
 
 .stage__lyrics-status[data-state="missing"] .stage__lyrics-status-text,
 .stage__lyrics-status[data-state="error"] .stage__lyrics-status-text {
-  color: #ffb3bf;
+  color: var(--danger-badge-ink);
 }
 
 .stage__lyrics-retry {
@@ -554,7 +827,7 @@ h2 {
 }
 
 .stage__lyrics-retry:hover {
-  background: rgba(46, 230, 168, 0.22);
+  background: rgb(var(--accent-rgb) / 0.22);
 }
 
 .stage__lyrics-retry:focus-visible {
@@ -569,7 +842,7 @@ h2 {
   position: absolute;
   inset: -10%;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 52%, rgba(46, 230, 168, 0.42), transparent 68%);
+  background: radial-gradient(circle at 50% 52%, rgb(var(--accent-rgb) / 0.42), transparent 68%);
   filter: blur(20px);
   opacity: 0;
   pointer-events: none;
@@ -595,14 +868,14 @@ h2 {
   position: relative;
   width: var(--vinyl-label);
   height: var(--vinyl-label);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--vinyl-line);
   /* 唱片形态：转起来的是张圆碟，容器与骨架屏要同形，否则圆角方图旋转会露角 */
   border-radius: 50%;
   object-fit: cover;
   /* 封面是黑胶中间的标签位：外圈压一圈暗环，和盘面自然衔接 */
   box-shadow:
     0 0 0 4px #0a0b0d,
-    0 0 0 5px rgba(255, 255, 255, 0.06),
+    0 0 0 5px var(--vinyl-mid),
     0 12px 26px -14px rgba(0, 0, 0, 0.95);
   transform-origin: center;
   will-change: transform;
@@ -633,9 +906,9 @@ h2 {
   border-radius: 50%;
   background-image: linear-gradient(
     100deg,
-    rgba(255, 255, 255, 0.05) 20%,
-    rgba(255, 255, 255, 0.14) 40%,
-    rgba(255, 255, 255, 0.05) 60%
+    var(--vinyl-low) 20%,
+    var(--vinyl-hi) 40%,
+    var(--vinyl-low) 60%
   );
   background-size: 220% 100%;
   opacity: 0;
@@ -661,6 +934,20 @@ h2 {
   width: 100%;
   min-width: 0;
   text-align: center;
+}
+
+/* 歌名和「双语」并排；没有译文开关时这一行只有歌名，居中位置不变 */
+.stage__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stage__title-row .stage__title {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .stage__title {
@@ -707,13 +994,22 @@ h2 {
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  background: linear-gradient(180deg, rgba(14, 19, 26, 0.88), rgba(9, 12, 17, 0.97));
+  background: linear-gradient(180deg, var(--bar-a), var(--bar-b));
   box-shadow: var(--shadow-bar);
   backdrop-filter: blur(20px) saturate(140%);
 }
 
-/* 小屏歌词页：频谱从右栏挪到进度条上方，默认隐藏（桌面用右栏那条） */
+/* 进度条上方那条：「T」（改歌词高亮色）固定在最左端，两页、所有断点都在这个位置；
+   频谱只有歌词页（≤1024）才排进来，平时不占位 */
 .transport__wave {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 与 .progress__slider 左端对齐（让出 36px 时间标签 + 8px 间距的一半视觉差） */
+  margin: 0 22px -4px;
+}
+
+.transport__wave .lyrics-page__wave {
   display: none;
 }
 
@@ -755,19 +1051,19 @@ h2 {
 
 .progress__rail {
   right: 0;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--tint-3);
 }
 
 .progress__buffer {
   width: 0;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--line-strong);
   transition: width 0.2s linear;
 }
 
 .progress__fill {
   width: 0;
-  background: linear-gradient(90deg, #12b98a, var(--accent));
-  box-shadow: 0 0 12px -2px rgba(46, 230, 168, 0.85);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 78%, #ffffff), var(--accent));
+  box-shadow: 0 0 12px -2px rgb(var(--accent-rgb) / 0.85);
 }
 
 .progress__input {
@@ -825,7 +1121,7 @@ h2 {
 
 .progress__input:focus-visible::-webkit-slider-thumb {
   box-shadow:
-    0 0 0 4px rgba(46, 230, 168, 0.35),
+    0 0 0 4px rgb(var(--accent-rgb) / 0.35),
     0 2px 8px rgba(0, 0, 0, 0.65);
 }
 
@@ -868,7 +1164,7 @@ h2 {
   width: 18px;
   height: 18px;
   border-width: 2px;
-  border-color: rgba(46, 230, 168, 0.25);
+  border-color: rgb(var(--accent-rgb) / 0.25);
   border-top-color: var(--accent);
 }
 
@@ -905,7 +1201,7 @@ h2 {
   background-image: linear-gradient(
     90deg,
     var(--accent) 0 var(--volume-percent),
-    rgba(255, 255, 255, 0.13) var(--volume-percent) 100%
+    var(--tint-3) var(--volume-percent) 100%
   );
 }
 
@@ -923,7 +1219,7 @@ h2 {
 .volume__input::-moz-range-track {
   height: 4px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.13);
+  background: var(--tint-3);
 }
 
 .volume__input::-moz-range-progress {
@@ -941,7 +1237,7 @@ h2 {
 }
 
 .volume__input:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 4px rgba(46, 230, 168, 0.35);
+  box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.35);
 }
 
 /* 移动端右侧的「播放列表」按钮：桌面右栏常驻列表，这里不显示 */
@@ -961,7 +1257,7 @@ h2 {
   padding: 16px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  background: linear-gradient(170deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  background: linear-gradient(170deg, var(--card-a), var(--card-b));
   box-shadow: var(--shadow-card);
 }
 
@@ -981,7 +1277,7 @@ h2 {
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--tint-1);
 }
 
 .panel__tab {
@@ -1006,13 +1302,13 @@ h2 {
 
 .panel__tab:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--tint-2);
 }
 
 .panel__tab[aria-selected="true"] {
   color: var(--accent-ink);
-  background: linear-gradient(160deg, #7dffda, var(--accent) 60%, #14bb8c);
-  box-shadow: 0 8px 18px -12px rgba(46, 230, 168, 0.9);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 40%, #ffffff), var(--accent) 60%, color-mix(in srgb, var(--accent) 76%, #000000));
+  box-shadow: 0 8px 18px -12px rgb(var(--accent-rgb) / 0.9);
 }
 
 .panel__tab:focus-visible {
@@ -1027,6 +1323,8 @@ h2 {
 }
 
 .panel__count {
+  /* 固定行高：列表再长也只让列表滚，别把统计行按比例挤扁裁字 */
+  flex: 0 0 auto;
   margin-top: -4px;
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
@@ -1036,11 +1334,98 @@ h2 {
   text-overflow: ellipsis;
 }
 
-.panel__hint {
+/* 面板里这几行高度固定，收缩全部交给列表 */
+.panel__head,
+.panel__search,
+.panel__count,
+.panel__notice {
   flex: 0 0 auto;
-  font-size: 11px;
+}
+
+/* 搜索歌名：输入框即时回显，过滤值在 JS 里防抖 */
+.panel__search {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 8px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--tint-1);
+  transition:
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.panel__search:focus-within {
+  border-color: var(--accent-line);
+  background: var(--tint-2);
+}
+
+.panel__search-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
   color: var(--text-faint);
-  white-space: nowrap;
+}
+
+.panel__search-icon .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.panel__search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  caret-color: var(--accent);
+  border: none;
+  background: transparent;
+  outline: none;
+}
+
+.panel__search-input::placeholder {
+  color: var(--text-faint);
+}
+
+/* 自带的 ✕ 在深色主题下是黑块，而且和右侧清空按钮重复 */
+.panel__search-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.panel__search-clear {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-faint);
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.panel__search-clear:hover {
+  color: var(--text);
+  background: var(--tint-3);
+}
+
+.panel__search-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.panel__search-clear .icon {
+  width: 12px;
+  height: 12px;
 }
 
 .panel__notice {
@@ -1050,10 +1435,10 @@ h2 {
   padding: 10px 12px;
   font-size: 12.5px;
   line-height: 1.45;
-  color: #ffc9d1;
-  border: 1px solid rgba(255, 107, 129, 0.34);
+  color: var(--danger-ink);
+  border: 1px solid var(--danger-line);
   border-radius: var(--radius-md);
-  background: rgba(255, 107, 129, 0.12);
+  background: var(--danger-soft);
 }
 
 .panel__notice-text {
@@ -1066,11 +1451,11 @@ h2 {
   min-height: 32px;
   padding: 0 10px;
   font-size: 12px;
-  color: #fff2f4;
+  color: var(--danger-action-ink);
   white-space: nowrap;
-  border: 1px solid rgba(255, 107, 129, 0.5);
+  border: 1px solid var(--danger-action-line);
   border-radius: 8px;
-  background: rgba(255, 107, 129, 0.24);
+  background: var(--danger-action-bg);
   cursor: pointer;
   transition:
     background-color 0.18s var(--ease),
@@ -1078,8 +1463,8 @@ h2 {
 }
 
 .panel__notice-action:hover {
-  background: rgba(255, 107, 129, 0.38);
-  border-color: rgba(255, 107, 129, 0.7);
+  background: var(--danger-action-bg-hover);
+  border-color: var(--danger-action-line-hover);
 }
 
 .panel__notice-action:active {
@@ -1087,7 +1472,7 @@ h2 {
 }
 
 .panel__notice-action:focus-visible {
-  outline: 2px solid #ffd7dd;
+  outline: 2px solid var(--danger-ink-strong);
   outline-offset: 2px;
 }
 
@@ -1105,7 +1490,7 @@ h2 {
 
 .panel__notice-close:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--tint-3);
 }
 
 .panel__list {
@@ -1119,11 +1504,21 @@ h2 {
   scrollbar-width: thin;
 }
 
+/* 空态自己撑满内容区、整体居中；不要虚线框，它只是说明不是可投放区域 */
 .panel__empty {
-  padding: 30px 16px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
   text-align: center;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
+}
+
+/* 空态出现时列表没有内容：让它让出整块空间，否则两块各占一半，提示会被压到下半区 */
+.panel__pane:has(> .panel__empty) > .panel__list,
+.panel__pane:has(> .panel__empty) > .recent {
+  display: none;
 }
 
 .panel__empty-title {
@@ -1170,13 +1565,6 @@ h2 {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-}
-
-/* 卡片高度不够时只让列表收缩；标题行、统计行、提示条保持原高，别被压扁盖字 */
-.panel--sheet .panel__head,
-.panel--sheet .panel__count,
-.panel--sheet .panel__notice {
-  flex: 0 0 auto;
 }
 
 .panel--sheet .panel__list {
@@ -1243,7 +1631,7 @@ h2 {
 .sheet__scrim {
   position: absolute;
   inset: 0;
-  background: rgba(4, 8, 12, 0.66);
+  background: var(--scrim);
   backdrop-filter: blur(3px);
   animation: sheet-scrim-in 0.24s var(--ease) both;
 }
@@ -1265,8 +1653,8 @@ h2 {
   border: 1px solid var(--border-strong);
   border-bottom: none;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  background: linear-gradient(180deg, #0d1219 0%, #090c11 100%);
-  box-shadow: 0 -24px 60px -30px rgba(0, 0, 0, 0.95);
+  background: linear-gradient(180deg, var(--sheet-a) 0%, var(--sheet-b) 100%);
+  box-shadow: var(--shadow-sheet);
   animation: sheet-slide-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1339,7 +1727,7 @@ body.is-sheet-open {
 .lyrics,
 .recent,
 .panel__list,
-.wave-style__panel {
+.wave-style__list {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
@@ -1347,14 +1735,14 @@ body.is-sheet-open {
 .lyrics.is-scrolling,
 .recent.is-scrolling,
 .panel__list.is-scrolling,
-.wave-style__panel.is-scrolling {
-  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+.wave-style__list.is-scrolling {
+  scrollbar-color: var(--scroll-thumb) transparent;
 }
 
 .lyrics::-webkit-scrollbar,
 .recent::-webkit-scrollbar,
 .panel__list::-webkit-scrollbar,
-.wave-style__panel::-webkit-scrollbar {
+.wave-style__list::-webkit-scrollbar {
   width: 8px;
   height: 8px;
   background: transparent;
@@ -1363,14 +1751,14 @@ body.is-sheet-open {
 .lyrics::-webkit-scrollbar-track,
 .recent::-webkit-scrollbar-track,
 .panel__list::-webkit-scrollbar-track,
-.wave-style__panel::-webkit-scrollbar-track {
+.wave-style__list::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .lyrics::-webkit-scrollbar-thumb,
 .recent::-webkit-scrollbar-thumb,
 .panel__list::-webkit-scrollbar-thumb,
-.wave-style__panel::-webkit-scrollbar-thumb {
+.wave-style__list::-webkit-scrollbar-thumb {
   background-color: transparent;
   border-radius: 999px;
   transition: background-color 0.2s var(--ease);
@@ -1379,8 +1767,8 @@ body.is-sheet-open {
 .lyrics.is-scrolling::-webkit-scrollbar-thumb,
 .recent.is-scrolling::-webkit-scrollbar-thumb,
 .panel__list.is-scrolling::-webkit-scrollbar-thumb,
-.wave-style__panel.is-scrolling::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.28);
+.wave-style__list.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb);
 }
 
 /* 歌词区不出现滚动条：紧凑版和完整页都不显示（手动滑动也不显示），
@@ -1429,14 +1817,14 @@ body.is-sheet-open {
     opacity 0.28s var(--ease);
 }
 
-/* 已经唱过的行略微压暗，制造时间流逝感 */
+/* 已经唱过的行略微压暗，制造时间流逝感（白底上要提回来，见 --past-opacity） */
 .lyrics__line.is-past {
   color: var(--text-dim);
-  opacity: 0.62;
+  opacity: var(--past-opacity, 0.62);
 }
 
 .lyrics__line.is-active {
-  color: var(--accent-light);
+  color: var(--lyric-hl);
   opacity: 1;
 }
 
@@ -1455,9 +1843,9 @@ body.is-sheet-open {
   color: var(--text-dim);
 }
 
+/* 当前行只换颜色加粗，不发光：发光会在字周围糊出一团颜色，看着像背景高亮 */
 .lyrics__line.is-active .lyrics__text {
   font-weight: 650;
-  text-shadow: 0 0 26px rgba(46, 230, 168, 0.42);
 }
 
 /* 中文译文：跟在原文下面另起一行。
@@ -1475,6 +1863,11 @@ body.is-sheet-open {
 /* 当前行只有原文加粗，译文保持常规字重：一行里也要分得出主次 */
 .lyrics__line.is-active .lyrics__text.lyrics__trans {
   font-weight: 400;
+}
+
+/* 白底上译文再淡一档就发虚了 */
+:root[data-mode="light"] .lyrics__trans {
+  opacity: 0.92;
 }
 
 .lyrics__line--gap {
@@ -1504,10 +1897,6 @@ body.is-sheet-open {
   font-size: 17px;
 }
 
-.lyrics--compact .lyrics__line.is-active .lyrics__text {
-  text-shadow: 0 0 18px rgba(46, 230, 168, 0.35);
-}
-
 /* 紧凑区留给歌词的高度有限，译文再小一档、贴紧原文 */
 .lyrics--compact .lyrics__trans {
   margin-top: 1px;
@@ -1518,10 +1907,6 @@ body.is-sheet-open {
   padding: 12px 14px;
   font-size: 19px;
   line-height: 1.5;
-}
-
-.lyrics--full .lyrics__line.is-active .lyrics__text {
-  text-shadow: 0 0 34px rgba(46, 230, 168, 0.5);
 }
 
 /* --------------------------------------------------------------------------
@@ -1539,10 +1924,12 @@ body.is-sheet-open {
   padding: 16px 16px 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  background: linear-gradient(170deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
+  background: linear-gradient(170deg, var(--card-a), var(--card-b));
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(16px);
   animation: page-in 0.22s var(--ease);
+  /* 纵向手势照常滚歌词，横向手势留给「左右滑切歌」，双指仍可缩放 */
+  touch-action: pan-y pinch-zoom;
 }
 
 .lyrics-page__head {
@@ -1552,41 +1939,7 @@ body.is-sheet-open {
   gap: 12px;
 }
 
-.lyrics-page__back {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 4px;
-  min-height: 36px;
-  padding: 0 12px 0 8px;
-  font-family: inherit;
-  font-size: 12.5px;
-  color: var(--text-dim);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.04);
-  cursor: pointer;
-  transition:
-    color 0.18s var(--ease),
-    background-color 0.18s var(--ease);
-}
-
-.lyrics-page__back:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.lyrics-page__back:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.lyrics-page__back .icon {
-  width: 16px;
-  height: 16px;
-}
-
-/* 右上角的波形样式下拉：触发按钮跟「返回」同尺寸同款式，点开是一列缩略图 + 名称 */
+/* 右上角的波形样式下拉：图标 + 名称，点开是一列缩略图 + 名称 */
 .wave-style {
   position: relative;
   flex: 0 0 auto;
@@ -1603,7 +1956,7 @@ body.is-sheet-open {
   color: var(--text-dim);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--tint-1);
   cursor: pointer;
   transition:
     color 0.18s var(--ease),
@@ -1612,7 +1965,7 @@ body.is-sheet-open {
 
 .wave-style__trigger:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--tint-3);
 }
 
 .wave-style__trigger:focus-visible {
@@ -1650,25 +2003,98 @@ body.is-sheet-open {
   z-index: 40;
   display: flex;
   flex-direction: column;
-  gap: 2px;
   box-sizing: border-box;
   width: 219px;
   max-width: calc(100vw - 32px);
   max-height: min(360px, 58vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 6px 0px 6px 8px;
+  /* 滚动交给内层列表，头部（彩色开关）固定不动 */
+  overflow: hidden;
+  padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: 14px;
-  background: linear-gradient(180deg, #121924 0%, #0a0e14 100%);
-  box-shadow: 0 24px 52px -24px rgba(0, 0, 0, 0.95);
+  background: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
+  box-shadow: var(--shadow-pop);
   animation: wave-style-in 0.16s var(--ease) both;
 }
 
-/* 面板是程序化聚焦的（打开即 focus），给它描一圈会在鼠标点开时也亮绿框。
+/* 固定头部：跟面板同宽、永远停在顶部，不随列表滚动 */
+.wave-style__head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--tint-2);
+}
+
+.wave-style__head-title {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  color: var(--text-dim);
+}
+
+/* 彩色开关：34×20 胶囊 + 14px 圆点；开 = 薄荷绿，关 = 灰 */
+.wave-color {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--tint-2);
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease);
+}
+
+.wave-color::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--knob);
+  transition:
+    transform 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.wave-color[aria-checked="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.wave-color[aria-checked="true"]::after {
+  transform: translateX(14px);
+  background: var(--accent-light);
+}
+
+.wave-color:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 可滚动的样式列表 */
+.wave-style__list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 0px 6px 8px;
+}
+
+/* 面板打开即聚焦列表，给它描一圈会在鼠标点开时也亮绿框。
    焦点提示改由「当前高亮行」承担，这也是 aria-activedescendant 列表的标准做法。 */
-.wave-style__panel:focus,
-.wave-style__panel:focus-visible {
+.wave-style__list:focus,
+.wave-style__list:focus-visible {
   outline: none;
 }
 
@@ -1702,26 +2128,26 @@ body.is-sheet-open {
 
 .wave-style__option:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--tint-1);
 }
 
 /* 键盘高亮行：比 hover 更实，再加一圈内描边，焦点位置一眼能找到 */
 .wave-style__option[data-active] {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  background: var(--tint-3);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
 }
 
 .wave-style__option[aria-selected="true"] {
   color: var(--text);
   border-color: var(--accent-line);
-  background: linear-gradient(90deg, rgba(46, 230, 168, 0.16), rgba(46, 230, 168, 0.02));
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.16), rgb(var(--accent-rgb) / 0.02));
 }
 
 .wave-style__thumb {
   display: block;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--tint-1);
 }
 
 .wave-style__label {
@@ -1798,6 +2224,490 @@ body.is-sheet-open {
   mask-image: linear-gradient(90deg, transparent 0, #000 10%, #000 90%, transparent 100%);
 }
 
+.lyric-color {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* 「T」小按钮：字本身就是当前高亮色，一眼看出设置的是哪个色 */
+.lyric-color__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--lyric-hl);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.lyric-color__trigger:hover {
+  background: var(--surface-2);
+}
+
+.lyric-color__trigger[aria-expanded="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.lyric-color__trigger:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 色板向上弹（按钮在频谱左端，下方就是进度条，没地方放） */
+.lyric-color__panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
+  box-shadow: var(--shadow-pop);
+  animation: wave-style-in 0.16s var(--ease) both;
+}
+
+.lyric-color__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: box-shadow 0.16s var(--ease);
+}
+
+.lyric-color__swatch:hover {
+  box-shadow: 0 0 0 2px var(--swatch-ring), 0 0 0 3px var(--ring-soft);
+}
+
+.lyric-color__swatch[data-active] {
+  box-shadow: 0 0 0 2px var(--swatch-ring), 0 0 0 3px var(--ring-strong);
+}
+
+.lyric-color__swatch:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   抽屉：从右边缘滑进滑出（菜单 / 换肤共用）
+   -------------------------------------------------------------------------- */
+
+.drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.drawer__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+  animation: drawer-fade 0.2s var(--ease) both;
+}
+
+.drawer--out .drawer__scrim {
+  animation: drawer-fade-out 0.2s var(--ease) both;
+}
+
+.drawer__panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* 不贴边：和播放器卡片一样浮起来，右侧留出呼吸位 */
+  width: min(340px, 88vw);
+  max-width: calc(100% - 24px);
+  /* 高度跟内容走：三行入口就收成一张小卡，不拉成一根空柱子 */
+  max-height: calc(100% - 24px);
+  align-self: flex-start;
+  min-height: 0;
+  margin: 12px 12px 12px 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  /* 半透明玻璃面：叠在模糊背景上，白底主题也不会是一整块死白 */
+  background:
+    radial-gradient(120% 58% at 100% 0%, rgb(var(--accent-rgb) / 0.1), transparent 62%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel-a) 88%, transparent),
+      color-mix(in srgb, var(--panel-b) 94%, transparent)
+    );
+  box-shadow: var(--shadow-pop);
+  backdrop-filter: blur(18px) saturate(1.15);
+  animation: drawer-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.drawer--out .drawer__panel {
+  animation: drawer-out 0.2s var(--ease) both;
+}
+
+/* 一级菜单只放几行入口，窄一档；换肤要放缩略预览，用上面那档宽 */
+.drawer__panel--narrow {
+  width: min(288px, 82vw);
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(calc(100% + 18px)); }
+  to { transform: translateX(0); }
+}
+
+@keyframes drawer-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(100% + 18px)); }
+}
+
+@keyframes drawer-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes drawer-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.drawer__head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 16px 12px;
+}
+
+.drawer__titles {
+  min-width: 0;
+}
+
+.drawer__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+/* 标题前的小亮点点题，和顶栏 logo、唱臂轴心同一颗强调色 */
+.drawer__title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgb(var(--accent-rgb) / 0.85);
+}
+
+.drawer__hint {
+  margin: 4px 0 0 14px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.drawer__close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--tint-1);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.drawer__close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--tint-2);
+}
+
+.drawer__close:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+.drawer__close .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.drawer__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 12px 16px;
+}
+
+/* 换肤拆成两组：明暗模式（分段控件）与主题色（色卡），互不影响 */
+.theme-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-group + .theme-group {
+  margin-top: 6px;
+}
+
+.theme-group__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.theme-group__hint {
+  margin-top: -2px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* 明暗模式：三档分段控件，选中项和面板标签同一套强调色 */
+.theme-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--tint-1);
+}
+
+.theme-seg__item {
+  flex: 1 1 0;
+  min-height: 32px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.theme-seg__item:hover {
+  color: var(--text);
+  background: var(--tint-2);
+}
+
+.theme-seg__item[aria-pressed="true"] {
+  color: var(--accent-ink);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 40%, #ffffff), var(--accent) 60%, color-mix(in srgb, var(--accent) 76%, #000000));
+  box-shadow: 0 8px 18px -12px rgb(var(--accent-rgb) / 0.9);
+}
+
+.theme-seg__item:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 主题色：三张色卡，色点固定是该颜色的原色，不跟随当前主题变 */
+.theme-swatches {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 8px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.theme-swatch:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.theme-swatch[aria-pressed="true"] {
+  color: var(--text);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.theme-swatch:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+.theme-swatch__dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  /* 两圈描边用卡片底色 + 边框色，深浅底上都不糊 */
+  box-shadow:
+    0 0 0 3px var(--surface),
+    0 0 0 4px var(--border);
+}
+
+.theme-swatch--mint .theme-swatch__dot {
+  background: #2ee6a8;
+}
+
+.theme-swatch--pink .theme-swatch__dot {
+  background: #ff6aa8;
+}
+
+.theme-swatch--blue .theme-swatch__dot {
+  background: #4d8dff;
+}
+
+.theme-swatch[aria-pressed="true"] .theme-swatch__dot {
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    0 0 0 4px var(--accent-line);
+}
+
+/* --------------------------------------------------------------------------
+   菜单抽屉：一级入口列表（每行一张小卡，图标带色底；二级入口右侧带箭头）
+   -------------------------------------------------------------------------- */
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.menu-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--tint-1);
+  cursor: pointer;
+  transition:
+    background-color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+.menu-row:hover {
+  border-color: var(--border-strong);
+  background: var(--tint-2);
+}
+
+.menu-row:active {
+  transform: scale(0.985);
+}
+
+.menu-row:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 图标托在浅色方块里，和顶栏 logo / 唱臂轴心同一个强调色系 */
+.menu-row__icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--accent-light);
+  border-radius: 11px;
+  background: var(--accent-soft);
+}
+
+.menu-row__icon .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.menu-row__title {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.menu-row--danger {
+  color: var(--danger);
+}
+
+.menu-row--danger .menu-row__icon {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.menu-row--danger:hover {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+/* 「换肤」这类二级入口：右侧一个小箭头，提示还能再点进去 */
+.menu-row--sub {
+  position: relative;
+  padding-right: 34px;
+}
+
+.menu-row--sub::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 15px;
+  width: 6px;
+  height: 6px;
+  border-top: 1.6px solid var(--text-faint);
+  border-right: 1.6px solid var(--text-faint);
+  transform: translateY(-60%) rotate(45deg);
+}
+
 /* 右栏封面可点开放大：按钮不参与视觉，只负责热区与键盘可达 */
 .lyrics-page__art-btn {
   display: block;
@@ -1838,7 +2748,7 @@ body.is-sheet-open {
   object-fit: cover;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--tint-1);
   box-shadow: 0 30px 60px -34px rgba(0, 0, 0, 0.9);
 }
 
@@ -1864,9 +2774,9 @@ body.is-sheet-open {
   letter-spacing: 0.01em;
 }
 
-/* 当前行的高亮（颜色 / 加粗 / 文字辉光）见 .lyrics__line.is-active，两处共用；这里只管歌词页的字号与压暗 */
+/* 当前行的高亮（颜色 / 加粗）见 .lyrics__line.is-active，两处共用；这里只管歌词页的字号与压暗 */
 .lyrics-page .lyrics--full .lyrics__line.is-past {
-  opacity: 0.5;
+  opacity: var(--past-opacity-page, 0.5);
 }
 
 .lyrics-page .lyrics--full .lyrics__trans {
@@ -1905,12 +2815,15 @@ body.is-sheet-open {
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
+  min-height: 36px;
+  padding: 0 10px;
   font-family: inherit;
+  font-size: 12.5px;
   color: var(--text-dim);
   white-space: nowrap;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--tint-3);
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--tint-1);
   cursor: pointer;
   transition:
     color 0.18s var(--ease),
@@ -1923,21 +2836,9 @@ body.is-sheet-open {
   height: 14px;
 }
 
-.lyrics-bilingual--inline {
-  min-height: 24px;
-  padding: 0 9px;
-  font-size: 11.5px;
-}
-
-.lyrics-bilingual--head {
-  min-height: 36px;
-  padding: 0 10px;
-  font-size: 12.5px;
-}
-
 .lyrics-bilingual:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--tint-3);
 }
 
 .lyrics-bilingual[aria-checked="true"] {
@@ -1947,12 +2848,41 @@ body.is-sheet-open {
 }
 
 .lyrics-bilingual[aria-checked="true"]:hover {
-  background: rgba(46, 230, 168, 0.22);
+  background: rgb(var(--accent-rgb) / 0.22);
 }
 
 .lyrics-bilingual:focus-visible {
   outline: 2px solid var(--accent-light);
   outline-offset: 2px;
+}
+
+/* 浅色模式下选中态不铺整块强调色：换成白底 + 强调色文字，
+   和白色卡片同一层，靠字色和浮起感区分选中，避免高饱和色块压在白底上显脏 */
+:root[data-mode="light"] .panel__tab[aria-selected="true"],
+:root[data-mode="light"] .theme-seg__item[aria-pressed="true"] {
+  color: var(--accent-light);
+  background: var(--surface-2);
+  box-shadow: 0 8px 18px -14px rgba(24, 42, 60, 0.45);
+}
+
+:root[data-mode="light"] .theme-swatch[aria-pressed="true"] {
+  color: var(--accent-light);
+  background: var(--surface-2);
+}
+
+:root[data-mode="light"] .wave-style__option[aria-selected="true"] {
+  color: var(--accent-light);
+  background: var(--surface-2);
+}
+
+:root[data-mode="light"] .lyrics-bilingual[aria-checked="true"] {
+  color: var(--accent-light);
+  background: var(--surface-2);
+}
+
+:root[data-mode="light"] .lyrics-bilingual[aria-checked="true"]:hover {
+  border-color: var(--accent);
+  background: var(--surface-2);
 }
 
 /* 与主页紧凑歌词条的重试按钮同款；出现在「未找到 / 匹配失败」时 */
@@ -1972,7 +2902,7 @@ body.is-sheet-open {
 }
 
 .lyrics-page__retry:hover {
-  background: rgba(46, 230, 168, 0.22);
+  background: rgb(var(--accent-rgb) / 0.22);
 }
 
 .lyrics-page__retry:focus-visible {
@@ -2088,7 +3018,7 @@ body.is-lyrics-page .app__main {
 .recent__clear:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent-line);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--tint-2);
 }
 
 .recent__clear:disabled {
@@ -2142,7 +3072,7 @@ body.is-lyrics-page .app__main {
 }
 
 .recent__row:hover {
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--tint-1);
 }
 
 /* 行内主按钮让出删除按钮的宽度 */
@@ -2186,7 +3116,7 @@ body.is-lyrics-page .app__main {
 
 .recent__remove:hover {
   color: var(--danger);
-  background: rgba(255, 107, 129, 0.14);
+  background: var(--danger-soft);
 }
 
 .recent__remove:focus-visible {
@@ -2197,7 +3127,7 @@ body.is-lyrics-page .app__main {
 
 .recent__item.is-active {
   border-color: var(--accent-line);
-  background: linear-gradient(90deg, rgba(46, 230, 168, 0.14), rgba(46, 230, 168, 0.02));
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.14), rgb(var(--accent-rgb) / 0.02));
 }
 
 .recent__item.is-missing {
@@ -2213,7 +3143,7 @@ body.is-lyrics-page .app__main {
   flex: 0 0 auto;
   width: 40px;
   height: 40px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--tint-3);
   border-radius: 10px;
   object-fit: cover;
   background: var(--surface-2);
@@ -2264,12 +3194,12 @@ body.is-lyrics-page .app__main {
 }
 
 .track:hover {
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--tint-1);
 }
 
 .track.is-active {
   border-color: var(--accent-line);
-  background: linear-gradient(90deg, rgba(46, 230, 168, 0.16), rgba(46, 230, 168, 0.02));
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.16), rgb(var(--accent-rgb) / 0.02));
 }
 
 .track__main {
@@ -2296,7 +3226,7 @@ body.is-lyrics-page .app__main {
   flex: 0 0 auto;
   width: 44px;
   height: 44px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--tint-3);
   border-radius: 10px;
   object-fit: cover;
   background: var(--surface-2);
@@ -2346,10 +3276,10 @@ body.is-lyrics-page .app__main {
 .track__badge {
   padding: 2px 6px;
   font-size: 10px;
-  color: #ffc9d1;
-  border: 1px solid rgba(255, 107, 129, 0.36);
+  color: var(--danger-ink);
+  border: 1px solid var(--danger-line);
   border-radius: 6px;
-  background: rgba(255, 107, 129, 0.16);
+  background: var(--danger-soft);
 }
 
 .track__remove {
@@ -2380,7 +3310,7 @@ body.is-lyrics-page .app__main {
 
 .track__remove:hover {
   color: var(--danger);
-  background: rgba(255, 107, 129, 0.14);
+  background: var(--danger-soft);
 }
 
 .track__remove:focus-visible {
@@ -2516,7 +3446,7 @@ body.is-lyrics-page .app__main {
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--tint-2);
   cursor: pointer;
   transition:
     background-color 0.2s var(--ease),
@@ -2524,7 +3454,7 @@ body.is-lyrics-page .app__main {
 }
 
 .lightbox__close:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--line-strong);
 }
 
 .lightbox__close:active {
@@ -2555,7 +3485,7 @@ body.is-lightbox-open {
   z-index: 60;
   display: none;
   place-items: center;
-  background: rgba(4, 8, 12, 0.74);
+  background: var(--scrim-strong);
   backdrop-filter: blur(6px);
   pointer-events: none;
 }
@@ -2572,9 +3502,9 @@ body.is-lightbox-open {
   padding: 32px 40px;
   font-size: 14px;
   color: var(--accent-light);
-  border: 2px dashed rgba(46, 230, 168, 0.55);
+  border: 2px dashed rgb(var(--accent-rgb) / 0.55);
   border-radius: var(--radius-xl);
-  background: rgba(46, 230, 168, 0.09);
+  background: rgb(var(--accent-rgb) / 0.09);
 }
 
 .drop-overlay__inner .icon {
@@ -2605,16 +3535,16 @@ body.is-lightbox-open {
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  background: rgba(18, 24, 32, 0.95);
-  box-shadow: 0 18px 40px -22px rgba(0, 0, 0, 0.95);
+  background: var(--toast-bg);
+  box-shadow: var(--shadow-pop);
   pointer-events: auto;
   animation: toast-in 0.22s var(--ease);
 }
 
 .toast--error {
-  color: #ffd7dd;
-  border-color: rgba(255, 107, 129, 0.45);
-  background: rgba(48, 19, 25, 0.96);
+  color: var(--danger-ink-strong);
+  border-color: var(--danger-line);
+  background: var(--toast-error-bg);
 }
 
 .toast--out {
@@ -2641,7 +3571,7 @@ body.is-lightbox-open {
 
 .toast__close:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--tint-3);
 }
 
 @keyframes toast-in {
@@ -2686,7 +3616,7 @@ body.is-lightbox-open {
   text-decoration: none;
   border-radius: 10px;
   background: var(--accent);
-  box-shadow: 0 12px 26px -14px rgba(46, 230, 168, 0.95);
+  box-shadow: 0 12px 26px -14px rgb(var(--accent-rgb) / 0.95);
   transform: translateY(-180%);
   transition: transform 0.18s var(--ease);
 }
@@ -2705,12 +3635,23 @@ body.is-lightbox-open {
 /* 中小屏歌词页：右栏频谱挪到进度条上方，长度与进度滑杆一致 */
 @media (max-width: 1024px) {
   body.is-lyrics-page .transport__wave {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     /* 让出左右时间标签（36px）+ 间距（8px），与 .progress__slider 等长；
        负外边距抵消 transport 的 12px 行间距，让频谱与进度条贴合 */
     margin: 0 22px -19px;
   }
 
+  /* 「T」按钮占的那 34px 从频谱里让出来，不再额外撑宽整块 */
+  body.is-lyrics-page .transport__wave .lyrics-page__wave {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+  }
+
+  /* 频谱挪到进度条上方后，右栏那条收起来，免得出现两条波形 */
   body.is-lyrics-page .lyrics-page__art .lyrics-page__wave {
     display: none;
   }
@@ -2718,9 +3659,11 @@ body.is-lightbox-open {
 
 /* 竖屏窄屏：压缩封面卡，给封面下方的歌词留出空间 */
 @media (max-width: 899px) {
+  /* 顶部留白比左右大一点：唱片离卡片上沿太近会显得被顶住；
+     随视口高度收放，矮屏不至于把歌词挤没 */
   .stage {
-    gap: 10px;
-    padding: 14px 14px 16px;
+    gap: 14px;
+    padding: clamp(20px, 4vh, 36px) 14px 16px;
   }
 
   /* 移动端：音量交给系统实体键，列表入口收到按钮行最右侧 */
@@ -2735,6 +3678,9 @@ body.is-lightbox-open {
   /* 列表面板让位后，控制区贴在视口底边，曲目卡吃掉中间的高度（内容垂直居中，不留下黑洞） */
   .player > .stage {
     flex: 1 1 auto;
+    /* 歌词区改成弹性高度后，stage 的 min-content 会按整首歌词算，
+       这里必须允许它被压回去，否则整页会被顶出视口 */
+    min-height: 0;
     justify-content: center;
   }
 
@@ -2746,10 +3692,19 @@ body.is-lightbox-open {
     --cover-size: clamp(108px, 24vh, 150px);
   }
 
-  /* 手机单栏空间足：歌词区再拉长一档，约 4.5~5 行 */
+  /* 手机单栏空间足：歌词区不再固定行数，吃掉封面 / 信息区剩下的高度，
+     一直铺到控制区上方，避免下方留一块空。
+     flex-basis 用 0：用 auto 的话列表内容会反过来把整页顶出视口 */
+  .stage__lyrics {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
   .lyrics--compact {
-    height: clamp(160px, 22vh, 220px);
-    max-height: clamp(160px, 22vh, 220px);
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
+    max-height: none;
   }
 
   /* 小屏不显示「歌词自动匹配自…」这行来源说明；加载 / 失败状态仍保留 */
@@ -2790,16 +3745,11 @@ body.is-lightbox-open {
     display: none;
   }
 
-  /* 标签已经占据横向空间，提示文案让位（空状态里还有同样的引导） */
-  .panel__hint {
-    display: none;
-  }
-
   .btn__text {
     display: none;
   }
 
-  /* 窄屏头部只剩图标位：样式名让给「返回」和歌名，下拉里的名字照旧显示 */
+  /* 窄屏头部只剩图标位：样式名让给歌名，下拉里的名字照旧显示 */
   .wave-style__name {
     display: none;
   }
@@ -2808,9 +3758,10 @@ body.is-lightbox-open {
     padding: 0 8px;
   }
 
-  .btn--soft,
-  .btn--ghost {
-    width: 44px;
+  /* 只留图标时收成 36px 方块，跟下面那排胶囊同高（不要 44px，否则又比别处粗一圈） */
+  .app__actions .btn {
+    width: 36px;
+    min-height: 36px;
     padding: 0;
   }
 }
@@ -2832,6 +3783,15 @@ body.is-lightbox-open {
     grid-column: auto;
     justify-self: end;
     width: min(200px, 100%);
+  }
+
+  /* 歌词页桌面上右栏让位了，音量右侧补一个播放列表入口（首页右栏常驻，不重复给） */
+  body.is-lyrics-page .controls {
+    grid-template-columns: auto auto auto auto minmax(120px, 1fr) auto;
+  }
+
+  body.is-lyrics-page .controls__queue {
+    display: inline-flex;
   }
 
   .volume__input {

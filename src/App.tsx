@@ -12,15 +12,19 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { debounce } from 'lodash-es';
 import { ToastProvider, useToast } from './state/toast';
 import { PlayerProvider, usePlayer, usePlaybackTime, useBufferedEnd } from './state/player';
 import { CoverProvider, coverForDisplay, useCover } from './state/covers';
 import { LyricsProvider, useLyrics, findActiveCue } from './state/lyrics';
 import { WaveStyleProvider } from './state/wave-style';
+import { ThemeProvider } from './state/theme';
 import { useLibrary } from './state/library';
 import { useAutoHideScroll } from './state/useAutoHideScroll';
 import { WaveStrip } from './components/WaveStrip';
 import { BilingualToggle } from './components/BilingualToggle';
+import { LyricColorButton } from './components/LyricColorButton';
+import { LibraryMenu } from './components/LibraryMenu';
 import { WaveStylePicker } from './components/WaveStylePicker';
 import { clearRecent as clearRecentStore, formatRelativeTime } from './lib/recent-store.js';
 import { remove as removeLocalRecord } from './lib/local-store.js';
@@ -76,21 +80,21 @@ const VolumeIcon = ({ level }: { level: 'high' | 'low' | 'mute' }) => (
   </svg>
 );
 
-const BackIcon = () => (
-  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M14 6l-6 6 6 6" />
+/** 简约模式入口：黑胶盘，点了回到带封面的播放页 */
+const DiscIcon = () => (
+  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.5" />
+    <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
   </svg>
 );
 
-const PlusIcon = () => (
-  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
-    <path d="M12 5v14M5 12h14" />
-  </svg>
-);
-
-const TrashIcon = () => (
+/** 沉浸模式入口：歌词行 + 音符，点了进完整歌词页 */
+const LyricsIcon = () => (
   <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" />
+    <path d="M3.5 7h7M3.5 11.5h7M3.5 16h4.5" />
+    <path d="M15 16.5V6.2l4.5-1.1v9.6" />
+    <circle cx="13" cy="16.8" r="2" />
+    <circle cx="17.5" cy="15.6" r="2" />
   </svg>
 );
 
@@ -105,6 +109,19 @@ const QueueIcon = () => (
   <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M4 6.5h9M4 12h9M4 17.5h6" />
     <path d="M15 15.5l3-3 3 3" />
+  </svg>
+);
+
+const SearchIcon = () => (
+  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+    <circle cx="10.8" cy="10.8" r="6.3" />
+    <path d="M15.5 15.5L20 20" />
+  </svg>
+);
+
+const ClearIcon = () => (
+  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+    <path d="M7 7l10 10M17 7L7 17" />
   </svg>
 );
 
@@ -145,7 +162,11 @@ function useCompactLayout(): boolean {
 // 顶部栏
 // ---------------------------------------------------------------------------
 
-function Header() {
+function Header({ immersive, onSwitchView }: {
+  /** 当前是不是沉浸模式（完整歌词页） */
+  immersive: boolean;
+  onSwitchView: () => void;
+}) {
   const { clearList, playlist, refresh, persist } = usePlayer();
   const { importFiles } = useLibrary();
   const { show } = useToast();
@@ -193,14 +214,18 @@ function Header() {
         </span>
       </div>
       <div className="app__actions">
-        <button className="btn btn--soft" type="button" onClick={() => inputRef.current?.click()}>
-          <PlusIcon />
-          <span className="btn__text">添加音乐</span>
+        {/* 模式切换：沉浸（完整歌词）/ 简约（封面与黑胶盘），排在菜单左侧 */}
+        <button
+          className="btn app__mode"
+          type="button"
+          aria-label={immersive ? '切换到简约模式（封面页）' : '切换到沉浸模式（歌词页）'}
+          title={immersive ? '切换到简约模式（封面页）' : '切换到沉浸模式（歌词页）'}
+          onClick={onSwitchView}
+        >
+          {immersive ? <DiscIcon /> : <LyricsIcon />}
+          <span className="btn__text">{immersive ? '简约模式' : '沉浸模式'}</span>
         </button>
-        <button className="btn btn--ghost" type="button" onClick={onClear}>
-          <TrashIcon />
-          <span className="btn__text">清空</span>
-        </button>
+        <LibraryMenu onAdd={() => inputRef.current?.click()} onClear={onClear} />
         <input ref={inputRef} type="file" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.opus,.lrc" multiple hidden onChange={onFiles} />
       </div>
     </header>
@@ -294,9 +319,66 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
 // 曲目区
 // ---------------------------------------------------------------------------
 
+/** 左右滑动切歌的最小横向位移（px）；小于它按点击 / 滚动处理 */
+const SWIPE_SWITCH_PX = 56;
+
+/**
+ * 手机左右滑切歌（简约页 / 歌词页共用）：
+ * 单指、横向为主、位移够大且够快才算；纵向手势留给歌词滚动，
+ * 从按钮 / 输入框 / 波形样式下拉上起手的不参与（避免误触）。
+ */
+function useTrackSwipe() {
+  const { playNext, playPrevTrack } = usePlayer();
+  const start = useRef<{ x: number; y: number; at: number } | null>(null);
+
+  const onTouchStart = (event: React.TouchEvent<HTMLElement>) => {
+    if (event.touches.length !== 1) {
+      start.current = null;
+      return;
+    }
+    // 封面本身也能滑：它是一个用于放大的按钮，但横滑不算点击
+    if ((event.target as Element).closest('button:not(.stage__cover-wrap), input, select, textarea, .wave-style')) {
+      start.current = null;
+      return;
+    }
+    const touch = event.touches[0];
+    start.current = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+  };
+
+  const onTouchEnd = (event: React.TouchEvent<HTMLElement>) => {
+    const from = start.current;
+    start.current = null;
+    if (!from || event.changedTouches.length !== 1) {
+      return;
+    }
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - from.x;
+    const dy = touch.clientY - from.y;
+    if (Date.now() - from.at > 700) {
+      return;
+    }
+    if (Math.abs(dx) < SWIPE_SWITCH_PX || Math.abs(dx) < Math.abs(dy) * 1.25) {
+      return;
+    }
+    // 左滑下一首、右滑上一首（右滑不受「回到开头」的按钮约定影响）
+    if (dx < 0) {
+      playNext();
+    } else {
+      playPrevTrack();
+    }
+  };
+
+  return {
+    onTouchStart,
+    onTouchEnd,
+    onTouchCancel: () => { start.current = null; },
+  };
+}
+
 function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLElement | null) => void; discRef: React.RefObject<HTMLImageElement> }) {
   const { current, playing, loading, seek } = usePlayer();
   const { cues, status, state, showRetry, retry, trans, transNote } = useLyrics();
+  const swipe = useTrackSwipe();
   const time = usePlaybackTime();
   const cover = useCover(current);
   const activeIndex = useMemo(() => findActiveCue(cues, time), [cues, time]);
@@ -337,7 +419,7 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
   }, []);
 
   return (
-    <section className="stage" aria-label="当前播放曲目" onClick={onStageClick}>
+    <section className="stage" aria-label="当前播放曲目" onClick={onStageClick} {...swipe}>
       <button
         className={`stage__cover-wrap${playing ? ' is-playing' : ''}`}
         type="button"
@@ -402,7 +484,11 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
       </button>
 
       <div className="stage__meta">
-        <h1 className="stage__title" title={current?.title}>{current?.title ?? IDLE_TITLE}</h1>
+        {/* 歌名和「双语」并排居中：只有非中文歌词才出这个开关 */}
+        <div className="stage__title-row">
+          <h1 className="stage__title" title={current?.title}>{current?.title ?? IDLE_TITLE}</h1>
+          <BilingualToggle />
+        </div>
         <p className="stage__artist">{current?.artist || IDLE_ARTIST}</p>
         {current?.album ? <p className="stage__album">{current.album}</p> : <p className="stage__album" hidden />}
       </div>
@@ -412,8 +498,6 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
           <p className="stage__lyrics-status" data-state={state} role="status" aria-live="polite">
             {/* 译文有话要说时先说译文：来源标注是背景信息，取不到译文才是要处理的 */}
             <span className="stage__lyrics-status-text">{transNote || status}</span>
-            {/* 组件自己判断要不要出现（只有非中文歌词才有意义） */}
-            <BilingualToggle variant="inline" />
             {showRetry && (
               <button className="stage__lyrics-retry" type="button" onClick={(event) => { event.stopPropagation(); retry(); }}>
                 重试
@@ -459,6 +543,60 @@ function Panel({ onClose, onNavigate }: {
   const { tracks, currentIndex, playing, playAt, removeTrack, removeRecent, recent, syncRecent, failedIds, notice, hideNotice, resumeAutoplay } = usePlayer();
   const { show } = useToast();
   const [tab, setTab] = useState<'playlist' | 'recent'>('playlist');
+  /**
+   * 搜索：输入框即时回显，过滤用防抖后的值 —— 输入法打一个词会连发好几次 change，
+   * 逐键重建整张列表没必要。清空 / Esc 走 cancel，点了就要立刻看到完整列表。
+   */
+  const [query, setQuery] = useState('');
+  const [keyword, setKeyword] = useState('');
+  /**
+   * 搜索期间锁住面板高度：底部弹层是按内容定高的，结果一少卡片就往上缩、
+   * 标题行跟着跳。开搜那一刻量一次原始高度。
+   */
+  const panelRef = useRef<HTMLElement>(null);
+  const [heightLock, setHeightLock] = useState<number | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const applyKeyword = useMemo(
+    () => debounce((value: string) => setKeyword(value.trim().toLowerCase()), 200),
+    [],
+  );
+  useEffect(() => () => applyKeyword.cancel(), [applyKeyword]);
+  /**
+   * 锁跟着「已生效的关键词」走，而不是输入框的即时值：删到空时关键词还在防抖里，
+   * 这时先解锁的话，列表还是过滤后的高度，会缩一下再弹回来。
+   */
+  const activeHeightLock = onClose && keyword ? heightLock : null;
+  useEffect(() => {
+    if (!keyword) {
+      setHeightLock(null);
+    }
+  }, [keyword]);
+  const clearSearch = useCallback(() => {
+    applyKeyword.cancel();
+    setQuery('');
+    setKeyword('');
+    searchRef.current?.focus();
+  }, [applyKeyword]);
+  const onSearchInput = (value: string) => {
+    setQuery(value);
+    applyKeyword(value);
+    if (onClose && value.trim() && heightLock === null) {
+      setHeightLock(panelRef.current?.getBoundingClientRect().height ?? null);
+    }
+  };
+  /**
+   * 过滤结果带着原始下标：playAt 要的是播放列表里的位置，不是过滤后的位置。
+   * 不用 useMemo —— tracks 是原地变更的同一个数组引用，依赖永远不变。
+   */
+  const visibleTracks: { track: Track; index: number }[] = [];
+  tracks.forEach((track, index) => {
+    if (!keyword || track.title.toLowerCase().includes(keyword)) {
+      visibleTracks.push({ track, index });
+    }
+  });
+  const visibleRecent = keyword
+    ? recent.filter((entry) => entry.title.toLowerCase().includes(keyword))
+    : recent;
   // 两个列表各自滚动，滚动条都在滚动时才浮现
   const playlistScroll = useAutoHideScroll<HTMLUListElement>();
   const recentScroll = useAutoHideScroll<HTMLUListElement>();
@@ -494,7 +632,12 @@ function Panel({ onClose, onNavigate }: {
   );
 
   return (
-    <aside className={`panel${onClose ? ' panel--sheet' : ''}`} aria-label="播放列表与最近播放">
+    <aside
+      ref={panelRef}
+      className={`panel${onClose ? ' panel--sheet' : ''}`}
+      style={activeHeightLock === null ? undefined : { minHeight: activeHeightLock }}
+      aria-label="播放列表与最近播放"
+    >
       <div className="panel__head">
         <div
           className="panel__tabs"
@@ -518,17 +661,43 @@ function Panel({ onClose, onNavigate }: {
             最近<span className="panel__tab-count">{recent.length}</span>
           </button>
         </div>
-        {onClose ? (
+        {onClose && (
           <button className="panel__close" type="button" aria-label="收起播放列表" title="收起" onClick={onClose}>
             <CloseIcon />
           </button>
-        ) : (
-          <span className="panel__hint">拖入音频 / .lrc 即可添加</span>
         )}
       </div>
 
-      <p className="panel__count">
-        {tracks.length} 首 · 总时长 {formatTime(totalDuration)}
+      <div className="panel__search" role="search" aria-label="搜索歌曲">
+        <span className="panel__search-icon" aria-hidden="true"><SearchIcon /></span>
+        <input
+          ref={searchRef}
+          className="panel__search-input"
+          type="search"
+          value={query}
+          placeholder="搜索歌名"
+          aria-label="搜索歌名"
+          enterKeyHint="search"
+          onChange={(event) => onSearchInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && query) {
+              event.preventDefault();
+              event.stopPropagation();
+              clearSearch();
+            }
+          }}
+        />
+        {query && (
+          <button className="panel__search-clear" type="button" aria-label="清空搜索" title="清空搜索" onClick={clearSearch}>
+            <ClearIcon />
+          </button>
+        )}
+      </div>
+
+      <p className="panel__count" role="status" aria-live="polite">
+        {keyword
+          ? `找到 ${visibleTracks.length} 首 · 共 ${tracks.length} 首`
+          : `${tracks.length} 首 · 总时长 ${formatTime(totalDuration)}`}
       </p>
 
       {/* 常驻提示条：自动播放被拦、全列表失败这类事不该用会消失的 toast。位置与 vanilla 一致 */}
@@ -547,7 +716,7 @@ function Panel({ onClose, onNavigate }: {
       <div className="panel__body">
         <div className="panel__pane" id="panePlaylist" role="tabpanel" hidden={tab !== 'playlist'}>
           <ul ref={playlistScroll.ref} className={`panel__list${playlistScroll.scrolling ? ' is-scrolling' : ''}`}>
-            {tracks.map((track, index) => {
+            {visibleTracks.map(({ track, index }) => {
               const isActive = index === currentIndex;
               return (
                 <li key={track.id} className={`track${isActive ? ' is-active' : ''}`}>
@@ -599,6 +768,12 @@ function Panel({ onClose, onNavigate }: {
               <p className="panel__empty-text">点击「添加音乐」，或把音频文件拖到页面上</p>
             </div>
           )}
+          {keyword && tracks.length > 0 && visibleTracks.length === 0 && (
+            <div className="panel__empty">
+              <p className="panel__empty-title">没有找到《{query.trim()}》</p>
+              <p className="panel__empty-text">换个关键词试试</p>
+            </div>
+          )}
         </div>
 
         <div className="panel__pane" id="paneRecent" role="tabpanel" hidden={tab !== 'recent'}>
@@ -607,7 +782,7 @@ function Panel({ onClose, onNavigate }: {
             <button className="recent__clear" type="button" disabled={recent.length === 0} onClick={() => { clearRecentStore(); syncRecent(); }}>清空历史</button>
           </div>
           <ul ref={recentScroll.ref} className={`recent${recentScroll.scrolling ? ' is-scrolling' : ''}`} aria-label="最近播放">
-            {recent.map((entry) => {
+            {visibleRecent.map((entry) => {
               const stillIn = tracks.some((track) => track.id === entry.id);
               return (
                 <li key={entry.id} className="recent__row">
@@ -644,6 +819,12 @@ function Panel({ onClose, onNavigate }: {
             <div className="panel__empty">
               <p className="panel__empty-title">还没有播放记录</p>
               <p className="panel__empty-text">播放过的歌会自动出现在这里</p>
+            </div>
+          )}
+          {keyword && recent.length > 0 && visibleRecent.length === 0 && (
+            <div className="panel__empty">
+              <p className="panel__empty-title">没有找到《{query.trim()}》</p>
+              <p className="panel__empty-text">换个关键词试试</p>
             </div>
           )}
         </div>
@@ -780,8 +961,9 @@ function Transport({ onOpenQueue, queueOpen }: {
 
   return (
     <section className="transport" aria-label="播放控制">
-      {/* 小屏歌词页：频谱从右栏挪到进度条上方（桌面隐藏，右栏自带一条） */}
+      {/* 进度条上方那条：左端是「T」（改歌词高亮色），频谱只在歌词页跟它同排 */}
       <div className="transport__wave">
+        <LyricColorButton />
         <WaveStrip />
       </div>
       <div className="progress">
@@ -824,23 +1006,6 @@ function Transport({ onOpenQueue, queueOpen }: {
         </button>
         <button className="btn btn--icon" type="button" aria-label="下一首" title="下一首" onClick={() => playNext()}><NextIcon /></button>
 
-        {/* 移动端：列表入口在最右侧，点开底部弹层；桌面右栏常驻列表，这里隐藏 */}
-        <button
-          className="btn btn--icon controls__queue"
-          type="button"
-          aria-label="播放列表"
-          title="播放列表"
-          aria-haspopup="dialog"
-          aria-expanded={queueOpen}
-          onClick={(event) => {
-            // 触摸设备点按按钮不会自动聚焦，先钉住焦点，关闭弹层时才能还回来
-            event.currentTarget.focus({ preventScroll: true });
-            onOpenQueue();
-          }}
-        >
-          <QueueIcon />
-        </button>
-
         <div className="volume">
           <button className="btn btn--icon" type="button" aria-label={muted ? '取消静音' : '静音'} title={muted ? '取消静音' : '静音'} onClick={toggleMute}>
             <VolumeIcon level={level} />
@@ -858,6 +1023,23 @@ function Transport({ onOpenQueue, queueOpen }: {
             onChange={(event) => setVolume(Number(event.target.value) / 100)}
           />
         </div>
+
+        {/* 列表入口：手机常驻；桌面右栏常驻列表，只有歌词页（右栏让位）才出现，排在音量右侧 */}
+        <button
+          className="btn btn--icon controls__queue"
+          type="button"
+          aria-label="播放列表"
+          title="播放列表"
+          aria-haspopup="dialog"
+          aria-expanded={queueOpen}
+          onClick={(event) => {
+            // 触摸设备点按按钮不会自动聚焦，先钉住焦点，关闭弹层时才能还回来
+            event.currentTarget.focus({ preventScroll: true });
+            onOpenQueue();
+          }}
+        >
+          <QueueIcon />
+        </button>
       </div>
 
       <input ref={fileRef} type="file" accept="audio/*,.lrc" multiple hidden onChange={(event) => {
@@ -876,6 +1058,7 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
   const { current } = usePlayer();
   const { status, state, showRetry, retry, transNote } = useLyrics();
   const cover = useCover(current);
+  const swipe = useTrackSwipe();
 
   /**
    * 点歌词以外的空白处也返回播放界面：按钮、输入框、歌词文字各有自己的交互；
@@ -893,18 +1076,19 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
   };
 
   return (
-    <section className="lyrics-page" aria-label="完整歌词" onClick={onBlankClick}>
+    <section
+      className="lyrics-page"
+      aria-label="完整歌词"
+      onClick={onBlankClick}
+      {...swipe}
+    >
       <header className="lyrics-page__head">
-        <button className="lyrics-page__back" type="button" aria-label="返回播放界面（Esc）" onClick={() => window.dispatchEvent(new CustomEvent('app:close-lyrics-page'))}>
-          <BackIcon />
-          <span className="lyrics-page__back-text">返回</span>
-        </button>
         <div className="lyrics-page__meta">
           <p className="lyrics-page__title">{current?.title ?? '—'}</p>
           <p className="lyrics-page__artist">{[current?.artist, current?.album].filter(Boolean).join(' · ') || '未知歌手'}</p>
         </div>
         {/* 右上角两个同款控件：双语开关 + 选下面那条波形的样式 */}
-        <BilingualToggle variant="head" />
+        <BilingualToggle />
         <WaveStylePicker />
       </header>
       {/* 左歌词、右封面；封面在这页只是展示用，不参与旋转（没有 is-spinning） */}
@@ -944,7 +1128,7 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
               }}
             />
           </button>
-          {/* 律动波形收在右栏最下面 */}
+          {/* 律动波形收在右栏最下面（「T」统一在进度条上方那条里） */}
           <WaveStrip />
           {/* 歌词来源：桌面放在封面/频谱下方；窄屏该栏隐藏，也就不再显示这行说明 */}
           {state === 'ready' && (transNote || status) && (
@@ -1479,7 +1663,7 @@ function Shell() {
     <>
       <a className="skip-link" href="#btnPlay">跳到播放控制</a>
       <div className="app">
-        <Header />
+        <Header immersive={lyricsPage} onSwitchView={() => setLyricsPage((value) => !value)} />
         <main className="app__main">
           <div className="player">
             {lyricsPage
@@ -1494,11 +1678,10 @@ function Shell() {
         </main>
       </div>
       <Lightbox open={lightbox} onClose={closeLightbox} />
-      {compact && (
-        <PlaylistSheet open={queueOpen} onClose={() => setQueueOpen(false)}>
-          <Panel onClose={() => setQueueOpen(false)} onNavigate={() => setQueueOpen(false)} />
-        </PlaylistSheet>
-      )}
+      {/* 窄屏一直是弹层；桌面只在歌词页（右栏让位）由按钮唤起，所以不做 compact 门限 */}
+      <PlaylistSheet open={queueOpen} onClose={() => setQueueOpen(false)}>
+        <Panel onClose={() => setQueueOpen(false)} onNavigate={() => setQueueOpen(false)} />
+      </PlaylistSheet>
       <DropOverlay visible={dragging} />
       <Toasts />
     </>
@@ -1520,14 +1703,16 @@ function WithLyrics() {
 
 export default function App() {
   return (
-    <ToastProvider>
-      <WaveStyleProvider>
-        <PlayerProvider>
-          <CoverProvider>
-            <WithLyrics />
-          </CoverProvider>
-        </PlayerProvider>
-      </WaveStyleProvider>
-    </ToastProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <WaveStyleProvider>
+          <PlayerProvider>
+            <CoverProvider>
+              <WithLyrics />
+            </CoverProvider>
+          </PlayerProvider>
+        </WaveStyleProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

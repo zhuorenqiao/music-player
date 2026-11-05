@@ -67,6 +67,113 @@ export function buildGradient(
   return grad;
 }
 
+/** 关掉彩色后的取色：换成歌词当前行那一族的薄荷绿，只保留亮度层次。 */
+export function monoColor(_t: number, _sat = 0, light = 58): string {
+  const { h, s } = waveAccent();
+  // 样式传进来的 light 一般在 56~76：映射到「深薄荷 → 高亮薄荷」这一段
+  const l = Math.max(46, Math.min(90, 52 + (light - 56) * 1.8));
+  return `hsl(${h.toFixed(0)} ${s.toFixed(0)}% ${l.toFixed(0)}%)`;
+}
+
+/** 白色（薄荷色）版本的横向渐变：左浅右深，跟彩色版本同一套结构。 */
+function buildMonoGradient(ctx: CanvasRenderingContext2D, width: number): CanvasGradient {
+  const { h, s } = waveAccent();
+  const grad = ctx.createLinearGradient(0, 0, width, 0);
+  for (let i = 0; i <= 12; i += 1) {
+    const t = i / 12;
+    grad.addColorStop(t, `hsl(${h.toFixed(0)} ${s.toFixed(0)}% ${(88 - 30 * t).toFixed(0)}%)`);
+  }
+  return grad;
+}
+
+/** 主题里歌词高亮用的颜色（`--accent-light`），取不到时回退到同族薄荷绿。 */
+const FALLBACK_ACCENT = { h: 160, s: 85 };
+let accentOverride: { h: number; s: number } | null = null;
+let accentCache: { h: number; s: number } | null = null;
+
+/**
+ * 歌词高亮色变了：非彩色波形跟着换色相。
+ * @param hex 用户选的 `#rrggbb`；null / 解析失败 = 回到主题默认
+ */
+export function setWaveAccent(hex: string | null): void {
+  const hsl = hex ? hexToHsl(hex) : null;
+  accentOverride = hsl ? { h: hsl.h, s: Math.min(100, (hsl.s + 78) / 2) } : null;
+  accentCache = null;
+}
+
+/**
+ * 当前用的高亮色相 / 饱和度。
+ * 画布不认 CSS 变量，只能先取计算值再转成 hsl 分量；取一次就缓存，避免每帧读计算样式。
+ */
+export function waveAccent(): { h: number; s: number } {
+  if (accentCache) {
+    return accentCache;
+  }
+  if (accentOverride) {
+    accentCache = accentOverride;
+    return accentCache;
+  }
+  const raw = typeof document === 'undefined'
+    ? ''
+    : getComputedStyle(document.documentElement).getPropertyValue('--accent-light').trim();
+  const hsl = raw ? hexToHsl(raw) : null;
+  // 高亮色本身偏淡（#b9ffe9），饱和度取它和 --accent 之间的中间值，免得整条发白
+  accentCache = hsl ? { h: hsl.h, s: Math.min(100, (hsl.s + 78) / 2) } : FALLBACK_ACCENT;
+  return accentCache;
+}
+
+/** #rrggbb → hsl 分量。主题变量都是 16 进制，解析不了就返回 null 走回退。 */
+function hexToHsl(hex: string): { h: number; s: number; l: number } | null {
+  const match = hex.match(/^#([0-9a-f]{6})$/i);
+  if (!match) {
+    return null;
+  }
+  const int = parseInt(match[1], 16);
+  const r = ((int >> 16) & 255) / 255;
+  const g = ((int >> 8) & 255) / 255;
+  const b = (int & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) {
+    return { h: 0, s: 0, l: l * 100 };
+  }
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h: number;
+  if (max === r) {
+    h = ((g - b) / d) % 6;
+  } else if (max === g) {
+    h = (b - r) / d + 2;
+  } else {
+    h = (r - g) / d + 4;
+  }
+  h *= 60;
+  if (h < 0) {
+    h += 360;
+  }
+  return { h, s: s * 100, l: l * 100 };
+}
+
+/**
+ * 一套配色：渐变 + 逐点取色。
+ * 彩色走样式自带的色带；白色只是把同一套亮度拿来用，所以 17 种样式都能一键变白。
+ */
+export function wavePalette(
+  ctx: CanvasRenderingContext2D,
+  style: WaveStyle,
+  width: number,
+  colored: boolean,
+): { grad: CanvasGradient; colorAt: (t: number, sat?: number, light?: number) => string } {
+  if (colored) {
+    return {
+      grad: buildGradient(ctx, style.ramp, width),
+      colorAt: (t, sat = 92, light = 58) => rampColor(style.ramp, t, sat, light),
+    };
+  }
+  return { grad: buildMonoGradient(ctx, width), colorAt: monoColor };
+}
+
 // ---------------------------------------------------------------------------
 // 画布小工具
 // ---------------------------------------------------------------------------

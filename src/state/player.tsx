@@ -123,6 +123,8 @@ interface PlayerContextValue {
   playAt: (index: number, options?: { autoplay?: boolean }) => void;
   playNext: (options?: { auto?: boolean }) => void;
   playPrev: () => void;
+  /** 跳过「回到本曲开头」的约定，直接切上一首（手势切歌用） */
+  playPrevTrack: () => void;
   seek: (seconds: number) => void;
   seekBy: (delta: number) => void;
   setVolume: (value: number) => void;
@@ -275,6 +277,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [goTo, playlist]);
 
+  /** 无条件切到上一首：手势切歌不该被「回到本曲开头」的按钮约定打断 */
+  const playPrevTrack = useCallback(() => {
+    const prev = playlist.prevIndex();
+    if (prev >= 0) {
+      goTo(prev, { autoplay: true });
+    }
+  }, [goTo, playlist]);
+
   const playPrev = useCallback(() => {
     // 已播放超过 3 秒：「上一首」回到本曲开头，这是播放器通用约定
     if (player.currentTime > PREV_RESTART_AFTER) {
@@ -282,11 +292,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       timeStore.set(0);
       return;
     }
-    const prev = playlist.prevIndex();
-    if (prev >= 0) {
-      goTo(prev, { autoplay: true });
-    }
-  }, [goTo, player, playlist]);
+    playPrevTrack();
+  }, [playPrevTrack, player]);
 
   const togglePlay = useCallback(() => {
     if (playlist.size === 0) {
@@ -335,7 +342,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const next = playlist.cycleMode() as PlayMode;
     setMode(next);
     Storage.write(STORAGE_KEYS.mode, next);
-    show(`播放模式：${MODE_LABELS[next] ?? next}`, 'info', 2000);
+    // 同一个 key：连点只在原位置改文案并重新计时，不叠一条新的
+    show(`播放模式：${MODE_LABELS[next] ?? next}`, 'info', 2000, 'play-mode');
   }, [playlist, show]);
 
   const removeTrack = useCallback((id: string) => {
@@ -584,11 +592,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const current = (playlist.current as Track | null) ?? null;
 
   const actions = useMemo(() => ({
-    togglePlay, playAt: goTo, playNext, playPrev, seek, seekBy, setVolume, toggleMute,
+    togglePlay, playAt: goTo, playNext, playPrev, playPrevTrack, seek, seekBy, setVolume, toggleMute,
     cycleMode, removeTrack, moveTrack, clearList, refresh, syncRecent, removeRecent, clearFailure, persist,
     notice, showNotice, hideNotice, resumeAutoplay,
   }), [
-    clearFailure, cycleMode, clearList, goTo, moveTrack, notice, persist, playNext, playPrev,
+    clearFailure, cycleMode, clearList, goTo, moveTrack, notice, persist, playNext, playPrev, playPrevTrack,
     refresh, removeTrack, removeRecent, resumeAutoplay, seek, seekBy, setVolume, showNotice, hideNotice,
     syncRecent, toggleMute, togglePlay,
   ]);

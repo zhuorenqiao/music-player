@@ -151,12 +151,14 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
   const [bilingual, setBilingualState] = useState(readBilingualPref);
   const [translation, setTranslation] = useState<Translation | null>(null);
   const [transState, setTransState] = useState<TranslationState>('idle');
+  /** 查不到译文的具体原因：曲名/歌手没对上，还是这首歌本身没有译文 —— 用户要的处理方式不同 */
+  const [transReason, setTransReason] = useState('');
   const [transTick, setTransTick] = useState(0);
   const transAbortRef = useRef<AbortController | null>(null);
   /** 用户手动打开双语时绕过缓存再要一次（关掉又打开就是「重新获取」） */
   const transForceRef = useRef(false);
-  /** 本次会话内每首歌词只取一次译文；null 表示问过、确实没有 */
-  const transCacheRef = useRef(new Map<string, Translation | null>());
+  /** 本次会话内每首歌词只问一次译文，连「没有」也记住，避免切回来又打一遍接口 */
+  const transCacheRef = useRef(new Map<string, { translation: Translation | null; state: TranslationState; reason: string }>());
 
   const trans = useMemo<string[]>(() => {
     if (!bilingual || !translation || displayLines.length === 0) {
@@ -188,24 +190,32 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
     if (!track || !translatable) {
       setTranslation(null);
       setTransState('idle');
+      setTransReason('');
       return () => controller.abort();
     }
     if (!bilingual) {
       setTranslation(null);
       setTransState('off');
+      setTransReason('');
       return () => controller.abort();
     }
 
     const cacheKey = `${track.id}|${fingerprint(lyricsText)}`;
+    // force（用户重开开关）要连会话缓存一起绕开，否则「上次说没有」会一直盖住这次重试
+    if (force) {
+      transCacheRef.current.delete(cacheKey);
+    }
     const hit = transCacheRef.current.get(cacheKey);
-    if (hit !== undefined) {
-      setTranslation(hit);
-      setTransState(hit ? 'ready' : 'none');
+    if (hit) {
+      setTranslation(hit.translation);
+      setTransState(hit.state);
+      setTransReason(hit.reason);
       return () => controller.abort();
     }
 
     setTranslation(null);
     setTransState('loading');
+    setTransReason('');
     void fetchTranslation(track, { signal: controller.signal, useCache: !force }).then((result: {
       status: string; reason?: string; message?: string; source?: string; translatedLyrics?: string; originalLyrics?: string;
     }) => {
@@ -218,18 +228,24 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
           originalLrc: result.originalLyrics || '',
           source: result.source || '网易云译文库',
         };
-        transCacheRef.current.set(cacheKey, value);
+        transCacheRef.current.set(cacheKey, { translation: value, state: 'ready', reason: '' });
         setTranslation(value);
         setTransState('ready');
         return;
       }
-      // 「没有译文」和「静态部署」短期内不必再问；网络/超时类失败留下一次机会
-      if (result.status === 'not-found' || result.status === 'unavailable') {
-        transCacheRef.current.set(cacheKey, null);
-      }
-      setTransState(result.status === 'not-found'
+      /**
+       * 「没有译文」和「静态部署」记进会话缓存，短期内不再问；
+       * 网络/超时类失败不记，留给下一次（或用户重开开关）重试。
+       */
+      const state: TranslationState = result.status === 'not-found'
         ? 'none'
-        : (result.status === 'unavailable' ? 'unavailable' : 'error'));
+        : (result.status === 'unavailable' ? 'unavailable' : 'error');
+      const reason = result.reason || '';
+      if (state !== 'error') {
+        transCacheRef.current.set(cacheKey, { translation: null, state, reason });
+      }
+      setTransState(state);
+      setTransReason(reason);
     }).catch(() => {
       // 只有主动取消会抛到这里，界面已经切到别的歌了
     });
@@ -243,6 +259,12 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
       return '正在匹配中文译文…';
     }
     if (transState === 'none') {
+      if (transReason === 'song-not-matched') {
+        return '译文库没匹配到这首歌（曲名/歌手对不上）';
+      }
+      if (transReason === 'no-translation') {
+        return '这首歌还没有中文译文';
+      }
       return '译文库里没有这首歌的中文译文';
     }
     if (transState === 'unavailable') {
@@ -252,7 +274,7 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
       return '中文译文获取失败，关掉再打开「双语」可重试';
     }
     return '';
-  }, [transState]);
+  }, [transReason, transState]);
 
   const retry = useCallback(() => {
     if (track) {

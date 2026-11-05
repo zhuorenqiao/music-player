@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWaveStyle } from '../state/wave-style';
+import { useTheme } from '../state/theme';
 import { useAutoHideScroll } from '../state/useAutoHideScroll';
 import { WAVE_STYLES, type WaveStyle } from '../lib/wave-styles';
 import { renderWaveThumb, THUMB_HEIGHT, THUMB_WIDTH } from '../lib/wave-thumb';
@@ -37,13 +38,13 @@ const CheckIcon = () => (
 );
 
 /** 单个样式的静态缩略图：跑真实渲染器，只是喂固定种子而不是音频数据。 */
-function Thumb({ style }: { style: WaveStyle }) {
+function Thumb({ style, colored, lyricColor, themeKey }: { style: WaveStyle; colored: boolean; lyricColor: string; themeKey: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     if (ref.current) {
-      renderWaveThumb(ref.current, style);
+      renderWaveThumb(ref.current, style, colored);
     }
-  }, [style]);
+  }, [style, colored, lyricColor, themeKey]);
   return (
     <canvas
       ref={ref}
@@ -57,7 +58,8 @@ function Thumb({ style }: { style: WaveStyle }) {
 }
 
 export function WaveStylePicker() {
-  const { style, select } = useWaveStyle();
+  const { style, select, colored, setColored, lyricColor } = useWaveStyle();
+  const { themeKey } = useTheme();
   const currentIndex = useMemo(() => Math.max(0, WAVE_STYLES.indexOf(style)), [style]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(currentIndex);
@@ -174,36 +176,59 @@ export function WaveStylePicker() {
         <CaretIcon />
       </button>
 
-      <div
-        id="wave-style-list"
-        ref={listRef}
-        className={`wave-style__panel${scrolling ? ' is-scrolling' : ''}`}
-        role="listbox"
-        aria-label="波形样式"
-        aria-activedescendant={open ? `wave-style-opt-${active}` : undefined}
-        tabIndex={-1}
-        hidden={!open}
-        onKeyDown={onListKeyDown}
-      >
-        {WAVE_STYLES.map((option, i) => (
-          <div
-            key={option.id}
-            id={`wave-style-opt-${i}`}
-            ref={(el) => {
-              itemRefs.current[i] = el;
+      <div className="wave-style__panel" hidden={!open}>
+        {/* 固定头部：不跟着列表滚，开关控制波形是否有颜色 */}
+        <div className="wave-style__head">
+          <span className="wave-style__head-title">彩色</span>
+          <button
+            className="wave-color"
+            type="button"
+            role="switch"
+            aria-checked={colored}
+            aria-label="波形彩色"
+            title={colored ? '关闭彩色：波形改为歌词高亮色' : '开启彩色'}
+            onClick={() => setColored(!colored)}
+            onKeyDown={(event) => {
+              // 焦点在开关上时 Esc 归下拉自己，别顺手把整个歌词页关掉
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                close(true);
+              }
             }}
-            className="wave-style__option"
-            role="option"
-            aria-selected={i === currentIndex}
-            data-active={i === active || undefined}
-            onMouseMove={() => setActive(i)}
-            onClick={() => choose(i)}
-          >
-            <Thumb style={option} />
-            <span className="wave-style__label">{option.name}</span>
-            {i === currentIndex && <CheckIcon />}
-          </div>
-        ))}
+          />
+        </div>
+
+        <div
+          id="wave-style-list"
+          ref={listRef}
+          className={`wave-style__list${scrolling ? ' is-scrolling' : ''}`}
+          role="listbox"
+          aria-label="波形样式"
+          aria-activedescendant={open ? `wave-style-opt-${active}` : undefined}
+          tabIndex={-1}
+          onKeyDown={onListKeyDown}
+        >
+          {WAVE_STYLES.map((option, i) => (
+            <div
+              key={option.id}
+              id={`wave-style-opt-${i}`}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
+              className="wave-style__option"
+              role="option"
+              aria-selected={i === currentIndex}
+              data-active={i === active || undefined}
+              onMouseMove={() => setActive(i)}
+              onClick={() => choose(i)}
+            >
+              <Thumb style={option} colored={colored} lyricColor={lyricColor} themeKey={themeKey} />
+              <span className="wave-style__label">{option.name}</span>
+              {i === currentIndex && <CheckIcon />}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

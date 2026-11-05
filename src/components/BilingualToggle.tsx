@@ -5,7 +5,7 @@
  * 偏好写在 localStorage，下次打开还在。重新打开时绕过缓存再要一次译文，
  * 所以「译文获取失败」不必刷新整页。
  *
- * 两个位置共用：首页状态行（小一档，与「重试」同款）和歌词页右上角（与波形样式同尺寸）。
+ * 播放页（歌名右侧）和歌词页（右上角）共用同一个尺寸。
  */
 
 import { useLyrics } from '../state/lyrics';
@@ -18,7 +18,7 @@ const BilingualIcon = () => (
   </svg>
 );
 
-export function BilingualToggle({ variant }: { variant: 'inline' | 'head' }) {
+export function BilingualToggle() {
   const { translatable, bilingual, setBilingual, transState, transNote } = useLyrics();
   if (!translatable) {
     return null;
@@ -31,7 +31,7 @@ export function BilingualToggle({ variant }: { variant: 'inline' | 'head' }) {
   };
   return (
     <button
-      className={`lyrics-bilingual lyrics-bilingual--${variant}`}
+      className="lyrics-bilingual"
       type="button"
       role="switch"
       aria-checked={bilingual}

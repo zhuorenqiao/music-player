@@ -19,6 +19,17 @@ export const STORAGE_KEYS = Object.freeze({
   order: 'order',
   /** 歌词页右上角选中的波形样式 id */
   waveStyle: 'waveStyle',
+  /** 波形是否带彩色；关掉只留歌词高亮色的亮度层次 */
+  waveColored: 'waveColored',
+  /** 歌词高亮色（空字符串 = 跟随主题默认） */
+  lyricColor: 'lyricColor',
+  /** 主题：mint（薄荷深色）/ light（白色） */
+  /** 明暗模式：system / light / dark */
+  themeMode: 'themeMode',
+  /** 主题色：mint / pink / blue */
+  themeColor: 'themeColor',
+  /** 老版本的单值主题键，只用于迁移读取 */
+  theme: 'theme',
 });
 
 /** 方向键快进/快退步长（秒）。 */

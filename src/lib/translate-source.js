@@ -19,8 +19,11 @@ import { normalizeQuery, isOnline } from './lyrics-source.js';
 /** 同源代理地址。 */
 const LOCAL_PROXY = 'api/translate';
 
-/** localStorage 缓存键与容量（与歌词缓存分开，互不淘汰）。 */
-const CACHE_KEY = 'light-music.translate-cache.v1';
+/**
+ * localStorage 缓存键与容量（与歌词缓存分开，互不淘汰）。
+ * v2：代理补上「曲名/歌手对调」候选之前存下的「查不到」是匹配器不全造成的假结论，整块作废重来。
+ */
+const CACHE_KEY = 'light-music.translate-cache.v2';
 const MAX_CACHE_ENTRIES = 120;
 
 /** 命中留 30 天；「没有译文」只留 3 天（译文库随时可能补录）。 */

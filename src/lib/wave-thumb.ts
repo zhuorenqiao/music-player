@@ -6,7 +6,7 @@
  */
 
 import { createWaveSampler } from './wave-signal';
-import { buildGradient, rampColor, type WaveStyle } from './wave-styles';
+import { wavePalette, type WaveStyle } from './wave-styles';
 
 /** 固定种子 + 固定相位：每次打开下拉，缩略图都长同一个样子。 */
 const THUMB_SEED = 'wave-thumb';
@@ -16,7 +16,7 @@ const THUMB_PHASE = 1.15;
 export const THUMB_WIDTH = 76;
 export const THUMB_HEIGHT = 28;
 
-export function renderWaveThumb(canvas: HTMLCanvasElement, style: WaveStyle): void {
+export function renderWaveThumb(canvas: HTMLCanvasElement, style: WaveStyle, colored = true): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     return;
@@ -41,11 +41,12 @@ export function renderWaveThumb(canvas: HTMLCanvasElement, style: WaveStyle): vo
     height,
   });
 
+  const palette = wavePalette(ctx, style, width, colored);
   style.draw({
     ctx,
     frame,
-    grad: buildGradient(ctx, style.ramp, width),
+    grad: palette.grad,
     peaks: new Float32Array(bandCount),
-    colorAt: (t, sat = 92, light = 58) => rampColor(style.ramp, t, sat, light),
+    colorAt: palette.colorAt,
   });
 }

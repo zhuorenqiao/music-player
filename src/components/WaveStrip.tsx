@@ -17,9 +17,10 @@
 import { useEffect, useRef } from 'react';
 import { usePlayer } from '../state/player';
 import { useWaveStyle } from '../state/wave-style';
+import { useTheme } from '../state/theme';
 import { ensureAnalyser, isAnalysableSource } from '../lib/spectrum';
 import { createWaveSampler } from '../lib/wave-signal';
-import { buildGradient, rampColor } from '../lib/wave-styles';
+import { wavePalette } from '../lib/wave-styles';
 
 /** 画布高度（CSS 像素）。 */
 const HEIGHT = 48;
@@ -35,7 +36,9 @@ const PEAK_DECAY_PER_SEC = 0.03;
 
 export function WaveStrip() {
   const { current, playing, player } = usePlayer();
-  const { style } = useWaveStyle();
+  const { style, colored, lyricColor } = useWaveStyle();
+  /** 换肤会换强调色：非彩色波形和渐变都要跟着重画 */
+  const { themeKey } = useTheme();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   /** 峰值点阵的「保持态」：缓慢下落，所以点会短暂悬在柱顶上 */
   const peaksRef = useRef<Float32Array>(new Float32Array(0));
@@ -63,8 +66,8 @@ export function WaveStrip() {
     const reduced = typeof window.matchMedia === 'function'
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    /** 横向渐变：一次建好，整条样式共用 */
-    let grad: CanvasGradient | null = null;
+    /** 横向渐变 + 逐点取色：彩色 / 白色由下拉里的开关决定，一次建好整条样式共用 */
+    let palette: ReturnType<typeof wavePalette> | null = null;
 
     const resize = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -78,7 +81,7 @@ export function WaveStrip() {
       if (peaksRef.current.length !== bandCount) {
         peaksRef.current = new Float32Array(bandCount);
       }
-      grad = buildGradient(ctx, style.ramp, cssWidth);
+      palette = wavePalette(ctx, style, cssWidth, colored);
     };
 
     /** 峰值回落用墙钟时间算，rAF 和兜底定时器重复调用也不会多掉 */
@@ -86,7 +89,7 @@ export function WaveStrip() {
 
     /** 画一帧；整条一起按 phase 起伏，与播放进度无关。 */
     const draw = (phase: number, dtHint: number) => {
-      if (!grad || cssWidth === 0) {
+      if (!palette || cssWidth === 0) {
         return;
       }
       const now = performance.now();
@@ -118,9 +121,9 @@ export function WaveStrip() {
       style.draw({
         ctx,
         frame,
-        grad,
+        grad: palette.grad,
         peaks,
-        colorAt: (t, sat = 92, light = 58) => rampColor(style.ramp, t, sat, light),
+        colorAt: palette.colorAt,
       });
     };
 
@@ -165,7 +168,7 @@ export function WaveStrip() {
       observer?.disconnect();
       drawRef.current = null;
     };
-  }, [playing, seed, style]);
+  }, [playing, seed, style, colored, lyricColor, themeKey]);
 
   /**
    * 首次真正播放时才接管音频图：AudioContext 需要用户交互后的活跃状态，

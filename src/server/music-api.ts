@@ -424,18 +424,59 @@ const artistNames = (song: NetEaseSong): string[] => (song.artists ?? [])
   .map((artist) => String(artist?.name ?? ''))
   .filter(Boolean);
 
+/** 去掉尾部的括号说明与分隔符，得到「歌名本体」：《Old Town Road (feat. X)》→《Old Town Road》。 */
+function coreTitle(value: string): string {
+  let text = String(value ?? '');
+  let before = '';
+  while (before !== text) {
+    before = text;
+    text = text.replace(/\s*[(（【[][^()（）【】\[\]]*[)）】\]]\s*$/, '').trimEnd();
+  }
+  return text.replace(/\s*[-–—:,;]\s*$/, '').trim();
+}
+
+/**
+ * 歌手证据。
+ *
+ * 只按「整串包含」判会误配：对调出来的候选里「Zzzx Nope」能把网易的「N.O.P.E」包含进去
+ * （点号被归一化吃掉了），于是配上同名不相干的歌，整页译文都是错的。
+ * 所以先按 `/ , 、 & feat.` 拆成一个个歌手名，再要求全等或前缀关系。
+ */
+function artistHitSong(song: NetEaseSong, wantArtist: string): boolean {
+  if (!wantArtist) {
+    return false;
+  }
+  const tokens = artistNames(song)
+    .flatMap((value) => value.split(/[/、,，&；;]|\bfeat\.?\b/i))
+    .map(normText)
+    .filter(Boolean);
+  return tokens.some((token) => token === wantArtist
+    || (token.length >= 3 && (token.startsWith(wantArtist) || wantArtist.startsWith(token))));
+}
+
 /**
  * 从搜索结果里挑唯一可信的一条。
  *
  * 译文库错配比歌词错配更糟——整页中文都是别的歌的，用户很难当场发现。
- * 所以门槛收紧：歌名必须完全一致，且歌手对得上或时长差在 6 秒内。
+ * 所以门槛收紧：歌名必须一致（含去掉版本后缀的本体），且歌手对得上或时长差在 6 秒内。
+ * @param strict 派生出来的候选（对调、从曲名里拆出来的）必须另有歌手证据：
+ *   这类候选里「歌手」本身是猜的，只靠时长很容易配上同名不相干的歌。
  */
-function pickTranslatableSong(songs: NetEaseSong[], trackName: string, artistName: string, duration: number): NetEaseSong | null {
+function pickTranslatableSong(
+  songs: NetEaseSong[],
+  trackName: string,
+  artistName: string,
+  duration: number,
+  { strict = false }: { strict?: boolean } = {},
+): NetEaseSong | null {
   const wantTitle = normText(trackName);
+  const wantCore = normText(coreTitle(trackName));
   const wantArtist = normText(artistName);
   if (!wantTitle) {
     return null;
   }
+  /** 既没有歌手也没有时长可比：只剩歌名这一个证据，歌名全等就认 */
+  const onlyTitle = !wantArtist && !(duration > 0);
 
   let best: NetEaseSong | null = null;
   let bestScore = 0;
@@ -444,15 +485,16 @@ function pickTranslatableSong(songs: NetEaseSong[], trackName: string, artistNam
     if (!name || !song.id) {
       continue;
     }
-    const titleExact = name === wantTitle || (song.alias ?? []).some((alias) => normText(alias) === wantTitle);
+    const core = normText(coreTitle(song.name ?? ''));
+    const titleExact = name === wantTitle
+      || (song.alias ?? []).some((alias) => normText(alias) === wantTitle)
+      || (wantCore.length >= 3 && core === wantCore);
     // 「Yellow (Acoustic)」「Yellow (Live)」这类带后缀的版本
     const titlePrefix = !titleExact && wantTitle.length >= 3 && name.startsWith(wantTitle);
     if (!titleExact && !titlePrefix) {
       continue;
     }
-    const names = artistNames(song);
-    const artistHit = Boolean(wantArtist)
-      && names.some((value) => { const n = normText(value); return n === wantArtist || n.includes(wantArtist) || wantArtist.includes(n); });
+    const artistHit = artistHitSong(song, wantArtist);
     const seconds = Number(song.duration);
     const diff = duration > 0 && Number.isFinite(seconds) && seconds > 0 ? Math.abs(seconds / 1000 - duration) : Number.POSITIVE_INFINITY;
     const durHit = diff <= 6;
@@ -464,7 +506,10 @@ function pickTranslatableSong(songs: NetEaseSong[], trackName: string, artistNam
       if (diff > 20) {
         continue;
       }
-    } else if (!artistHit && !durHit) {
+    } else if (!artistHit && !durHit && !onlyTitle) {
+      continue;
+    }
+    if (strict && !artistHit) {
       continue;
     }
     const score = (titleExact ? 40 : 18) + (artistHit ? 25 : 0) + (durHit ? 25 : 0);
@@ -483,26 +528,68 @@ async function searchNetEaseSongs(keyword: string): Promise<NetEaseSong[]> {
   return Array.isArray(songs) ? songs as NetEaseSong[] : [];
 }
 
-async function fetchTranslation(trackName: string, artistName: string, duration: number): Promise<TranslateResult> {
-  const keywords = [
-    [artistName, trackName].filter(Boolean).join(' '),
-    // 「歌手 歌名」在网易的分词里常常搜不到，退回只搜歌名
-    artistName ? trackName : '',
-  ].filter(Boolean);
+/** 本地文件没标签时的占位歌手，拿去当搜索词只会污染结果。 */
+const PLACEHOLDER_ARTISTS = new Set(['本地文件', '未知歌手', '未知', 'unknown', 'various artists']);
 
-  let song: NetEaseSong | null = null;
+/**
+ * （曲名, 歌手）候选。
+ *
+ * 本地导入的曲名/歌手有三种拆法：正拆、「歌手 - 歌名」反拆、以及标签里曲名本身就写着
+ * 「歌名 - 歌手」。歌词代理有对调重试，译文这边要是没有，表现就是
+ * 「歌词有、双语开关也在，但永远查不到译文」——三种写法都试一遍才追平。
+ */
+function translatePairs(trackName: string, artistName: string): Array<{ name: string; artist: string; strict: boolean }> {
+  const pairs = [{ name: trackName, artist: artistName, strict: false }];
+  if (artistName && artistName !== trackName) {
+    pairs.push({ name: artistName, artist: trackName, strict: true });
+  }
+  const split = trackName.match(/^(.{2,60}?)\s+[-–—]\s+(.{2,60})$/);
+  if (split) {
+    const [, head, tail] = split;
+    pairs.push({ name: head.trim(), artist: tail.trim(), strict: true });
+    pairs.push({ name: tail.trim(), artist: head.trim(), strict: true });
+  }
+  const seen = new Set<string>();
+  return pairs.filter((pair) => {
+    const key = `${pair.name}|${pair.artist}`.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+async function fetchTranslation(trackName: string, artistName: string, duration: number): Promise<TranslateResult> {
+  const artist = PLACEHOLDER_ARTISTS.has(artistName.trim().toLowerCase()) ? '' : artistName.trim();
+  const candidates = translatePairs(trackName, artist);
+  /** 歌手字段写得花哨（「Coldplay / Beyoncé」「feat. X」）时，只搜歌名常常才是对的 */
+  candidates.push({ name: trackName, artist: '', strict: false });
+
   const errors: UpstreamError[] = [];
-  for (const keyword of keywords) {
+  let matched: NetEaseSong | null = null;
+  for (const candidate of candidates) {
+    const keyword = [candidate.artist, candidate.name].filter(Boolean).join(' ');
+    if (!keyword) {
+      continue;
+    }
     try {
-      song = pickTranslatableSong(await searchNetEaseSongs(keyword), trackName, artistName, duration);
+      matched = pickTranslatableSong(
+        await searchNetEaseSongs(keyword),
+        candidate.name,
+        candidate.artist,
+        duration,
+        { strict: candidate.strict },
+      );
     } catch (error) {
       errors.push(classifyError(error, '译文库'));
       continue;
     }
-    if (song) {
+    if (matched) {
       break;
     }
   }
+  const song = matched;
   if (!song) {
     /**
      * 搜索全失败（超时/连不上）时报错而不是「未收录」：
@@ -751,7 +838,11 @@ async function handleTranslate(url: URL, res: ServerResponse): Promise<void> {
     sendJson(res, 400, { status: 'error', message: '缺少 track_name' });
     return;
   }
-  const key = sha1(`${trackName}|${artistName}|${duration}`.toLowerCase());
+  /**
+   * v2：候选对调补上之前，「查不到」是匹配器不全造成的假结论，
+   * 那些缓存条目必须作废（旧文件留在原地当孤儿，不影响新键）。
+   */
+  const key = sha1(`v2|${trackName}|${artistName}|${duration}`.toLowerCase());
   const refresh = param(url, 'refresh') === '1';
   if (!refresh) {
     const cached = await readCache(TRANSLATE_DIR, key);
