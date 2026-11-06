@@ -32,6 +32,9 @@ sealed class TrackHandle {
   Future<int?> sizeBytes();
   Map<String, Object?> toJson();
 
+  /// 反序列化必须「脏字段返回 null，绝不抛」：坏存档经 `Track.fromJson` →
+  /// `normalizeTrack` 一路读到列表，抛出去就是把整个列表加载页搞崩。
+  /// 因此这里一律用 `is` 判定，不做 `as String?` 之类的强制转换。
   static TrackHandle? fromJson(Map<String, Object?>? json) {
     if (json == null) return null;
     final kind = json['kind'];
@@ -43,7 +46,8 @@ sealed class TrackHandle {
     if (kind == 'saf') {
       final uri = json['uri'];
       if (uri is! String || uri.isEmpty) return null;
-      return SafUriHandle(uri, (json['name'] as String?) ?? '');
+      final name = json['name'];
+      return SafUriHandle(uri, name is String ? name : '');
     }
     return null;
   }

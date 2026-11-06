@@ -22,6 +22,10 @@ Track? normalizeTrack(Object? raw) {
   if (!isTrackLike(raw)) return null;
   final map = (raw as Map).cast<String, Object?>();
   final duration = map['duration'];
+  // 取一次原值即可；下面的比较一律针对原值本身。原版是精确比较
+  // （src/lib/playlist.js:87 `raw.lyricsSource === 'auto'`），不做 trim，
+  // 所以 ' auto ' 这类值在原版得到空串，这里必须一致。
+  final lyricsSource = map['lyricsSource'];
   return Track(
     id: map['id']! as String,
     title: ((map['title'] as String?) ?? '').trim().isEmpty
@@ -37,10 +41,8 @@ Track? normalizeTrack(Object? raw) {
     isLocal: map['isLocal'] == true,
     lyrics: _clampLyrics(map['lyrics']),
     lyricsPlain: _clampLyrics(map['lyricsPlain']),
-    lyricsSource:
-        _trimmed(map['lyricsSource']) == 'auto' ||
-            _trimmed(map['lyricsSource']) == 'manual'
-        ? _trimmed(map['lyricsSource'])
+    lyricsSource: lyricsSource == 'auto' || lyricsSource == 'manual'
+        ? lyricsSource as String
         : '',
     restored: map['restored'] == true,
     handle:
