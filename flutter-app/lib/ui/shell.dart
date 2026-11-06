@@ -8,11 +8,18 @@
 //   - 宽 <900：单列 `stage → panel → transport`，padding 16/14/14、gap 14，
 //     控制条吸在视口最底（原版里它是 `position: sticky; bottom: 0`）。
 //
+// 两档共用一条宽度上限：`.app { max-width: 1180px; margin: 0 auto }`。封顶加在
+// padding **里面**，边距量的是窗口而不是内容框 —— 1920 的窗口里内容 1180 居中，
+// 1200 的窗口里内容仍占满 1200-56 且 24/28/28 的边距不变。
+//
 // **只管摆放，不碰业务**：四个区域由调用方传入，后续任务只换子 widget，
 // 这个文件的结构不再改。
 import 'package:flutter/material.dart';
 
 import '../core/breakpoints.dart';
+
+/// 内容最大宽度：`.app { max-width: 1180px }`（配合 `margin: 0 auto` 居中）。
+const double kMaxContentWidth = 1180;
 
 /// 桌面外层边距：`padding: 24px 28px 28px`。
 const EdgeInsets kDesktopPadding = EdgeInsets.fromLTRB(28, 24, 28, 28);
@@ -47,42 +54,47 @@ class HomeLayout extends StatelessWidget {
         return SafeArea(
           child: Padding(
             padding: desktop ? kDesktopPadding : kNarrowPadding,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                header,
-                SizedBox(height: desktop ? 18 : 14),
-                if (desktop)
-                  Expanded(
-                    child: Row(
-                      key: const Key('desktop-grid'),
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(
-                          // minmax(0, 1.02fr) / minmax(0, 1fr) 按 102 : 100 取整
-                          flex: 102,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(child: stage),
-                              const SizedBox(height: 18),
-                              transport,
-                            ],
-                          ),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: kMaxContentWidth),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    header,
+                    SizedBox(height: desktop ? 18 : 14),
+                    if (desktop)
+                      Expanded(
+                        child: Row(
+                          key: const Key('desktop-grid'),
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              // minmax(0, 1.02fr) / minmax(0, 1fr) 按 102 : 100 取整
+                              flex: 102,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(child: stage),
+                                  const SizedBox(height: 18),
+                                  transport,
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 18),
+                            Expanded(flex: 100, child: panel),
+                          ],
                         ),
-                        const SizedBox(width: 18),
-                        Expanded(flex: 100, child: panel),
-                      ],
-                    ),
-                  )
-                else ...[
-                  stage,
-                  const SizedBox(height: 14),
-                  Expanded(child: panel),
-                  const SizedBox(height: 14),
-                  transport,
-                ],
-              ],
+                      )
+                    else ...[
+                      stage,
+                      const SizedBox(height: 14),
+                      Expanded(child: panel),
+                      const SizedBox(height: 14),
+                      transport,
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
         );

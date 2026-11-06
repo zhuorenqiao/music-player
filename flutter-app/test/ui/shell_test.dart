@@ -1,6 +1,7 @@
 // test/ui/shell_test.dart
 //
-// 双栏骨架（T24）：900 断点两档、控制条与右栏同底、窄屏贴底、整页不横向溢出。
+// 双栏骨架（T24）：900 断点两档、控制条与右栏同底、窄屏贴底、整页不横向溢出、
+// 超宽时内容封顶 1180 并居中。
 //
 // 只量几何，不碰业务状态：四个区域各挂一个带 key 的 Text，`getRect` 量到的
 // 就是骨架分配给它的那一格（桌面档里 stage / panel 都被 Expanded 拉满高度，
@@ -39,6 +40,7 @@ void main() {
   testWidgets('桌面 1200 宽：stage 在左、panel 在右且同顶', (tester) async {
     await pumpAt(tester, 1200, 800);
 
+    final header = tester.getRect(find.byKey(const Key('header')));
     final stage = tester.getRect(find.byKey(const Key('stage')));
     final panel = tester.getRect(find.byKey(const Key('panel')));
     final transport = tester.getRect(find.byKey(const Key('transport')));
@@ -50,6 +52,22 @@ void main() {
     expect(transport.bottom, closeTo(panel.bottom, 1));
     // 桌面外层 padding 底部 28
     expect(panel.bottom, closeTo(800 - 28, 0.5));
+    // 1200 还没到 1180 + 56 的封顶线：内容按窗口铺满，24/28/28 的边距不被上限吃掉
+    expect(header.top, closeTo(24, 0.5));
+    expect(stage.left, closeTo(28, 0.5));
+    expect(panel.right, closeTo(1200 - 28, 0.5));
+  });
+
+  testWidgets('超宽 1920：内容封顶 1180 且水平居中', (tester) async {
+    await pumpAt(tester, 1920, 1080);
+
+    final stage = tester.getRect(find.byKey(const Key('stage')));
+    final panel = tester.getRect(find.byKey(const Key('panel')));
+
+    // 原版 `.app { max-width: 1180px; margin: 0 auto }`
+    expect(panel.right - stage.left, closeTo(1180, 0.5));
+    // 左右余量相等 ⇒ 居中（而不是贴着左边）
+    expect(stage.left, closeTo(1920 - panel.right, 0.5));
   });
 
   testWidgets('窄屏 420 宽：单列堆叠且控制条在最底', (tester) async {
