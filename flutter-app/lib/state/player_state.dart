@@ -167,8 +167,15 @@ class PlayerState extends ChangeNotifier {
   /// 从不删，于是停止播放 / 当前曲目变损坏 / 列表被清空之后重启，会复活一个
   /// 指向不该再播的曲目的 currentId —— 原版每次变化都写（包括 `Storage.remove`）。
   ///
-  /// `order` 同样按当前列表重写：文件仓才是顺序的权威（`LibraryState.restore`
-  /// 只读它），这份只是「仓储不可用」时能看懂现场的可读痕迹。
+  /// `order` 同样按当前列表重写：**列表顺序的权威永远是文件仓**（`LibraryState.
+  /// restore` 只按它重建列表），prefs 这份是「最后一次现场」——它与文件仓逐位
+  /// 一致时，[StorageKeys.currentId] 会被还原当成最新光标（播放推进只写 prefs、
+  /// 不重写文件仓）；对不上就整份按陈旧处理。规则见 `LibraryState.restore`。
+  ///
+  /// 这里**不写 volume / muted**（终审 A1）：那两个键由 [setVolume] / [toggleMute]
+  /// 各自即时写死（与原版同一处，`src/state/player.tsx:333` / `:338`），存档路径
+  /// 上是「谁改谁立刻落盘」；在防抖落盘里补一句 `writeNumber(volume, player.volume)`
+  /// 反而会把音量写成 0 —— 本层的 `volume` 读数在静音时就是 0（UI 靠它画静音图标）。
   Future<void> flushPersist() async {
     _persistDebounce?.cancel();
     _persistDebounce = null;

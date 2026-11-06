@@ -11,6 +11,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/app.dart';
 import 'package:light_music/core/app_prefs.dart';
@@ -108,6 +109,55 @@ void main() {
     // 媒体会话 attach 时列表已就位，首推就是还原出来的当前曲目
     expect(bridge.startCount, 1);
     expect(bridge.published.last.title, '十年');
+  });
+
+  /// 终审 A1：音量与静音的真相只有 prefs 那两个键。
+  ///
+  /// 文件仓「重建 / 不可用」（这里是空目录，等价于仓储被清掉）不许把音量悄悄
+  /// 洗成默认 0.7 —— 从前 `LibrarySnapshot.volume` 是个只写不读的死字段，
+  /// 谁要真拿它去覆盖 prefs 就会踩这个坑，所以字段删掉了（minor 4）。
+  test('文件仓重建（空目录）也照原样读回 prefs 里的音量', () async {
+    await prefs.writeNumber(StorageKeys.volume, 0.33);
+    final fresh = Directory.systemTemp.createTempSync('light-boot-empty');
+    addTearDown(() => fresh.deleteSync(recursive: true));
+
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: fresh.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+
+    expect(bootstrap.library.tracks, isEmpty, reason: '空目录就是没有存档');
+    expect(
+      bootstrap.player.volume,
+      closeTo(0.33, 1e-9),
+      reason: '音量不跟着文件仓走，仓储重建不许把它清成默认 0.7',
+    );
+  });
+
+  test('旧档案里残留的 volume / muted 不参与还原：仍以 prefs 为准', () async {
+    // 修复前的存档会白写这两个键（值一律是默认的 null / false）；
+    // 这里故意写一份「带音量」的老档案，读档必须完全无视它。
+    File('${dir.path}${Platform.pathSeparator}library.json').writeAsStringSync(
+      '''{"version":1,"tracks":[{"id":"a","src":"/m/a.flac","title":"十年"}],'''
+      '''"order":["a"],"currentId":"a","mode":"list","volume":0.9,"muted":true}''',
+    );
+    await prefs.writeNumber(StorageKeys.volume, 0.33);
+    await prefs.writeBool(StorageKeys.muted, false);
+
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+
+    expect(bootstrap.library.tracks.map((t) => t.id), ['a']);
+    expect(bootstrap.player.volume, closeTo(0.33, 1e-9));
+    expect(bootstrap.player.muted, isFalse);
   });
 
   test('通知权限只查询不申请：结果进 AppBootstrap，且能再查一次', () async {
@@ -332,5 +382,80 @@ void main() {
     // 列表变了：「已失效」标记跟着列表走，不该等下一次冷启动才校正
     expect(bootstrap.recent.entries.single.id, 'a');
     expect(bootstrap.recent.entries.single.inPlaylist, isFalse);
+  });
+
+  // -- 终审 A2：时长探测的原生 Player 必须有明确释放点 --------------------------
+
+  test('AppBootstrap.dispose 关掉时长探测内核（探针持有释放接缝）', () async {
+    var closes = 0;
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+      durationOpener: (source) async => 100,
+      durationOpenerClose: () async => closes++,
+    );
+    addTearDown(bootstrap.player.dispose);
+    addTearDown(bootstrap.library.dispose);
+
+    // 探针是组合根持有的（从前它连个引用都没留下，自然没人能关它）
+    expect(bootstrap.durationProbe, isNotNull);
+    expect(bootstrap.durationProbe!.isClosed, isFalse);
+    expect(closes, 0);
+
+    await bootstrap.dispose();
+    expect(closes, 1, reason: 'MediaKitDurationOpener.dispose 那一条链路走通');
+    expect(bootstrap.durationProbe!.isClosed, isTrue);
+
+    // 幂等：重复 dispose 不多关一次
+    await bootstrap.dispose();
+    expect(closes, 1);
+  });
+
+  testWidgets('应用根卸载时释放探测内核（dispose 链接到界面层）', (tester) async {
+    var closes = 0;
+    final bootstrap = (await tester.runAsync(
+      () => buildBootstrap(
+        prefs: prefs,
+        dataDirectory: dir.path,
+        driver: FakeAudioDriver(),
+        bridge: FakeMediaSessionBridge(),
+        durationOpener: (source) async => 100,
+        durationOpenerClose: () async => closes++,
+      ),
+    ))!;
+
+    await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
+    expect(closes, 0);
+
+    // 换掉整棵树 = 应用根卸载：这就是生产上唯一的释放时机。
+    // `State.dispose` 只能 `unawaited` 那次关闭（同步契约），而 close 排在
+    // 探测队列的尾部，是一个微任务之后才落到 opener 上 —— 假时钟里要借
+    // `runAsync(pumpEventQueue)` 才排得干（与 m1_smoke_test 同一手法）。
+    await tester.pumpWidget(const SizedBox(width: 0, height: 0));
+    await tester.runAsync(pumpEventQueue);
+    expect(closes, 1);
+
+    addTearDown(bootstrap.player.dispose);
+    addTearDown(bootstrap.library.dispose);
+  });
+
+  test('生产那份探针在测试环境里起不来原生库，dispose 依然不抛', () async {
+    // 不注入 durationOpener = 走 MediaKitDurationOpener 那条真链路：
+    // `Player()` 在这里必然抛（没有 libmpv），opener 内部把它当「探不出来」，
+    // 而 dispose 也绝不能因为「原生实例从来没见过」就往外抛。
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+    addTearDown(bootstrap.library.dispose);
+
+    expect(bootstrap.durationProbe, isNotNull);
+    await bootstrap.dispose();
+    expect(bootstrap.durationProbe!.isClosed, isTrue);
   });
 }

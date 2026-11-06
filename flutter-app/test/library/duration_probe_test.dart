@@ -80,4 +80,50 @@ void main() {
     expect(await probe('3'), 66);
     expect(probe.peakConcurrency, 1);
   });
+
+  // -- 终审 A2：close() 是原生 Player 的唯一释放点 --------------------------------
+
+  test('close 排到队列尾部：在飞的探测先跑完，之后一律 NaN 且只关一次', () async {
+    var closes = 0;
+    var opens = 0;
+    final probe = DurationProbe(
+      (source) async {
+        opens += 1;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return 100;
+      },
+      closeOpener: () async => closes++,
+    );
+
+    final first = probe('/m/a.flac');
+    final closing = probe.close();
+    // close 之前已经入队的这一首要照常出结果：内核还在被用就关掉是 use-after-free
+    expect(await first, 100);
+    await closing;
+
+    expect(closes, 1);
+    expect(probe.isClosed, isTrue);
+    expect(await probe('/m/b.flac'), isNaN, reason: '关掉之后不再开新的媒体');
+    expect(opens, 1, reason: 'close 之后的调用不许再碰 opener');
+
+    // 幂等：重复关闭不多喊一次释放
+    await probe.close();
+    expect(closes, 1);
+  });
+
+  test('closeOpener 抛异常也不冒泡：退出收尾绝不因原生库而炸', () async {
+    final probe = DurationProbe(
+      (source) async => 1,
+      closeOpener: () async => throw StateError('mpv already gone'),
+    );
+    await probe.close();
+    expect(probe.isClosed, isTrue);
+  });
+
+  test('没给 closeOpener 时 close 仍然可用（纯逻辑探针没有原生资源）', () async {
+    final probe = DurationProbe((source) async => 12);
+    expect(await probe('/m/a.flac'), 12);
+    await probe.close();
+    expect(await probe('/m/a.flac'), isNaN);
+  });
 }

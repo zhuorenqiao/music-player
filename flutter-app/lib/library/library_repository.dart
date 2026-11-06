@@ -12,18 +12,24 @@ import '../playback/track.dart';
 /// 认不出的字段直接忽略（短字段一律走默认值，绝不因此丢掉整份歌单）。
 const int _snapshotVersion = 1;
 
-/// 曲库存档：曲目元数据 + 播放顺序 + 当前曲目 + 模式与音量。
+/// 曲库存档：曲目元数据 + 播放顺序 + 当前曲目 + 模式。
 ///
 /// 取代原版 IndexedDB（spec §6.3）——音频字节从不进这里，只存 `Track.toJson()`
 /// 描述的文件位置 / SAF URI 与标签信息。
+///
+/// **音量与静音不在这里**（终审 minor 4 / A1）：原版只把它们写成两个独立的
+/// localStorage 键（`src/state/player.tsx:333` / `:338`），Dart 侧对应
+/// `AppPrefs` 的 `StorageKeys.volume` / `StorageKeys.muted`，读写都在
+/// `PlayerState`（`setVolume` / `toggleMute` 写、`ready()` 读）。这两个字段从前
+/// 在这里只是「`toJson` 白写、没人读」的死字段 —— 留着就是第二套真相，将来谁
+/// 拿它覆盖 prefs 就会出现「文件仓重建后音量悄悄回到 0.7」。字段删掉，
+/// 读档仍旧忽略老存档里残留的这两个键（`fromJson` 是总函数）。
 class LibrarySnapshot {
   LibrarySnapshot({
     this.tracks = const [],
     this.order = const [],
     this.currentId,
     this.mode = PlayMode.list,
-    this.volume,
-    this.muted = false,
     this.corrupted = false,
   });
 
@@ -36,10 +42,6 @@ class LibrarySnapshot {
   final String? currentId;
   final PlayMode mode;
 
-  /// 0..1；未知为 null（让它保持「没存过」，而不是冒充 0）。
-  final double? volume;
-  final bool muted;
-
   /// 会话态：本次 [LibraryRepository.load] 走了 `.bak` 回退或两份文件都读不出来。
   /// 与 `Track.broken` 同理，不进 [toJson]。
   bool corrupted;
@@ -50,8 +52,6 @@ class LibrarySnapshot {
     'order': order,
     'currentId': currentId,
     'mode': playModeId(mode),
-    'volume': volume,
-    'muted': muted,
   };
 
   /// 总函数：字段缺失、类型不对、单条曲目坏掉都只影响那一部分（原版对
@@ -84,7 +84,6 @@ class LibrarySnapshot {
     }
 
     final rawCurrent = json['currentId'];
-    final rawVolume = json['volume'];
     return LibrarySnapshot(
       tracks: tracks,
       order: order,
@@ -92,8 +91,6 @@ class LibrarySnapshot {
           ? rawCurrent
           : null,
       mode: playModeFromId(json['mode']),
-      volume: _volumeFromJson(rawVolume),
-      muted: json['muted'] == true,
     );
   }
 
@@ -105,14 +102,6 @@ class LibrarySnapshot {
       // 一条脏数据不该让整份存档作废
       return null;
     }
-  }
-
-  static double? _volumeFromJson(Object? raw) {
-    if (raw is! num || !raw.isFinite) return null;
-    final value = raw.toDouble();
-    if (value < 0) return 0;
-    if (value > 1) return 1;
-    return value;
   }
 }
 
@@ -208,8 +197,6 @@ class LibraryRepository {
             ? null
             : currentId,
         mode: snapshot.mode,
-        volume: snapshot.volume,
-        muted: snapshot.muted,
       ),
     );
   }

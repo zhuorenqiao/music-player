@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 
 import 'core/app_prefs.dart';
 import 'core/shortcuts.dart';
+import 'library/duration_probe.dart';
 import 'library/import_service.dart';
 import 'library/library_repository.dart';
 import 'library/recent_store.dart';
@@ -41,6 +42,7 @@ class AppBootstrap {
     required this.mediaSession,
     required this.notificationGranted,
     required this.notificationPermission,
+    this.durationProbe,
   });
 
   final AppPrefs prefs;
@@ -72,23 +74,56 @@ class AppBootstrap {
   /// 实时查询通知权限，不弹窗（申请归 `activate()`）。提示条用它。
   final Future<bool> Function() notificationPermission;
 
+  /// 时长探测那台**独立**内核（终审 I1 接上的，不属于 [transport] 的主播放器）。
+  ///
+  /// 组合根必须持有它，理由不是「要用」而是「要关」：`MediaKitDurationOpener`
+  /// 懒建一台 media_kit 的 `Player` 复用到底，从前没有任何释放点（终审 A2）。
+  /// 现在由 [dispose] 关掉，[LightMusicApp] 卸载时调用。
+  final DurationProbe? durationProbe;
+
   /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
   Playlist get playlist => library.playlist;
   TransportController get transport => player.transport;
   ImportService get importer => library.importer;
   RecentStore get recentStore => recent.store;
+
+  /// 释放组合根自己持有的原生资源。幂等，且绝不抛。
+  ///
+  /// 只管时长探测的内核：四个状态层与 [TransportController] 由各自的宿主
+  /// （provider / 测试的 `addTearDown`）负责，这里不越权去 dispose 它们，
+  /// 否则应用退出时会出现「先关掉播放器再关掉监听它的界面」这种顺序问题。
+  Future<void> dispose() async {
+    await durationProbe?.close();
+  }
 }
 
 /// 应用根：注册状态层给 provider，再挂主题、提示条与首页。
 ///
 /// `.value` 不接管 dispose —— 这些状态在应用生命周期内常驻。
-class LightMusicApp extends StatelessWidget {
+/// 之所以是 `StatefulWidget`：组合根自己持有的原生资源（时长探测的独立
+/// `Player`，终审 A2）需要一个明确的释放点，而应用根的卸载就是它。
+class LightMusicApp extends StatefulWidget {
   const LightMusicApp({required this.bootstrap, super.key});
 
   final AppBootstrap bootstrap;
 
   @override
+  State<LightMusicApp> createState() => _LightMusicAppState();
+}
+
+class _LightMusicAppState extends State<LightMusicApp> {
+  @override
+  void dispose() {
+    // 不 await：`State.dispose` 是同步契约，而 [AppBootstrap.dispose] 只是把
+    // 关闭排在探测队列的尾部（它自己绝不抛）。真等到原生 Player 释放完再返回
+    // 反而会把卸载卡在平台通道上。
+    unawaited(widget.bootstrap.dispose());
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final bootstrap = widget.bootstrap;
     return MultiProvider(
       providers: [
         ChangeNotifierProvider<LibraryState>.value(value: bootstrap.library),

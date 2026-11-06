@@ -80,6 +80,9 @@ Future<void> main() async {
 /// [durationOpener] 只在测试里注入：生产上是 media_kit 的独立内核 opener
 /// （I1 —— `ImportService.durationProbe` 从前没有任何赋值点，无标签曲目的
 /// 时长就永远缺失），排队与 3000ms 预算由 [DurationProbe] 统一管。
+/// [durationOpenerClose] 与它配对：注入假 opener 时一并注入它的释放接缝，
+/// 好让测试断言 [AppBootstrap.dispose] 真的把探测内核关掉了（终审 A2）；
+/// 生产上不传，用的是 [MediaKitDurationOpener.dispose]。
 Future<AppBootstrap> buildBootstrap({
   required AppPrefs prefs,
   required String dataDirectory,
@@ -89,6 +92,7 @@ Future<AppBootstrap> buildBootstrap({
   Future<bool> Function()? queryNotificationPermission,
   Duration mediaSessionAttachTimeout = kMediaSessionAttachTimeout,
   Future<double> Function(String source)? durationOpener,
+  Future<void> Function()? durationOpenerClose,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -101,10 +105,16 @@ Future<AppBootstrap> buildBootstrap({
     playlist: playlist,
   );
   // 探时长用的是**另一台**内核（不是 [driver]）：回填不许打断正在播的曲目。
+  // `MediaKitDurationOpener` 里那台 Player 是懒建 + 复用的，从头到尾只有一台，
+  // 但「只有一台」不等于「有人关」——释放接缝在这里交进探针，退出时由
+  // `AppBootstrap.dispose()` 调用（终审 A2）。
+  final probeOpener = durationOpener == null
+      ? MediaKitDurationOpener(timeoutMs: kDurationProbeTimeoutMs)
+      : null;
   final probe = DurationProbe(
-    durationOpener ??
-        MediaKitDurationOpener(timeoutMs: kDurationProbeTimeoutMs).call,
+    durationOpener ?? probeOpener!.call,
     timeoutMs: kDurationProbeTimeoutMs,
+    closeOpener: durationOpenerClose ?? probeOpener?.dispose,
   );
   final importer = ImportService(
     playlist: playlist,
@@ -166,6 +176,7 @@ Future<AppBootstrap> buildBootstrap({
     notificationGranted: granted,
     notificationPermission: () =>
         _queryNotificationPermission(queryNotificationPermission),
+    durationProbe: probe,
   );
 }
 

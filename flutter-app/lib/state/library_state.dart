@@ -134,8 +134,14 @@ class LibraryState extends ChangeNotifier {
 
   /// 冷启动还原：读存档 → 按存档顺序整体替换列表 → 恢复模式与当前曲目。
   ///
-  /// 当前曲目由 [_restoreCursor] 在「文件仓的 currentId」与「prefs 的现场」之间
-  /// 定优先级（终审 I4：这两个键从前只写不读）；顺序一律以文件仓为准。
+  /// **两条不同的优先级**（终审 I4 已裁定，规则见 [_restoreCursor]）：
+  ///   - **顺序**永远以文件仓为准 —— prefs 里那份 `order` 陈旧也不参与列表重建，
+  ///     还原末尾还会被 [_syncPrefsTrace] 纠正回来；
+  ///   - **光标**在「现场自洽」时以 prefs 的 `currentId` 为准：播放推进只经
+  ///     `PlayerState.flushPersist()` 写 prefs、不重写文件仓，所以 prefs 才是
+  ///     最后一次如实写入的光标；两份 order 逐位一致就是「这份现场没跨代过期」
+  ///     的闸门。矛盾（或缺 order）时整份现场按陈旧处理，退回文件仓的
+  ///     `currentId`；两边都指不到列表里的曲目就保持**无光标**并把 prefs 的键删掉。
   ///
   /// [restoring] 覆盖整个异步加载（首帧就画骨架），结束无论成败都置回 false。
   /// 脏存档绝不外抛：仓储自己会退回空快照，这里再兜一层，启动流程不许因此中断。
@@ -287,11 +293,16 @@ class LibraryState extends ChangeNotifier {
 
   /// 落库：曲目元数据 + 顺序 + 当前曲目 + 模式。
   ///
+  /// **音量与静音不在这里**（终审 minor 4 / A1）：原版只有 localStorage 的
+  /// `volume` / `muted` 两个键（`src/state/player.tsx:333` / `:338`），Dart 侧
+  /// 就是 `AppPrefs` 那两个键，写读全在 `PlayerState`。文件仓里那份是只写不读的
+  /// 死字段，已删 —— 留两份真相迟早出现「仓储重建后音量悄悄回 0.7」。
+  ///
   /// 顺序与当前曲目同时各写一份到 prefs（[StorageKeys.order] /
-  /// [StorageKeys.currentId]），与原版一致：文件仓是权威，prefs 那份给
-  /// 「仓储不可用」的场景留个**看得懂的现场**。既然是现场就必须如实 ——
-  /// 光标没了（删空 / 停止播放）或指向一首已知坏掉的曲目时要把键删掉，
-  /// 只写不删就会在重启后复活一个不该再播的 currentId（终审 I4）。
+  /// [StorageKeys.currentId]）：曲目与顺序以文件仓为权威，prefs 那份是
+  /// 「最后一次现场」。既然是现场就必须如实 —— 光标没了（删空 / 停止播放）
+  /// 或指向一首已知坏掉的曲目时要把键删掉，只写不删就会在重启后复活一个
+  /// 不该再播的 currentId（终审 I4）。光标本身的读回优先级见 [restore]。
   /// 同一条规则在 `PlayerState.flushPersist` 里也有一份，两边必须一致。
   Future<void> persist() async {
     final ids = playlist.tracks.map((t) => t.id).toList();

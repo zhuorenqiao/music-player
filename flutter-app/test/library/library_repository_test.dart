@@ -35,13 +35,11 @@ void main() {
     expect(snap.order, isEmpty);
     expect(snap.currentId, isNull);
     expect(snap.mode, PlayMode.list);
-    expect(snap.volume, isNull);
-    expect(snap.muted, isFalse);
     expect(snap.corrupted, isFalse);
     expect(repo.corrupted, isFalse);
   });
 
-  test('保存后读回，顺序与音量都在', () async {
+  test('保存后读回，曲目、顺序、光标与模式都在', () async {
     final repo = LibraryRepository(directory: dir.path);
     await repo.save(
       LibrarySnapshot(
@@ -49,8 +47,6 @@ void main() {
         order: ['1', '2'],
         currentId: '2',
         mode: PlayMode.shuffle,
-        volume: 0.32,
-        muted: true,
       ),
     );
     final snap = await repo.load();
@@ -61,10 +57,59 @@ void main() {
     expect(snap.order, ['1', '2']);
     expect(snap.currentId, '2');
     expect(snap.mode, PlayMode.shuffle);
-    expect(snap.volume, 0.32);
-    expect(snap.muted, isTrue);
     expect(snap.corrupted, isFalse);
     expect(repo.corrupted, isFalse);
+  });
+
+  /// 终审 minor 4 / A1 的缺陷复现用例（改前红）：音量与静音只有一处真相。
+  ///
+  /// `LibrarySnapshot.volume` / `muted` 从前没有任何写入方与读取方 —— 构造时一律
+  /// 留默认值，`toJson` 却每份存档都白写这两个键，`fromJson` 读了也没人消费。
+  /// 原版音量从来不在歌单档案里（`src/state/player.tsx:333/338` 只写 localStorage
+  /// 的 `volume` / `muted` 两个键，Dart 侧对应 `AppPrefs`），文件仓里再留一份就是
+  /// 第二套真相：将来谁拿它去覆盖 prefs，「换设备 / 仓储重建后音量回到 0.7」就会
+  /// 真的发生。所以字段删掉、存档不带这两个键。
+  test('存档不携带音量：文件仓只存曲目、顺序、光标与模式', () async {
+    final repo = LibraryRepository(directory: dir.path);
+    await repo.save(
+      LibrarySnapshot(
+        tracks: [t('1'), t('2')],
+        order: ['1', '2'],
+        currentId: '2',
+        mode: PlayMode.shuffle,
+      ),
+    );
+    final raw = (jsonDecode(File(primaryPath()).readAsStringSync()) as Map)
+        .cast<String, Object?>();
+    expect(
+      raw.containsKey('volume'),
+      isFalse,
+      reason: '音量参与文件仓存档就得同时参与还原，只写不读是死字段',
+    );
+    expect(raw.containsKey('muted'), isFalse);
+    expect(
+      raw.keys,
+      unorderedEquals(['version', 'tracks', 'order', 'currentId', 'mode']),
+    );
+  });
+
+  /// 旧档案（修复前带 volume / muted 两键）必须照常读出来，多余键一律忽略。
+  test('旧档案里残留的 volume / muted 被忽略，不影响曲目还原', () async {
+    File(primaryPath()).writeAsStringSync(
+      jsonEncode({
+        'version': 1,
+        'tracks': [t('1').toJson()],
+        'order': ['1'],
+        'currentId': '1',
+        'mode': 'list',
+        'volume': 0.9,
+        'muted': true,
+      }),
+    );
+    final snap = await LibraryRepository(directory: dir.path).load();
+    expect(snap.tracks.map((e) => e.id), ['1']);
+    expect(snap.currentId, '1');
+    expect(snap.corrupted, isFalse);
   });
 
   test('正式文件坏掉时回退 .bak 并保留脏文件', () async {
@@ -111,8 +156,6 @@ void main() {
     // 缺字段走默认值而不是整份失败
     expect(snap.currentId, isNull);
     expect(snap.mode, PlayMode.list);
-    expect(snap.volume, isNull);
-    expect(snap.muted, isFalse);
   });
 
   test('deleteTracks 同步清 order 与 currentId', () async {
@@ -271,11 +314,14 @@ void main() {
   });
 
   /// 回归（round 1）：恢复之后再保存，不能把脏正式文件轮转进 `.bak`。
+  ///
+  /// 世代用 `mode` 区分（从前是 `volume` —— 那个字段已按 minor 4 删掉，
+  /// 音量不再进文件仓）：`.bak` 里必须是**回退用的那一份**，而不是脏正式文件。
   test('回退之后的保存不顶掉好备份，二次损坏仍能全量恢复', () async {
     final repo = LibraryRepository(directory: dir.path);
     final ids = ['1', '2', '3'];
     final tracks = [t('1'), t('2'), t('3')];
-    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.4));
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, mode: PlayMode.list));
 
     // 1) 正式文件损坏 → load 从 .bak 恢复
     File(primaryPath()).writeAsStringSync('{ 坏掉的 json');
@@ -283,22 +329,22 @@ void main() {
     expect(recovered.tracks.map((e) => e.id), ids);
     expect(recovered.corrupted, isTrue);
 
-    // 2) 恢复后的任意保存（音量持久化 / deleteTracks 都走这条路）
-    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.8));
+    // 2) 恢复后的任意保存（换曲 / deleteTracks 都走这条路）
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, mode: PlayMode.one));
 
     // 3) 正式文件二次损坏 → 仍能恢复出完整歌单（修复前这里是空快照）
     File(primaryPath()).writeAsStringSync('{ 又坏掉了');
     final second = await repo.load();
     expect(second.tracks.map((e) => e.id), ids);
     expect(second.order, ids);
-    expect(second.volume, 0.4);
+    expect(second.mode, PlayMode.list);
     expect(second.corrupted, isTrue);
     expect(repo.corrupted, isTrue);
 
     // `.bak` 必须还是回退用的那份好存档，而不是被脏正式文件顶掉
     final backup = (jsonDecode(File(backupPath()).readAsStringSync()) as Map)
         .cast<String, Object?>();
-    expect(backup['volume'], 0.4);
+    expect(backup['mode'], 'list');
     expect((backup['tracks'] as List).length, 3);
   });
 
@@ -306,21 +352,23 @@ void main() {
     final repo = LibraryRepository(directory: dir.path);
     final ids = ['1', '2'];
     final tracks = [t('1'), t('2')];
-    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.4));
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, mode: PlayMode.list));
     File(primaryPath()).writeAsStringSync('{ 坏掉的 json');
     await repo.load();
 
-    // 这次保存跳过轮转：`.bak` 还是 0.4
-    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.8));
-    double? backupVolume() =>
-        ((jsonDecode(File(backupPath()).readAsStringSync()) as Map)['volume']
-                as num?)
-            ?.toDouble();
-    expect(backupVolume(), 0.4);
+    String? backupMode() =>
+        (jsonDecode(File(backupPath()).readAsStringSync()) as Map)['mode']
+            as String?;
+
+    // 这次保存跳过轮转：`.bak` 还是第一代（list）
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, mode: PlayMode.one));
+    expect(backupMode(), 'list');
 
     // 正式文件已健康：再保存就照常把上一代滚进 `.bak`
-    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.9));
-    expect(backupVolume(), 0.8);
+    await repo.save(
+      LibrarySnapshot(tracks: tracks, order: ids, mode: PlayMode.shuffle),
+    );
+    expect(backupMode(), 'one');
   });
 
   test('目录不存在时 save 自动创建', () async {

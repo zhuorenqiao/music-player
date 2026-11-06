@@ -111,6 +111,49 @@ void main() {
     expect(state.volume, closeTo(0.5, 1e-9));
   });
 
+  /// 终审 A1 的验收口径：音量 / 静音的存档路径与 currentId / order 一致 ——
+  /// **同一处写、同一处读**，写的是 `AppPrefs` 那两个键，重启读得到的就是
+  /// 自己写过的值（不是文件仓里那份从没有读方的死字段，也不是默认 0.7）。
+  test('设音量 0.33 之后用同一份存档重建，读回 0.33', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs);
+    addTearDown(state.dispose);
+
+    await state.setVolume(0.33);
+    expect(await prefs.readNumber(StorageKeys.volume), 0.33);
+
+    final restart = buildState(prefs);
+    addTearDown(restart.dispose);
+    await restart.ready();
+
+    expect(restart.volume, closeTo(0.33, 1e-9), reason: '存档值必须原样读回');
+    expect(restart.muted, isFalse);
+  });
+
+  test('静音存档重启后仍是静音，取消静音恢复的是记忆音量而不是默认 0.7', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs);
+    addTearDown(state.dispose);
+
+    await state.setVolume(0.33);
+    await state.toggleMute();
+    expect(state.muted, isTrue);
+    // 静音只改 muted 键：音量键留着 0.33，重启才有「记忆音量」可恢复
+    expect(await prefs.readNumber(StorageKeys.volume), 0.33);
+    expect(await prefs.readBool(StorageKeys.muted), isTrue);
+
+    final restart = buildState(prefs);
+    addTearDown(restart.dispose);
+    await restart.ready();
+
+    expect(restart.muted, isTrue, reason: 'muted=true 必须如实还原');
+    // 静音态下读数是 0（UI 靠它画静音图标），但底层记着的是 0.33
+    await restart.toggleMute();
+    expect(restart.muted, isFalse);
+    expect(restart.volume, closeTo(0.33, 1e-9), reason: '取消静音恢复记忆音量，不许落到 0.7');
+    expect(await prefs.readBool(StorageKeys.muted), isFalse);
+  });
+
   test('当前曲目与顺序落 prefs', () async {
     final prefs = AppPrefs.inMemory();
     final state = buildState(prefs, tracks: [t('1'), t('2')]);
