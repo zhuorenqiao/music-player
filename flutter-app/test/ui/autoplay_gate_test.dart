@@ -140,6 +140,60 @@ void main() {
     expect(player.blockedMessage, isNotNull);
   });
 
+  /// 终审 R3：第 1 轮那批用例全用「永远抛错的驱动」，所以看不见另一半 ——
+  /// **重试成功**的那一次。原版 `resumeAutoplay()`（`src/state/player.tsx:193-215`）
+  /// 在 `player.play()` 返回真值时 `clearPendingAutoplay()` + `hideNotice()`，
+  /// 于是「用户点了一下空白，歌响了，横幅还挂着」这个画面在原版是不存在的。
+  testWidgets('空白手势成功出声后提示条消失', (tester) async {
+    final driver = blockedDriver();
+    final player = buildPlayer(driver, Playlist.fromTracks([t('1')]));
+    addTearDown(player.dispose);
+    await pumpGate(tester, player);
+    await enterBlocked(tester, player);
+
+    // 「第一次 blocked、第二次成功」：把驱动恢复正常，等价浏览器在真实交互
+    // 之后放行自动播放。
+    driver.playThrows = null;
+    driver.calls.clear();
+
+    var viewNotifications = 0;
+    player.view.addListener(() => viewNotifications++);
+
+    await tester.tapAt(const Offset(20, 20));
+    await settle(tester);
+
+    expect(driver.calls, contains('play'), reason: '手势真的重试了一次');
+    expect(player.playing, isTrue, reason: '这一次出声了');
+    expect(
+      player.blockedMessage,
+      isNull,
+      reason: '成功出声即 hideNotice：横幅文案不能留着（终审 R3）',
+    );
+    expect(
+      player.view.value.blocked,
+      isNull,
+      reason: '界面读的是视图快照，快照里的 blocked 也要一起收掉',
+    );
+    expect(
+      viewNotifications,
+      greaterThan(0),
+      reason: '收横幅是一次语义变化，必须 publish 给订阅了 view 的界面',
+    );
+
+    // 额度跟着复位（原版同一句 `clearPendingAutoplay()` 里连
+    // `autoplayAttempts = 0` 一起做掉）。这里没有可观察的第二次「被拦」：
+    // 所有能重新置上 blocked 的路径（playTrack / resume）自己就先复位了，
+    // 所以这条只能验「成功之后不再有新的重试」——空白手势从此是空转。
+    driver.calls.clear();
+    await tester.tapAt(const Offset(20, 20));
+    await settle(tester);
+    expect(
+      driver.calls,
+      isEmpty,
+      reason: '横幅已收，后续手势不该再碰内核（userGesture 的前置判据就是它）',
+    );
+  });
+
   testWidgets('键盘也算一次手势，但空格与回车让给按钮本身', (tester) async {
     final driver = blockedDriver();
     final player = buildPlayer(driver, Playlist.fromTracks([t('1')]));

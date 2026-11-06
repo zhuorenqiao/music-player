@@ -208,16 +208,15 @@ class AudioPlayer {
   Future<bool> seekBy(double delta) =>
       seek(position + (delta.isFinite ? delta : 0));
 
-  /// 设置音量。`v > 0` 解静音并记住；`v == 0` 只把音量留 0，**不动**静音标志
-  /// （原版 player.js:315-324 的 else 分支写 `muted = false`，静音与否由音量读数
-  /// 决定；`volume` getter 在这一支本来就返回 0）。
+  /// 设置音量。原版 `src/lib/player.js:315-324` 的**两个分支都清静音**：
+  /// `v > 0` 那支额外记 `lastVolume`，`v == 0` 的 else 分支同样写
+  /// `muted = false`（:322）。第 1 轮移植只做了前一支，于是静音状态下拖到 0
+  /// 存档里仍是 `muted=true`，重启后连静音按钮都解不掉（终审 R5）。
   Future<void> setVolume(double value) async {
     final v = _clamp01(value);
     _volume = v;
-    if (v > 0) {
-      _lastVolume = v;
-      _muted = false;
-    }
+    _muted = false;
+    if (v > 0) _lastVolume = v;
     await _driver.setVolume(v);
     _emit(VolumeEvent(volume, _muted));
   }

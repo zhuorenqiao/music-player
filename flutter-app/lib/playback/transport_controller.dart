@@ -381,6 +381,7 @@ class TransportController {
 
   /// 页面里一次真实交互：把被拦住的播放再拉一次，最多 [kMaxAutoplayRetries] 次。
   /// 用完就保持 [blockedMessage] 不变 —— 让用户自己点播放，绝不无限打转。
+  /// 反过来，只要这一次真的出声了就当场把横幅收掉（终审 R3）。
   ///
   /// 重试走**原地续播**（终审 I5，对齐原版 `resumeAutoplay()` 里那句
   /// `player.play()`）：内核里已经挂着这一首就只 `resume()`，不再 `load`。
@@ -392,13 +393,30 @@ class TransportController {
   Future<void> userGesture() async {
     final track = playlist.current;
     if (_blockedMessage == null || track == null) return;
+    // 用户自己的操作已经把播放拉起来了（原版 `if (!player.paused)` 那一支，
+    // player.tsx:200-205）：这种手势**不花额度**，只把还挂着的横幅收掉。
+    if (player.playing) {
+      _clearBlocked();
+      return;
+    }
     if (_blockedRetries >= kMaxAutoplayRetries) return;
     _blockedRetries += 1;
     if (player.track?.id == track.id) {
       await player.resume();
-      return;
+    } else {
+      await player.load(track, autoplay: true);
     }
-    await player.load(track, autoplay: true);
+    // 重试成功即收尾（终审 R3，原版 `player.play()` 返回真值那一段：
+    // `clearPendingAutoplay()` + `hideNotice()`）。从前这里只在另外三处
+    // （[resume] / [playTrack] / [stopPlayback]）清横幅，于是「点了一下空白、
+    // 歌响了、横幅还挂着」——第 1 轮那批 gate 用例全用永远抛错的驱动，
+    // 正好看不见成功那一支。
+    //
+    // `load(autoplay: true)` 那一支这里读不到结果（播放是 fire-and-forget，
+    // 成功经 StateChangedEvent 回来），所以同一条清横幅规则也挂在事件侧
+    // （见 [_onPlayerEvent] 的 `StateChangedEvent`）：两条路合起来才是原版
+    // 「只要观察到真的在播就 hideNotice」。
+    if (player.playing) _clearBlocked();
   }
 
   /// 停掉订阅与播放器。进度 notifier 不销毁：界面可能还挂着监听，等它自己放。
@@ -451,8 +469,17 @@ class TransportController {
         if (duration != null) _duration.value = duration;
         // 这里只动进度：绝不 _publish()，否则每帧都重建整棵界面。
         _recordIfAudible(position);
-      case StateChangedEvent():
+      case StateChangedEvent(:final playing):
         // statechange(true) 不清零失败计数：它之后仍可能立刻崩。
+        //
+        // 但它**是**「真的出声了」这件事的现场证据（终审 R3）：横幅的语义就是
+        // 「等用户点一下」，歌已经在响还挂着那条提示就是假故障。走 `load`
+        // 那条重试路时结果只能从这里回来（`AudioPlayer.load(autoplay: true)`
+        // 不等播放结果），所以规则挂在事件侧而不只挂在 [userGesture] 里。
+        if (playing && _blockedMessage != null) {
+          _clearBlocked();
+          return;
+        }
         _publish();
       case BufferedEvent(:final end):
         // 缓冲条只走独立 notifier，与 timeupdate 一样绝不 _publish()。
@@ -535,6 +562,16 @@ class TransportController {
   void _cancelPendingSkip() {
     _cancelSkip?.call();
     _cancelSkip = null;
+  }
+
+  /// 收掉「等用户点一下」的现场：文案、额度、界面三样一起清（终审 R3）。
+  ///
+  /// 等价原版 `resumeAutoplay` 成功那一支的 `clearPendingAutoplay()` +
+  /// `hideNotice()` —— 那两个动作在原版里就是一起做的，别只做一个。
+  void _clearBlocked() {
+    _blockedMessage = null;
+    _blockedRetries = 0;
+    _publish();
   }
 
   void _publish() {

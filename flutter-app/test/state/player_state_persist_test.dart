@@ -111,6 +111,32 @@ void main() {
     expect(state.volume, closeTo(0.5, 1e-9));
   });
 
+  /// 终审 R5：原版 `setVolume` 的**两个分支都清静音**（`src/lib/player.js:315-324`），
+  /// 只有 `v > 0` 那支额外记 `lastVolume`。移植时 else 分支被写成了「什么都不做」，
+  /// 于是静音状态下拖到 0，存档里留的是 `muted=true`：重启读回来是「已静音」，
+  /// 用户按静音按钮取消静音也解不掉（音量本来就是 0）。
+  test('静音时拖到 0 后 muted 变 false 且音量存 0', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs);
+    addTearDown(state.dispose);
+
+    await state.toggleMute();
+    expect(state.muted, isTrue);
+    expect(await prefs.readBool(StorageKeys.muted), isTrue);
+
+    await state.setVolume(0);
+    expect(state.muted, isFalse, reason: 'player.js:322 的 else 分支同样写 muted = false');
+    expect(await prefs.readBool(StorageKeys.muted), isFalse);
+    expect(await prefs.readNumber(StorageKeys.volume), 0);
+
+    // 「重开应用」：读回来的必须是「音量 0、没有静音」
+    final restart = buildState(prefs);
+    addTearDown(restart.dispose);
+    await restart.ready();
+    expect(restart.volume, 0);
+    expect(restart.muted, isFalse);
+  });
+
   /// 终审 A1 的验收口径：音量 / 静音的存档路径与 currentId / order 一致 ——
   /// **同一处写、同一处读**，写的是 `AppPrefs` 那两个键，重启读得到的就是
   /// 自己写过的值（不是文件仓里那份从没有读方的死字段，也不是默认 0.7）。

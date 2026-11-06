@@ -16,6 +16,7 @@ import '../core/app_prefs.dart';
 import '../core/storage_keys.dart';
 import '../library/import_service.dart';
 import '../library/library_repository.dart';
+import '../playback/play_mode.dart';
 import '../playback/playlist.dart';
 import '../playback/track.dart';
 import '../playback/transport_controller.dart' show ToastSink;
@@ -134,7 +135,8 @@ class LibraryState extends ChangeNotifier {
 
   /// 冷启动还原：读存档 → 按存档顺序整体替换列表 → 恢复模式与当前曲目。
   ///
-  /// **两条不同的优先级**（终审 I4 已裁定，规则见 [_restoreCursor]）：
+  /// **三条不同的优先级**（终审 I4 已裁定顺序与光标，终审 R6 补上模式；
+  /// 规则见 [_restoreCursor] 与 [_restoreMode]）：
   ///   - **顺序**永远以文件仓为准 —— prefs 里那份 `order` 陈旧也不参与列表重建，
   ///     还原末尾还会被 [_syncPrefsTrace] 纠正回来；
   ///   - **光标**在「现场自洽」时以 prefs 的 `currentId` 为准：播放推进只经
@@ -144,6 +146,9 @@ class LibraryState extends ChangeNotifier {
   ///     回落到档案值；矛盾（或缺 order）时整份现场按陈旧处理，退回文件仓的
   ///     `currentId`。**两边都给不出有效光标时落到列表第一首**（终审 R4，
   ///     原版 `src/state/player.tsx:556`），只有空列表才是空舞台。
+  ///   - **模式**同权：prefs 写过 `mode` 就以它为准（`PlayerState.cycleMode`
+  ///     只写这一处，档案里那份要等下一次 `persist()` 才跟上），没写过才回落
+  ///     `snap.mode`（终审 R6，见 [_restoreMode]）。
   ///
   /// [restoring] 覆盖整个异步加载（首帧就画骨架），结束无论成败都置回 false。
   /// 脏存档绝不外抛：仓储自己会退回空快照，这里再兜一层，启动流程不许因此中断。
@@ -176,9 +181,9 @@ class LibraryState extends ChangeNotifier {
         for (final id in snap.order)
           if (byId.containsKey(id)) byId[id]!,
       ];
-      playlist
-        ..replaceAll(ordered)
-        ..setMode(snap.mode);
+      final mode = await _restoreMode(snap);
+      playlist.replaceAll(ordered);
+      playlist.setMode(mode);
       // 顺序的权威一律是文件仓（上面 `ordered` 只由 snap.order 构造，prefs 里
       // 那份陈旧 order 参与不了顺序）；光标按 [_restoreCursor] 的优先级定。
       await _restoreCursor(snap);
@@ -250,6 +255,28 @@ class LibraryState extends ChangeNotifier {
     } else {
       playlist.clearCurrent();
     }
+  }
+
+  /// 还原时播放模式的判定（终审 R6）：**prefs 是更新的陈述，档案只是兜底**。
+  ///
+  /// 与光标那一条同源同权：`PlayerState.cycleMode` 改完模式只写 prefs
+  /// （`lib/state/player_state.dart`），文件仓里那份 `mode` 只在列表变化时才
+  /// 跟着重写。第 1 轮把 `currentId` 升级成「prefs 优先」时漏了 mode，于是
+  /// 「随机播放听了一半直接退出重开」会被档案里的旧模式盖回去。
+  ///
+  /// 原版的优先级更硬：模式只存在 localStorage 的 `mode` 一个键里
+  /// （`src/state/player.tsx:343` 写、`:567` 读回，缺省 `PLAY_MODES.LIST`），
+  /// 曲目档案里压根没有模式这一项 —— 我们多一份档案只是多一层兜底。
+  ///
+  /// 判定读的是 `readString`，与 `PlayerState._loadPersistedPrefs` 那一条完全同一个
+  /// 取法：读到值就用（脏值由 [playModeFromId] 归成列表循环，与原版
+  /// `Storage.read(mode, PLAY_MODES.LIST)` 的缺省同一处理），读不到（键没写过，
+  /// 或值不是字符串）才轮到档案 —— 两处判据不一样就会「ready 读回 A、restore
+  /// 改成 B」，那是两份真相。
+  Future<PlayMode> _restoreMode(LibrarySnapshot snap) async {
+    final raw = await prefs.readString(StorageKeys.mode);
+    if (raw != null) return playModeFromId(raw);
+    return snap.mode;
   }
 
   /// prefs 里那份 `order` 是不是与真相逐位相同（不是 List、长度不符、有非字符串

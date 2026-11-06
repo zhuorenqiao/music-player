@@ -2,7 +2,8 @@
 //
 // 锁住原版 #lastVolume 的语义：音量 0 视为静音但不忘记忆值，
 // 取消静音时恢复上一次（默认 0.7 而不是 0）。
-// 并对齐 player.js:315-324：setVolume(0) 只把音量留 0，不改静音标志。
+// 并对齐 player.js:315-324：setVolume 的**两个分支都清 muted**（终审 R5），
+// 只有 v > 0 那支额外记 lastVolume。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/playback/audio_driver.dart';
 import 'package:light_music/playback/audio_player.dart';
@@ -54,6 +55,26 @@ void main() {
     expect(player.muted, isFalse);
     await player.toggleMute();
     expect(player.muted, isTrue);
+    await player.toggleMute();
+    expect(player.volume, closeTo(0.42, 0.001));
+  });
+
+  /// 终审 R5：原版的 else 分支同样写 `muted = false`（`src/lib/player.js:322`），
+  /// 所以「静音中拖到 0」出来就是「音量 0、没静音」，而记忆音量仍然留着。
+  /// 上面那条用例走的是未静音的状态，看不见这一支。
+  test('静音中拖到 0：muted 清掉、音量留 0、记忆值不动', () async {
+    final player = AudioPlayer(FakeAudioDriver());
+    await player.setVolume(0.42);
+    expect(await player.toggleMute(), isTrue);
+    expect(player.muted, isTrue);
+    expect(player.volume, 0);
+
+    await player.setVolume(0);
+    expect(player.muted, isFalse, reason: 'player.js:322 的 else 分支也清静音');
+    expect(player.volume, 0);
+
+    // lastVolume 只在 v > 0 那支更新：静音往返仍回到 0.42
+    await player.toggleMute();
     await player.toggleMute();
     expect(player.volume, closeTo(0.42, 0.001));
   });

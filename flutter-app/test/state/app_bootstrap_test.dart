@@ -227,6 +227,67 @@ void main() {
     expect(await prefs.readString(StorageKeys.currentId), 'b');
   });
 
+  /// 终审 R6：模式与光标同源同权 —— 播放推进只写 prefs（`PlayerState.cycleMode`
+  /// 那句 `writeString(mode)`），文件仓只在列表变化时才跟着重写，所以**prefs 才是
+  /// 更新的陈述**。原版更是只认 prefs 一处（`src/state/player.tsx:567`
+  /// `playlist.setMode(Storage.read(STORAGE_KEYS.mode, PLAY_MODES.LIST))`，
+  /// localStorage 那份曲目档案里根本不存 mode）。
+  /// 第 1 轮把 `currentId` 升级成 prefs 优先时漏了 mode，于是「改完模式直接
+  /// 退出重开」会被档案里的旧模式盖回去。
+  test('改完模式直接重启：模式不丢', () async {
+    final first = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    // 本用例的起点：存档说的是单曲循环（setUp 里写的 mode: PlayMode.one）
+    expect(first.player.transport.playlist.mode, PlayMode.one);
+
+    // 用户切到随机播放：prefs 立刻变成 shuffle，文件仓那份档案没被碰过
+    first.player.cycleMode();
+    expect(first.player.transport.playlist.mode, PlayMode.shuffle);
+    expect(await prefs.readString(StorageKeys.mode), 'shuffle');
+    expect(
+      (await LibraryRepository(directory: dir.path).load()).mode,
+      PlayMode.one,
+      reason: '对照用：档案仍是旧模式，重建时读它就是 R6 的缺陷',
+    );
+
+    first.player.dispose();
+    final second = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(second.player.dispose);
+
+    expect(
+      second.player.transport.playlist.mode,
+      PlayMode.shuffle,
+      reason: 'prefs 里有 mode 就用它，档案那份只在 prefs 缺失时兜底',
+    );
+    expect(second.player.view.value.mode, PlayMode.shuffle);
+  });
+
+  /// 终审 R6 的另一半：prefs 没有 `mode` 键时**才**回落到档案（原版那句
+  /// `Storage.read(mode, PLAY_MODES.LIST)` 的缺省回落同理，只是我们的档案里
+  /// 多一份 mode）。老存档 + 老 prefs（从没写过 mode 键）不能凭空变成列表循环。
+  test('prefs 没写过模式时才回落档案里的模式', () async {
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+
+    expect(prefs.containsKey(StorageKeys.mode), isFalse);
+    expect(bootstrap.player.transport.playlist.mode, PlayMode.one);
+  });
+
+
   /// 终审 A1：音量与静音的真相只有 prefs 那两个键。
   ///
   /// 文件仓「重建 / 不可用」（这里是空目录，等价于仓储被清掉）不许把音量悄悄
