@@ -8,6 +8,7 @@
 //     停止清当前曲目。两个新方法直接在这里断言，不依赖设备。
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_media_session/flutter_media_session.dart' as fms;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/playback/audio_driver.dart';
@@ -30,6 +31,53 @@ class _NoToast implements ToastSink {
   void info(String message) {}
   @override
   void error(String message) {}
+}
+
+/// 只管「会话生命周期 + 保活开关」的平台替身。
+///
+/// 真平台在测试里没有通道可走，而「息屏续播」这条链的证据只能是
+/// `setBackgroundKeepAlive` 有没有被调到 —— 包的默认值是关，漏调就等于没保活。
+class _FakePlatform extends fms.FlutterMediaSessionPlatform {
+  final List<String> calls = [];
+
+  /// 每次 [setBackgroundKeepAlive] 的值，按调用顺序（先记再抛）。
+  final List<bool> keepAlive = [];
+
+  /// 模拟系统不给唤醒锁。
+  bool failKeepAlive = false;
+
+  @override
+  Future<void> activate() async => calls.add('activate');
+
+  @override
+  Future<void> deactivate() async => calls.add('deactivate');
+
+  @override
+  Future<bool> requestNotificationPermission() async {
+    calls.add('requestNotificationPermission');
+    return true;
+  }
+
+  @override
+  Future<void> setBackgroundKeepAlive(bool enabled) async {
+    keepAlive.add(enabled);
+    if (failKeepAlive) {
+      throw PlatformException(code: 'WAKE_LOCK_DENIED');
+    }
+  }
+
+  @override
+  Future<void> updateMetadata(fms.MediaMetadata metadata) async {}
+
+  @override
+  Future<void> updatePlaybackState(fms.PlaybackState state) async {}
+
+  @override
+  Future<void> updateAvailableActions(Set<fms.MediaAction>? actions) async {}
+
+  @override
+  Stream<fms.MediaAction> get onMediaAction =>
+      const Stream<fms.MediaAction>.empty();
 }
 
 /// 广播流是异步投递：等两轮事件循环，让
@@ -290,6 +338,75 @@ void main() {
       expect(driver.calls, contains('pause'));
       expect(transport.current, isNull);
       expect(bridge.published.last.title, isEmpty);
+    });
+  });
+
+  group('后台保活（息屏续播）', () {
+    late fms.FlutterMediaSessionPlatform original;
+
+    setUp(() => original = fms.FlutterMediaSessionPlatform.instance);
+    tearDown(() => fms.FlutterMediaSessionPlatform.instance = original);
+
+    test('start() 主动打开保活（包默认是关的），dispose() 释放', () async {
+      final platform = _FakePlatform();
+      fms.FlutterMediaSessionPlatform.instance = platform;
+      final bridge = FlutterMediaSessionBridge();
+
+      await bridge.start();
+      expect(platform.calls, contains('activate'));
+      // 关键：不打开就永远没有唤醒锁，「息屏续播」只是运气。
+      expect(platform.keepAlive, [true]);
+
+      await bridge.dispose();
+      // 3.0.9 没有单独的 release：传 false 就是释放。
+      expect(platform.keepAlive, [true, false]);
+      expect(platform.calls, contains('deactivate'));
+    });
+
+    test('stop() 释放保活，重新播放再拿回来（不必重启会话）', () async {
+      final platform = _FakePlatform();
+      fms.FlutterMediaSessionPlatform.instance = platform;
+      final bridge = FlutterMediaSessionBridge();
+
+      await bridge.start();
+      await bridge.publish(const PublishedSnapshot(title: 'A', playing: true));
+      // 已经在放：不该每秒重复打同一个开关。
+      expect(platform.keepAlive, [true]);
+
+      await bridge.stop();
+      expect(platform.keepAlive, [true, false]);
+
+      await bridge.publish(const PublishedSnapshot(title: 'A', playing: true));
+      expect(platform.keepAlive, [true, false, true]);
+    });
+
+    test('暂停松手、继续播放再拿回来（桌面上不该一直不让系统睡）', () async {
+      final platform = _FakePlatform();
+      fms.FlutterMediaSessionPlatform.instance = platform;
+      final bridge = FlutterMediaSessionBridge();
+
+      await bridge.start();
+      await bridge.publish(const PublishedSnapshot(title: 'A'));
+      expect(platform.keepAlive, [true, false]);
+
+      await bridge.publish(const PublishedSnapshot(title: 'A', playing: true));
+      expect(platform.keepAlive, [true, false, true]);
+    });
+
+    test('保活失败不抛：start / publish / dispose 都走完', () async {
+      final platform = _FakePlatform()..failKeepAlive = true;
+      fms.FlutterMediaSessionPlatform.instance = platform;
+      final bridge = FlutterMediaSessionBridge();
+
+      await expectLater(bridge.start(), completes);
+      await expectLater(
+        bridge.publish(const PublishedSnapshot(title: 'A', playing: true)),
+        completes,
+      );
+      await expectLater(bridge.dispose(), completes);
+      // 拿不到锁也要真的试过，并且 dispose 仍然会去释放。
+      expect(platform.keepAlive, [true, false]);
+      expect(platform.calls, contains('deactivate'));
     });
   });
 }

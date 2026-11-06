@@ -19,6 +19,9 @@
 //     `seekTo` / `rewind` / `fastForward`；不是 `nexttrack` 那套 MPRIS 名字，
 //     所以 [actionsFor] 与 [mediaActionsFor] 分开：前者是快照语义，后者才是
 //     发给平台的名字。
+//   - 后台保活（「息屏续播」）只有一个开关 `setBackgroundKeepAlive(bool)`：
+//     默认**关**，必须显式打开才会拿唤醒锁（Android）/ 阻止系统睡眠（Windows）。
+//     开关本身就是释放手段（传 false），包里没有单独的 release / dispose 调用。
 import 'dart:async';
 import 'dart:io';
 
@@ -160,6 +163,12 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
   bool _started = false;
   bool _disposed = false;
 
+  /// 后台保活（唤醒锁）的最后一次已知状态；null = 还没试过。
+  bool? _keepAlive;
+
+  /// 保活失败只记一条日志，别被每秒一次的快照刷屏。
+  bool _keepAliveFailureLogged = false;
+
   @override
   Stream<MediaSessionCommand> get commands => _commands.stream;
 
@@ -168,6 +177,11 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
     if (_started || _disposed) return;
     _started = true;
     await _session.activate();
+    // 「息屏续播」不是包默认给的：3.0.9 的保活开关默认关着，只有
+    // `setBackgroundKeepAlive(true)` 之后才会去拿唤醒锁（Android，同时把服务
+    // 钉在前台）/ 阻止系统睡眠（Windows）。这里只管打开，失败不抛（见
+    // [_setKeepAlive]）：抢不到锁顶多是息屏后被系统掐掉，不能连播放都起不来。
+    await _setKeepAlive(true);
     // onMediaAction 是广播流：只收订阅之后的事件，所以先 activate 再订阅。
     _actionSub = fms.FlutterMediaSessionPlatform.instance.onMediaAction.listen(
       (action) {
@@ -219,6 +233,10 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
       ),
     );
 
+    // 保活跟着「真的在放」走：暂停就松手（桌面上不该让系统一直醒着），
+    // 继续播放再拿回来 —— [stop] 释放过之后不需要重启会话也能恢复。
+    await _setKeepAlive(snapshot.playing);
+
     final actions = mediaActionsFor(snapshot);
     if (!_sameActions(actions, _lastActions)) {
       _lastActions = actions;
@@ -238,6 +256,8 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
       const fms.PlaybackState(status: fms.PlaybackStatus.idle),
     );
     await platform.updateAvailableActions(const <fms.MediaAction>{});
+    // 空态：通知栏 / SMTC 都撤了，唤醒锁没有理由继续挂着。
+    await _setKeepAlive(false);
   }
 
   @override
@@ -248,9 +268,35 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
     _actionSub = null;
     if (_started) {
       _started = false;
+      await _setKeepAlive(false);
       await _session.deactivate();
     }
     await _commands.close();
+  }
+
+  /// 取 / 放后台保活（spec §7.2「息屏续播」）。
+  ///
+  /// 3.0.9 只有一个开关：`setBackgroundKeepAlive(bool)` —— Android 侧是
+  /// PARTIAL_WAKE_LOCK + 服务常驻前台，Windows 侧是 `SetThreadExecutionState`
+  /// 阻止系统睡眠。包里**没有**单独的 release / dispose 调用，传 false 就是释放。
+  ///
+  /// 失败只记一条日志、绝不抛：唤醒锁给不给取决于系统（电量策略、厂商 ROM），
+  /// 拿不到的最坏结果是息屏后可能被掐，而不是播放起不来或界面不出。
+  Future<void> _setKeepAlive(bool enabled) async {
+    if (_keepAlive == enabled) return;
+    // 先记状态再等平台：两次相邻的快照不该重复打同一个开关。
+    _keepAlive = enabled;
+    try {
+      await _session.setBackgroundKeepAlive(enabled);
+    } catch (error) {
+      if (!_keepAliveFailureLogged) {
+        _keepAliveFailureLogged = true;
+        debugPrint(
+          'flutter_media_session setBackgroundKeepAlive($enabled) failed: '
+          '$error',
+        );
+      }
+    }
   }
 
   fms.MediaRepeatMode _repeatModeOf(MediaRepeatMode mode) => switch (mode) {
