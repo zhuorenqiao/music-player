@@ -266,6 +266,10 @@ class ImportService {
     await hydrateMetadata(live);
     final probe = durationProbe;
     if (probe == null || live.hasDuration) return;
+    // 终审 R7：句柄自己说「能不能探」。SAF 的 `content://` 在 M1 开不了，
+    // 让它进队列就是每首白等满 3000ms 预算换一个 NaN —— 而且这个 NaN 正好
+    // 会和 R1 的「探不出」叠成反复重跑。标签那条照旧尽力（读不了就是读不了）。
+    if (!live.handle.canProbeDuration) return;
     // 探时长排在标签之后、也排在整批完成信号之前：批次的落库收尾会连它一起落盘。
     final value = await probe(live.handle.pathish);
     // NaN / 0 / 负数 / 无穷都算「探不出来」：未知时长必须保持 NaN，不是 0。

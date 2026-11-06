@@ -39,6 +39,7 @@ import '../state/panel_controller.dart';
 import '../state/player_state.dart';
 import '../state/recent_state.dart';
 import '../theme/app_tokens.dart';
+import 'autoplay_gate.dart';
 import 'empty_state.dart';
 import 'recent_row.dart';
 import 'track_row.dart';
@@ -400,25 +401,30 @@ class _PlaylistBody extends StatelessWidget {
               hint: '换个关键词试试',
             );
     }
-    return ListView.builder(
-      key: const Key('playlist-list'),
-      padding: EdgeInsets.zero,
-      itemCount: tracks.length,
-      itemBuilder: (context, index) {
-        final track = tracks[index];
-        return TrackRow(
-          key: ValueKey<String>(track.id),
-          title: track.title,
-          artistLine: _artistLine(track),
-          duration: formatTime(track.duration),
-          coverPath: track.cover,
-          active: library.currentId == track.id,
-          playing: player.playing,
-          broken: track.broken,
-          onPlay: () => unawaited(player.playTrack(track.id)),
-          onRemove: () => unawaited(library.removeTrack(track.id)),
-        );
-      },
+    return GestureOwnedRegion(
+      // 原版 `closest('.btn--play, .panel__list')` 里的那半句（`src/App.tsx:1562`）：
+      // 这一块的每一行自己就会播放（`playAt`），pointer-down 不再被网关
+      // 当成「任意手势」重复花额度（终审 R7）。
+      child: ListView.builder(
+        key: const Key('playlist-list'),
+        padding: EdgeInsets.zero,
+        itemCount: tracks.length,
+        itemBuilder: (context, index) {
+          final track = tracks[index];
+          return TrackRow(
+            key: ValueKey<String>(track.id),
+            title: track.title,
+            artistLine: _artistLine(track),
+            duration: formatTime(track.duration),
+            coverPath: track.cover,
+            active: library.currentId == track.id,
+            playing: player.playing,
+            broken: track.broken,
+            onPlay: () => unawaited(player.playTrack(track.id)),
+            onRemove: () => unawaited(library.removeTrack(track.id)),
+          );
+        },
+      ),
     );
   }
 

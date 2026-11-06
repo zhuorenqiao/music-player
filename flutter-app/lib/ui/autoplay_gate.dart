@@ -1,32 +1,47 @@
 // lib/ui/autoplay_gate.dart
 //
-// 「被自动播放策略拦住之后，任意一次真实手势都重试一次」的宿主层（终审 I5）。
+// 「被自动播放策略拦住之后，任意一次真实手势都重试一次」的宿主层（终审 I5，
+// 覆盖面按终审 R7 补齐）。
 //
 // 原版有两条 document 级监听（`src/App.tsx:1557-1579`，**捕获阶段**）：一次
-// `pointerdown`、或一次不是空格/回车的 `keydown`，都会调 `resumeAutoplay()`。
+// `pointerdown`、或一次不是空格回车的 `keydown`，都会调 `resumeAutoplay()`。
 // 浏览器只要检测到一次真实用户激活就肯再放行播放，所以用户点空白处、点菜单、
-// 按任意键都能把被拦的播放拉起来；播放重试次数由状态层自己夹在
-// `MAX_AUTOPLAY_RETRIES`（我们的 `kMaxAutoplayRetries`）之内，绝不无限打转。
+// 按任意键都能把被拦的播放拉起来；重试次数由状态层自己夹在
+// `kMaxAutoplayRetries` 之内，绝不无限打转。
 //
-// 我们此前只在那条「继续播放」提示的按钮上接了 `userGesture()`
-// （`lib/ui/panel.dart`），其余手势一概不理 —— 用户点了半天空白，界面还是不动。
-// 这一层补的就是那一条总闸。
+// R7 补的是第 1 轮移植丢掉的两条覆盖面：
+//
+//   1. **按键不能被下层「吃掉」就作废**。Flutter 的按键是从焦点节点
+//      **自下而上**传的：网关哪怕挂在 `AppShortcuts` 外层，被输入框（方向键、
+//      光标移动）或被快捷键表（`M` / `N` / `P` / 上下左右）消费掉的按键一次也
+//      传不到这里。现在按键入口换成 `HardwareKeyboard.addHandler` —— 这是
+//      Flutter 里「document 级监听」的等价位置：所有注册者都会收到每一次按键，
+//      与下游是否消费无关（见 `services/hardware_keyboard.dart` 里
+//      KeyEventManager 那段「All destinations will always receive the event
+//      regardless of the handlers' results」）。唯一与原版的差别是顺序：这条
+//      回调排在焦点树派发之后，所以「先记一次手势再让下层处理」在这里落地成
+//      「无论下层处没处理，这一次都算数」；对额度与结果都没有影响，因为
+//      `TransportController.userGesture` 成功出声即收横幅（终审 R3），下层已经
+//      把播放拉起来的那一次回来时前置条件早就不成立了。
+//
+//   2. **被播放按钮 / 列表自己吃掉的点击不重复计额度**（原版
+//      `closest('.btn--play, .panel__list')` 的排除意图，`src/App.tsx:1560-1564`
+//      「交给它们，别互相打断」）。第 1 轮的注释写着「不必按区域排除，因为原地
+//      续播不会打断」—— 不重复打断是对的，但**额度**照样被花掉一格：pointer-down
+//      一次重试、pointer-up 之后按钮自己再一次。现在那两块区域自己认领指针
+//      （[GestureOwnedRegion]），网关在整轮命中测试走完之后再决定这一次算不算
+//      「任意手势」，被认领的就跳过。
 //
 // 三条与原版对齐的取舍：
 //   - **挂在路由与提示条之上**（`app.dart` 的 `MaterialApp.builder`）：
-//     document 级监听的等价位置，弹层 / 抽屉 / 提示条上的点击同样算数；
+//     document 级监听的等价位置，弹层 / 抽屉 / 提示条里的一次交互同样算数；
 //   - **空格与回车让位**：原版的 `onKey` 里 `if (code === 'Space' || 'Enter') return;`
 //     —— 这两下会触发聚焦控件自己的 click（也就是真的发起播放），不该在这里
-//     再补一次；Flutter 里同理，`Shortcuts` 层已经把空格接走了；
-//   - **播放按钮 / 列表行不额外排除**：原版靠 `closest('.btn--play, .panel__list')`
-//     跳过这两块，是为了「别互相打断」。这里不必再按区域排除，因为
-//     `TransportController.userGesture()` 已经改成**原地续播**（等价原版的
-//     `player.play()`，不重新换源、不清进度），即使先跑一次也不会把用户的
-//     点击打断 —— 代价只是重试预算可能被这些本来就会自己播放的控件用掉一格。
-//
-// 本层**从不消费事件**：`Listener` 只旁听指针，`Focus.onKeyEvent` 一律返回
-// `ignored`，`canRequestFocus: false` + `skipTraversal` 让它不进 Tab 序列，
-// 读屏用户不会 Tab 到一个看不见的节点（与快捷键宿主同一套做法）。
+//     再补一次；
+//   - **从不消费事件**：`Listener` 只旁听指针，按键回调一律返回 false，
+//     打字、光标、快捷键一个都不受影响。不再有 `Focus` 包裹层：
+//     `canRequestFocus: false` + `skipTraversal` 那套「不进 Tab 序列」的做法
+//     在换成全局按键入口之后整块消失，读屏用户更不可能 Tab 到一个隐形节点。
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -36,10 +51,35 @@ import 'package:provider/provider.dart';
 import '../state/player_state.dart';
 
 /// 被拦状态下的手势重试宿主：包住应用内容即可，不需要任何参数。
-class AutoplayGestureGate extends StatelessWidget {
+class AutoplayGestureGate extends StatefulWidget {
   const AutoplayGestureGate({required this.child, super.key});
 
   final Widget child;
+
+  @override
+  State<AutoplayGestureGate> createState() => _AutoplayGestureGateState();
+}
+
+class _AutoplayGestureGateState extends State<AutoplayGestureGate> {
+  /// 本轮 pointer-down 里被 [GestureOwnedRegion] 认领掉的指针 id。
+  ///
+  /// 用 id 而不是布尔标记：多点触控 / 快速连点时同一时刻可能有多个 down，
+  /// 认领与查询都按 id 对齐，不会互相顶掉。
+  final Set<int> _claimedPointers = <int>{};
+
+  @override
+  void initState() {
+    super.initState();
+    // 与 `document.addEventListener('keydown', onKey, true)` 同一位置：
+    // 每一次硬件按键都先到这里，不管下面谁把它消费掉。
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    super.dispose();
+  }
 
   /// 空格与回车：留给聚焦控件自己的激活（原版同一条件）。
   static bool _isActivationKey(LogicalKeyboardKey key) =>
@@ -47,28 +87,81 @@ class AutoplayGestureGate extends StatelessWidget {
       key == LogicalKeyboardKey.enter ||
       key == LogicalKeyboardKey.numpadEnter;
 
+  bool _onHardwareKey(KeyEvent event) {
+    if (event is KeyDownEvent && !_isActivationKey(event.logicalKey)) {
+      _gesture();
+    }
+    // 永远 false：这一层只旁听，绝不替事件「收尾」，
+    // 否则输入框打字与系统媒体键都会被它挡掉。
+    return false;
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    final pointer = event.pointer;
+    // 整轮命中测试走完（区域认领与顺序无关）之后才决定。
+    scheduleMicrotask(() {
+      if (_claimedPointers.remove(pointer)) return;
+      _gesture();
+    });
+  }
+
+  void _gesture() {
+    if (!mounted) return;
+    unawaited(context.read<PlayerState>().userGesture());
+  }
+
   @override
   Widget build(BuildContext context) {
-    // 只在手势发生时取值：这一层不认识播放编排，也不订阅它的任何通知。
-    final player = context.read<PlayerState>();
     return Listener(
       // `translucent`：空白处（没有任何可命中子节点）的点击也要算一次手势，
       // 这正是原版 `document` 上那条 pointerdown 的覆盖面。
       behavior: HitTestBehavior.translucent,
-      onPointerDown: (_) => unawaited(player.userGesture()),
-      child: Focus(
-        debugLabel: 'autoplay-gesture-gate',
-        canRequestFocus: false,
-        skipTraversal: true,
-        onKeyEvent: (node, event) {
-          if (event is KeyDownEvent && !_isActivationKey(event.logicalKey)) {
-            unawaited(player.userGesture());
-          }
-          // 永远让位：这一层只旁听，不许把按键吃掉。
-          return KeyEventResult.ignored;
-        },
-        child: child,
-      ),
+      onPointerDown: _onPointerDown,
+      child: _GestureClaimScope(claim: _claimedPointers.add, child: widget.child),
     );
   }
+}
+
+/// 「这一块的下一次点击属于控件自己」的标记（终审 R7）。
+///
+/// 原版靠 `target.closest('.btn--play, .panel__list')` 跳过这两块 —— 它们自己的
+/// click 就会发起播放（`togglePlay` / `playAt`），网关再补一次重试就是把同一个
+/// 意图算两遍：额度少一格，还多一次没人要求过的 `play()`。
+///
+/// Flutter 里没有 DOM 祖先可问，改由区域自己认领指针：[AutoplayGestureGate] 在
+/// 整轮 pointer-down 派发结束后（微任务）才决定这次算不算「空白处的手势」，
+/// 于是命中测试的顺序（子先还是父先）都不影响结论。
+class GestureOwnedRegion extends StatelessWidget {
+  const GestureOwnedRegion({required this.child, super.key});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final claim = _GestureClaimScope.controllerOf(context);
+    // 网关不在上面（单独摆一颗播放按钮的测试、或界面片段被复用）：
+    // 什么都不登记，渲染原样。
+    if (claim == null) return child;
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (event) => claim(event.pointer),
+      child: child,
+    );
+  }
+}
+
+/// 把「认领指针」递给子树里那些 [GestureOwnedRegion]。
+class _GestureClaimScope extends InheritedWidget {
+  const _GestureClaimScope({required this.claim, required super.child});
+
+  final void Function(int pointer) claim;
+
+  static void Function(int pointer)? controllerOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_GestureClaimScope>()
+          ?.claim;
+
+  @override
+  bool updateShouldNotify(_GestureClaimScope oldWidget) =>
+      claim != oldWidget.claim;
 }

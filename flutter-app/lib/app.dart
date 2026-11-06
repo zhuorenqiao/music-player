@@ -141,8 +141,12 @@ class _LightMusicAppState extends State<LightMusicApp> {
         theme: buildTheme(tokens: AppTokens.dark),
         // 提示条压在路由之上：任何页面 / 弹层看到的都是同一条，且不随页面重建
         // 丢失计时。`home` 只放骨架页，提示条不该由它自己挂。
-        // 网关（终审 I5）再压一层：原版的 pointerdown / keydown 监听挂在
-        // document 上，弹层、抽屉、提示条里的一次交互同样算「真实手势」。
+        // 网关（终审 I5，覆盖面按 R7 补齐）再压一层：原版的 pointerdown /
+        // keydown 监听挂在 document 的**捕获阶段**，所以弹层、抽屉、提示条里的
+        // 一次交互、以及**被快捷键层或输入框消费掉的一次按键**都算数。
+        // 指针走这里的 `Listener`（路由与提示条都在它下面），按键走
+        // `HardwareKeyboard` 的全局回调 —— 位置等价，顺序细节见
+        // `lib/ui/autoplay_gate.dart` 文件头。
         builder: (context, child) => AutoplayGestureGate(
           child: Stack(
             children: [?child, const ToastsHost()],

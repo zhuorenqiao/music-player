@@ -30,6 +30,7 @@ import '../playback/play_mode.dart';
 import '../playback/transport_controller.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
+import 'autoplay_gate.dart';
 import 'library_sheet.dart';
 import 'progress_slider.dart';
 import 'volume_slider.dart';
@@ -269,22 +270,28 @@ class _ControlsRow extends StatelessWidget {
     // null 时才起 AnimationController，给了值就是同一形状的一帧定格 —— 不留常驻
     // ticker，也不占帧预算（README 的 `prefers-reduced-motion` 那一节要求的就是这个）。
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final play = _TransportButton(
-      id: 'btn-play',
-      label: playing ? '暂停' : '播放',
-      icon: playing ? Icons.pause : Icons.play_arrow,
-      onTap: onPlay,
-      child: loading
-          ? SizedBox.square(
-              dimension: _playIconSize,
-              child: CircularProgressIndicator(
-                value: reduceMotion ? _staticSpinnerValue : null,
-                strokeWidth: 2,
-                color: tokens.accent,
-                backgroundColor: tokens.accentSoft,
-              ),
-            )
-          : null,
+    // 终审 R7：这颗按钮自己就会发起播放（`togglePlay`），所以它吃掉的
+    // pointer-down 由 [GestureOwnedRegion] 认领，网关不再补一次重试 ——
+    // 原版 `closest('.btn--play, …')`（`src/App.tsx:1562`）防的就是「一次意图
+    // 花两格额度」。
+    final play = GestureOwnedRegion(
+      child: _TransportButton(
+        id: 'btn-play',
+        label: playing ? '暂停' : '播放',
+        icon: playing ? Icons.pause : Icons.play_arrow,
+        onTap: onPlay,
+        child: loading
+            ? SizedBox.square(
+                dimension: _playIconSize,
+                child: CircularProgressIndicator(
+                  value: reduceMotion ? _staticSpinnerValue : null,
+                  strokeWidth: 2,
+                  color: tokens.accent,
+                  backgroundColor: tokens.accentSoft,
+                ),
+              )
+            : null,
+      ),
     );
 
     if (desktop) {

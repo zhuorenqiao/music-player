@@ -266,6 +266,39 @@ void main() {
     expect(track.duration.isNaN, isTrue);
   });
 
+  /// 终审 R7：SAF 的 `content://` 句柄**不许进时长探针**。
+  ///
+  /// `MediaKitDurationOpener` 把来源一律包成 `Media(FilePathHandle(source).uri)`，
+  /// 而 M1 没有 ContentResolver 通道 —— 这类句柄根本开不了，结果是每首白等满
+  /// 3000ms 预算再换一个 NaN（还正好和 R1 的「没探到」叠成反复重跑）。
+  /// 判据放在句柄自己身上：能开文件才值得排队探测。
+  test('content:// 曲目不触达时长探针', () async {
+    const safSource =
+        'content://com.android.externalstorage.documents/document/'
+        'primary%3AMusic%2Fa.flac';
+    final probed = <String>[];
+    final playlist = Playlist(tracks: const []);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      durationProbe: (path) async {
+        probed.add(path);
+        return 187.5;
+      },
+    );
+
+    final result = await service.importPaths([safSource, '/m/b.flac']);
+    await result.enrichment;
+
+    expect(
+      probed,
+      ['/m/b.flac'],
+      reason: '只有真文件进探针；content:// 一次也不许（白等 3 秒换 NaN）',
+    );
+    expect(playlist.tracks.first.hasDuration, isFalse);
+    expect(playlist.tracks.last.duration, 187.5);
+  });
+
   test('两侧都有的写法「歌名 - 歌手」先按原版规则猜，等标签纠正', () async {
     final playlist = Playlist(tracks: const []);
     final service = ImportService(

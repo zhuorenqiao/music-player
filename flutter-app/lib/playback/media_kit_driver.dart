@@ -227,6 +227,11 @@ class MediaKitDurationOpener {
   /// 探一个来源（文件路径或已经是 URI）；失败 / 超时都是 NaN，绝不抛。
   Future<double> call(String source) async {
     if (_disposed) return double.nan;
+    // 终审 R7：这一层只会把来源包成文件 URI，`content://` 之类的 SAF 句柄
+    // 开不了 —— 与其占着串行队列白等满 [timeoutMs] 再换一个 NaN，不如当场
+    // 承认「这条我探不了」。调用方（`ImportService._enrich`）已经先按句柄
+    // 类型挡了一道，这里是最后一道闸：探针还有别的入口时同样不许白等。
+    if (!FilePathHandle(source).canProbeDuration) return double.nan;
     final Player player;
     try {
       player = _player ??= Player();

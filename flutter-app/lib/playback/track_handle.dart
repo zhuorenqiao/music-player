@@ -39,6 +39,14 @@ sealed class TrackHandle {
   Future<int?> sizeBytes();
   Map<String, Object?> toJson();
 
+  /// 这条来源**值不值得**交给时长探测（终审 R7）。
+  ///
+  /// 探测器（`MediaKitDurationOpener`）只会把来源包成 `Media(FilePathHandle(source).uri)`，
+  /// 而 M1 没有 ContentResolver 通道 —— `content://` 这种 SAF 句柄在它手里
+  /// 根本开不了，排队 + 白等满 3000ms 预算，换来一个和「文件没有时长」一样的
+  /// NaN。既然注定没有信息，就别让它进队列：句柄自己说清楚。
+  bool get canProbeDuration;
+
   /// 反序列化必须「脏字段返回 null，绝不抛」：坏存档经 `Track.fromJson` →
   /// `normalizeTrack` 一路读到列表，抛出去就是把整个列表加载页搞崩。
   /// 因此这里一律用 `is` 判定，不做 `as String?` 之类的强制转换。
@@ -91,6 +99,12 @@ class FilePathHandle extends TrackHandle {
     }
   }
 
+  /// 本地文件路径可以；`content://` 之类被当路径塞进来的（Android 选择器
+  /// 给的就是这种，见 `ImportService._buildTrack` 的注释）不行。
+  @override
+  bool get canProbeDuration =>
+      !_schemePattern.hasMatch(path) || path.startsWith('file:');
+
   @override
   Map<String, Object?> toJson() => {'kind': 'file', 'path': path};
 }
@@ -112,6 +126,11 @@ class SafUriHandle extends TrackHandle {
 
   @override
   Future<int?> sizeBytes() async => null;
+
+  /// M1 没有读 SAF 内容的能力（要平台通道 / ContentResolver），探测器
+  /// 拿到这种句柄只会白等满预算（终审 R7）。
+  @override
+  bool get canProbeDuration => false;
 
   @override
   Map<String, Object?> toJson() => {
