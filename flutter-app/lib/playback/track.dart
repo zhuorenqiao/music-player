@@ -45,6 +45,9 @@ Track? normalizeTrack(Object? raw) {
         ? lyricsSource as String
         : '',
     restored: map['restored'] == true,
+    // 老档案里没有这个字段：一律按「从没探测过」读回（终审 R1 的兼容默认值），
+    // 于是升级后第一次启动补跑一遍回填，之后永远不再重跑。
+    metadataProbed: map['metadataProbed'] == true,
     handle:
         TrackHandle.fromJson(
           map['handle'] is Map
@@ -79,6 +82,7 @@ class Track {
     this.lyricsPlain = '',
     this.lyricsSource = '',
     this.restored = false,
+    this.metadataProbed = false,
     TrackHandle? handle,
   }) : duration = duration ?? double.nan,
        handle = handle ?? FilePathHandle(src);
@@ -106,6 +110,19 @@ class Track {
   /// 不进 [toJson]，重开应用就清空，也不写进存档。
   bool broken = false;
 
+  /// 这条记录**有没有被回填/探测过一次**（终审 R1）。
+  ///
+  /// 与 [broken] 相反，这是必须落盘的：冷启动自愈唯一的依据就是它。字段启发式
+  /// （`!hasRealCover`、「标题还是文件名猜出来的」）都**不是**「没回填过」的证据 ——
+  /// 无内嵌封面的歌永远 `cover == ''`，而「`歌手 - 歌名` 命名 + 带标签」这批真实
+  /// 曲目的标签标题本来就等于文件名右半段，两条叠起来就是每次启动把整个曲库
+  /// 重开一遍文件、重解析一遍标签、再整库重写一次档案。
+  ///
+  /// 「探不出」也算探测过：回填批次结束（成功、失败、还是什么都没查到）都把
+  /// 它置真，随那一次批次收尾 `persist()` 落盘。老档案缺这个字段按 false 读回
+  /// （见 [normalizeTrack]），于是升级后第一次启动补跑一遍、之后就稳定了。
+  bool metadataProbed = false;
+
   bool get hasDuration => duration.isFinite && duration > 0;
 
   /// 已有真封面 == cover 非空。生成卡不写这里（spec §12）。
@@ -124,6 +141,7 @@ class Track {
     lyricsPlain: lyricsPlain,
     lyricsSource: lyricsSource,
     restored: restored,
+    metadataProbed: metadataProbed,
     handle: handle,
   )..broken = broken;
 
@@ -140,6 +158,9 @@ class Track {
     'lyricsPlain': lyricsPlain,
     'lyricsSource': lyricsSource,
     'restored': restored,
+    // 终审 R1：与 `broken` 相反，这个标记**必须**进存档 —— 它是冷启动自愈
+    // 谓词唯一的依据，存档往返读不回来就等于每次启动重跑整个曲库。
+    'metadataProbed': metadataProbed,
     'handle': handle.toJson(),
   };
 

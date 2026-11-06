@@ -457,6 +457,161 @@ void main() {
     expect(counting.saves, 0, reason: '没有东西被补上就不必再落库');
   });
 
+  // -- 终审 R1：自愈回填的谓词必须是「探测过的持久化标记」 --------------------
+
+  /// 「陈奕迅 - 白玫瑰.mp3」这种命名 + 标签里就是这个名字 + 没有内嵌封面：
+  /// 用户真实曲库的形状。旧谓词里 `!hasRealCover` 与 `_stillFileNameGuess`
+  /// 在这一批曲目上几乎恒真，于是每次启动整个曲库重开一遍文件、重解析一遍
+  /// 标签、再整库重写一次档案（守护用例用的是「有封面 + 标题与文件名不同」
+  /// 的曲目，所以一直绿）。
+  test('还原时正常命名的带标签无封面曲目不重复回填', () async {
+    final file = taggedFile('陈奕迅 - 白玫瑰.mp3', [
+      textFrame('TIT2', '白玫瑰'),
+      textFrame('TPE1', '陈奕迅'),
+    ]);
+    // 已经回填好的档案：标题/歌手就是标签里的（也恰好等于文件名拆出来的猜测值），
+    // 没有封面；时长这个文件本来探不出来，一律保持未知。
+    final stored = Track(
+      id: localIdFor(file.path),
+      src: file.path,
+      title: '白玫瑰',
+      artist: '陈奕迅',
+      duration: double.nan,
+      isLocal: true,
+    );
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(
+        tracks: [stored],
+        order: [stored.id],
+        mode: PlayMode.list,
+      ),
+    );
+
+    var probes = 0;
+    Future<double> countingProbe(String path) async {
+      probes += 1;
+      return double.nan; // 「探不出」：真实曲库里就是有这么一批文件
+    }
+
+    // 第一次启动：没有探测标记 → 补跑一次，并把标记随批次收尾落盘。
+    final firstRepo = _CountingRepository(directory: dir.path);
+    final first = buildEnrichingState(
+      repo: firstRepo,
+      probe: countingProbe,
+    );
+    addTearDown(first.dispose);
+    await first.restore();
+    await first.enrichmentSettled;
+    expect(probes, 1, reason: '老档案第一次读到「没探测过」，补跑一遍是应有的代价');
+
+    // 第二次「重启」：同一份文件形状，一次都不许再补。
+    probes = 0;
+    final secondRepo = _CountingRepository(directory: dir.path);
+    final second = buildEnrichingState(repo: secondRepo, probe: countingProbe);
+    addTearDown(second.dispose);
+    await second.restore();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+
+    expect(probes, 0, reason: '已经探测过一次就不重探（终审 R1 的持久化标记）');
+    expect(secondRepo.saves, 0, reason: '没有东西被补上就不必再整库重写档案');
+    expect(second.tracks.single.title, '白玫瑰');
+  });
+
+  test('自愈回填过的曲目第二次启动不再回填', () async {
+    final file = taggedFile('陈奕迅 - 十年.mp3', [
+      textFrame('TIT2', '白玫瑰'),
+      textFrame('TPE1', '陈奕迅'),
+      textFrame('TALB', '认了吧'),
+    ]);
+    // C1 修之前就存下的那份脏档案：只有文件名拆出来的猜测值、无时长、无封面
+    final stale = Track(
+      id: localIdFor(file.path),
+      src: file.path,
+      title: '十年',
+      artist: '陈奕迅',
+      duration: double.nan,
+      isLocal: true,
+    );
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(
+        tracks: [stale],
+        order: [stale.id],
+        mode: PlayMode.list,
+      ),
+    );
+
+    var probes = 0;
+    Future<double> countingProbe(String path) async {
+      probes += 1;
+      return 187.5;
+    }
+
+    final first = buildEnrichingState(probe: countingProbe);
+    addTearDown(first.dispose);
+    await first.restore();
+    await first.enrichmentSettled;
+    expect(first.tracks.single.title, '白玫瑰'); // 自愈确实补过一次
+    expect(probes, 1);
+
+    probes = 0;
+    final secondRepo = _CountingRepository(directory: dir.path);
+    final second = buildEnrichingState(repo: secondRepo, probe: countingProbe);
+    addTearDown(second.dispose);
+    await second.restore();
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+
+    expect(probes, 0, reason: '回填过的曲目第二次启动不再探时长');
+    expect(secondRepo.saves, 0, reason: '也没有东西要补，不该再落一次库');
+    expect(second.tracks.single.title, '白玫瑰');
+    expect(second.tracks.single.duration, 187.5);
+  });
+
+  test('重启后 metadataProbed 仍为 true', () async {
+    final file = taggedFile('a.mp3', [textFrame('TIT2', '甲')]);
+    final stale = Track(
+      id: localIdFor(file.path),
+      src: file.path,
+      title: 'a',
+      duration: double.nan,
+      isLocal: true,
+    );
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(
+        tracks: [stale],
+        order: [stale.id],
+        mode: PlayMode.list,
+      ),
+    );
+
+    final fresh = buildEnrichingState(probe: (path) async => 100);
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+    expect(fresh.tracks.single.metadataProbed, isTrue);
+
+    // 标记必须真的进了存档：重新 load() 读回来还是 true，谓词才有依据。
+    final snap = await LibraryRepository(directory: dir.path).load();
+    expect(
+      snap.tracks.single.metadataProbed,
+      isTrue,
+      reason: '自愈只跑一次的唯一保证就是这个标记落得了盘',
+    );
+
+    // 老档案（早于本波）没有这个字段：按「从没探测过」读回，兼容旧格式。
+    final legacy = Track.fromJson({
+      'id': 'local:old',
+      'src': '/m/old.flac',
+      'title': '老记录',
+      'isLocal': true,
+    })!;
+    expect(legacy.metadataProbed, isFalse);
+    expect(
+      Track.fromJson(stale.toJson())!.metadataProbed,
+      isFalse,
+      reason: '没探测过的记录存档往返也不会凭空变成已探测',
+    );
+  });
+
   // -- 终审 I4：prefs 的 currentId / order 必须如实同步 ----------------------
 
   test('落库时 currentId 跟着列表走：换曲写、删空清', () async {

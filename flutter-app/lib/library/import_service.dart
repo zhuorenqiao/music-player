@@ -276,11 +276,21 @@ class ImportService {
   ///
   /// 必须存在：批次的完成信号是 `Future.wait` 出来的，一条抛错会把整批的落库
   /// 收尾一起带走（终审 C1 要的就是那次收尾）。
+  ///
+  /// `finally` 里那一句是终审 R1 的核心：**不管这一条补上了什么、探到了什么、
+  /// 还是整个文件都读不了**，都给它记一个持久的「已探测」标记。冷启动自愈
+  /// 只认这个标记 —— 字段缺不缺不是「没回填过」的证据（见 [metadataIncomplete]），
+  /// 不记就是每次启动把整个曲库重跑一遍。标记随那一次批次收尾 `persist()`
+  /// 一起落盘；批次里任何一条都在这个外壳里，所以没有漏记的路径。
   Future<void> _enrichQuiet(Track live) async {
     try {
       await _enrich(live);
     } catch (_) {
       // 回填是增值项：导入已经成功，这里不许冒泡。
+    } finally {
+      // 记在**列表里的活对象**上（文件头第 2 条同一个理由：改到克隆副本上
+      // 就等于没改，标记落不了盘）。
+      (playlist.byId(live.id) ?? live).metadataProbed = true;
     }
   }
 
@@ -290,12 +300,20 @@ class ImportService {
     return Future.wait(tasks).then((_) {});
   }
 
-  /// 冷启动还原的自愈回填：把「元数据仍缺失」的既有曲目重新交给同一套补全。
+  /// 冷启动还原的自愈回填：把**还没探测过**、且字段确实还缺的既有曲目重新
+  /// 交给同一套补全。
   ///
   /// 为什么非要有：C1 修好之前存下的档案里就是「只有文件名、时长 NaN、无封面」，
   /// 只改导入路径救不了已经躺在文件仓里的旧记录；原版靠浏览器每次重读标签，
-  /// 没有这个坑，所以必须在 Dart 端补这一遍。返回本批的完成信号（没有要补的
-  /// 就返回 null），调用方在它完成后落一次库、刷一次界面。
+  /// 没有这个坑，所以必须在 Dart 端补这一遍。
+  ///
+  /// 为什么谓词是 [metadataIncomplete]（终审 R1）：判据的唯一支柱是落盘的探测
+  /// 标记，**老档案第一次读到 false → 回填一次 → 之后永远不再重跑**；字段启发式
+  /// 只用来省掉「没什么可补」的那次开文件。以前只看字段（还把「无封面」当成
+  /// 没回填过）的后果是每次启动全库重跑。
+  ///
+  /// 返回本批的完成信号（没有要补的就返回 null），调用方在它完成后落一次库、
+  /// 刷一次界面 —— 那一次落库同时把这一批新记上的探测标记带上盘。
   ///
   /// 与 [importPaths] 一样不挡首帧：曲目早就在列表里、也早就可播。
   Future<void>? rehydrateIncomplete() {
@@ -406,17 +424,37 @@ String displayNameForSource(String source) {
   return decoded.isNotEmpty ? decoded : _basename(source);
 }
 
-/// 这条记录的元数据还缺不缺（[ImportService.rehydrateIncomplete] 的判据）。
+/// 这条记录的元数据还缺不缺、需不需要**自愈回填**
+/// （[ImportService.rehydrateIncomplete] 的判据）。
 ///
-/// 三种情况任一即算缺：时长未知（NaN）、还没有真封面、标题或歌手仍停在
-/// 「文件名拆出来的猜测值」上。第三种是 C1 那次事故的直接特征 —— 回填没落库，
-/// 重启读回来的就是纯文件名拆分值。
+/// 终审 R1 的裁定：决定「还要不要去看一眼」的**唯一依据是那个落盘的探测标记**
+/// `Track.metadataProbed`；字段启发式只回答「去看一眼有没有可赚的东西」。
+///
+/// 从前这里把「没有真封面」当成「没回填过」的证据。它不是：`cover` 只在文件
+/// 真的内嵌封面时才有值，无封面的歌永远 `hasRealCover == false`；而
+/// [_stillFileNameGuess] 对「`歌手 - 歌名` 命名 + 带标签」这批用户的真实曲目
+/// 几乎恒为 true（标签标题本来就等于文件名右半段）。两条叠起来的后果是
+/// **每次启动**都把整个曲库重开一遍文件、重解析一遍标签、再整库重写一次档案
+/// —— 守护它的那条用例用的是「有封面 + 标题与文件名不同」的曲目，所以一直绿。
+///
+/// 标记为假时仍然要再看一眼字段：全都齐了就没必要开文件，于是老档案升级后
+/// 只补跑一次、之后永远不再重跑（`metadataProbed` 与字段两道闸缺一即跳过）。
 ///
 /// 只认本地文件：SAF / 远程来源在 M1 读不了字节，判成「缺」也只会白跑一遍。
 bool metadataIncomplete(Track track) {
   if (!track.isLocal) return false;
+  // 探测过的（包括「探不出东西」的）永远不再重跑 —— 这条才是回归的根治点。
+  if (track.metadataProbed) return false;
+  return _metadataFieldsMissing(track);
+}
+
+/// 字段层面还缺不缺：时长未知，或标题 / 歌手仍停在文件名猜出来的值上。
+///
+/// 第三种情况是 C1 那次事故的直接特征 —— 回填没落库，重启读回来的就是纯文件名
+/// 拆分值。终审 R1 在这里**去掉了 `!hasRealCover`**：没有封面不是「没回填过」
+/// 的证据，它只是这个文件没有图。
+bool _metadataFieldsMissing(Track track) {
   if (!track.hasDuration) return true;
-  if (!track.hasRealCover) return true;
   return _stillFileNameGuess(track);
 }
 
