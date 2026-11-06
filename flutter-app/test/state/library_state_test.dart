@@ -477,7 +477,7 @@ void main() {
     expect(await prefs.readString(StorageKeys.currentId), isNull);
   });
 
-  test('还原以文件仓为准：陈旧 order 被纠正、过期 currentId 被清掉', () async {
+  test('还原以文件仓为准：陈旧 order 被纠正、光标落到列表第一首', () async {
     await state.importPaths(['/m/a.flac', '/m/b.flac', '/m/c.flac']);
     await state.enrichmentSettled;
     final ids = state.tracks.map((t) => t.id).toList();
@@ -496,9 +496,15 @@ void main() {
     final survived = ids.skip(1).toList();
     // 顺序一律以文件仓为准，prefs 那份陈旧值不许把列表带偏
     expect(fresh.tracks.map((t) => t.id).toList(), survived);
-    // 痕迹要跟真相一致：纠正 prefs 的那份 order，并清掉指向已删曲目的光标
+    // 痕迹要跟真相一致：陈旧的那份 order 被纠正回现场。
     expect(await prefs.readJson(StorageKeys.order), survived);
-    expect(await prefs.readString(StorageKeys.currentId), isNull);
+    // 终审 R4 改写的一句：第 1 轮在这里期望的是「currentId 被清掉、保持无光标」，
+    // 那是移植时自创的规则。原版 `src/state/player.tsx:556` 是
+    // `storedId && indexOfId(storedId) >= 0 ? index : 0` —— 存档光标与现场光标
+    // 都指不到列表里的曲目时落到**第一首**（暂停、不自动播），并且
+    // `persist()`（`:243-249`）每次都会把 currentId 跟着列表重写成它。
+    expect(fresh.currentId, survived.first);
+    expect(await prefs.readString(StorageKeys.currentId), survived.first);
   });
 
   test('还原时光标仍在列表里就保留，两边一起指向同一首', () async {
@@ -539,7 +545,7 @@ void main() {
     expect(await prefs.readString(StorageKeys.currentId), thirdId);
   });
 
-  test('两边都指不到曲目：保持无光标，过期 currentId 被清掉而不是复活队首', () async {
+  test('两边都指不到曲目：光标落到第一首，痕迹跟着补齐而不是留个幽灵键', () async {
     await state.importPaths(['/m/a.flac', '/m/b.flac']);
     await state.enrichmentSettled;
     final ids = state.tracks.map((t) => t.id).toList();
@@ -554,12 +560,52 @@ void main() {
     await fresh.restore();
     await fresh.enrichmentSettled;
 
-    expect(fresh.currentId, isNull);
-    expect(await prefs.readString(StorageKeys.currentId), isNull);
+    // 终审 R4 改写的用例：原版 `player.tsx:556` 在「存档 id 指不到任何曲目」时
+    // 落到第一首（暂停态、`autoplay: false`），第 1 轮移植写的却是
+    // `clearCurrent()` + 把 prefs 的键删掉，于是重启后界面停在空舞台。
+    expect(fresh.currentId, ids.first);
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      ids.first,
+      reason: '光标落到第一首之后 prefs 的 currentId 要跟着补写一致，'
+          '绝不留「界面指第一首、存档指幽灵」两份真相',
+    );
     expect(
       await prefs.readJson(StorageKeys.order),
       ids,
       reason: '顺序仍按文件仓纠正成现场',
+    );
+  });
+
+  // -- 终审 R8：档案损坏时还原流程只读痕迹，不许把 order 覆盖成 [] ----------
+
+  test('档案损坏时不覆盖 prefs 里的 order 痕迹', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac']);
+    await state.enrichmentSettled;
+    final ids = state.tracks.map((t) => t.id).toList();
+    // 最后一次成功落盘留下的现场：顺序 + 光标
+    await prefs.writeJson(StorageKeys.order, ids);
+    await prefs.writeString(StorageKeys.currentId, ids.last);
+    // 正式文件与 `.bak` 一起读不出来：仓储只能退回「空快照 + corrupted」。
+    // 这份快照什么都没说过，拿它覆盖痕迹等于抹掉最后一条可读记录。
+    const junk = '{"tracks": [坏数据]}';
+    File('${dir.path}/library.json').writeAsStringSync(junk);
+    File('${dir.path}/library.json.bak').writeAsStringSync(junk);
+
+    final fresh = buildState();
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+
+    expect(fresh.tracks, isEmpty, reason: '坏档还原成空列表这件事本身不变');
+    expect(
+      await prefs.readJson(StorageKeys.order),
+      ids,
+      reason: 'corrupted 的快照只读不写：prefs 那份 order 是最后一条可读记录',
+    );
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      ids.last,
+      reason: '同一次判定里也不许顺手清掉 currentId —— 那是用户停没停过的唯一线索',
     );
   });
 }

@@ -141,7 +141,8 @@ class LibraryState extends ChangeNotifier {
   ///     `PlayerState.flushPersist()` 写 prefs、不重写文件仓，所以 prefs 才是
   ///     最后一次如实写入的光标；两份 order 逐位一致就是「这份现场没跨代过期」
   ///     的闸门。矛盾（或缺 order）时整份现场按陈旧处理，退回文件仓的
-  ///     `currentId`；两边都指不到列表里的曲目就保持**无光标**并把 prefs 的键删掉。
+  ///     `currentId`。**两边都给不出有效光标时落到列表第一首**（终审 R4，
+  ///     原版 `src/state/player.tsx:556`），只有空列表才是空舞台。
   ///
   /// [restoring] 覆盖整个异步加载（首帧就画骨架），结束无论成败都置回 false。
   /// 脏存档绝不外抛：仓储自己会退回空快照，这里再兜一层，启动流程不许因此中断。
@@ -154,9 +155,14 @@ class LibraryState extends ChangeNotifier {
     notifyListeners();
     try {
       final snap = await repo.load();
+      // 终审 R8：档案损坏（回退过 `.bak`、或两份都读不出来退回空快照）时，
+      // 还原流程**只读痕迹、不写痕迹**。那份快照本身什么也没说——按它写下去
+      // 就是把 prefs 里最后一条可读记录覆盖成 `[]`，用户连「停过哪一首」这条
+      // 线索都没了。只有真正拿到过一次健康档案才允许改写现场。
+      final traceWritable = !snap.corrupted;
       if (snap.tracks.isEmpty) {
         playlist.clear();
-        await _syncPrefsTrace();
+        if (traceWritable) await _syncPrefsTrace();
         return;
       }
       final byId = {for (final track in snap.tracks) track.id: track};
@@ -170,9 +176,9 @@ class LibraryState extends ChangeNotifier {
       // 顺序的权威一律是文件仓（上面 `ordered` 只由 snap.order 构造，prefs 里
       // 那份陈旧 order 参与不了顺序）；光标按 [_restoreCursor] 的优先级定。
       await _restoreCursor(snap);
-      // 痕迹要跟真相一致：纠正 prefs 的那份 order，并清掉指向已删曲目的光标
-      //（终审 I4）。
-      await _syncPrefsTrace();
+      // 痕迹要跟真相一致：纠正 prefs 的那份 order，并把 R4 落定的光标补写回去
+      //（终审 I4 + R4）。损坏的那一份不动它（R8）。
+      if (traceWritable) await _syncPrefsTrace();
       _flushAfterEnrichment(importer.rehydrateIncomplete());
     } catch (_) {
       // 理论上到不了这里（仓储是总函数），留作最后一道闸：启动不许炸
@@ -183,7 +189,7 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
-  /// 还原时当前指针的判定（终审 I4，方案 (a)+(b) 的混合：prefs 既写**也读**，
+  /// 还原时当前指针的判定（终审 I4 + R4，方案 (a)+(b) 的混合：prefs 既写**也读**，
   /// 并且如实清除）。
   ///
   /// `prefs` 的 [StorageKeys.currentId] 与 [StorageKeys.order] 是**一对现场快照**，
@@ -194,9 +200,15 @@ class LibraryState extends ChangeNotifier {
   ///      它仍指向列表里的曲目就用它。
   ///   2. 快照自相矛盾（order 与文件仓不一致）或缺失时，整份按过期处理，
   ///      退回文件仓快照的 `currentId` —— 顺序与曲目以文件仓为权威。
-  ///   3. 两边都指不到列表里的曲目（光标被删 / 键被清）就保持**无光标**，
-  ///      随后的 [_syncPrefsTrace] 会把 prefs 的 `currentId` 删掉，绝不留
-  ///      「prefs 指一首、界面指另一首」或指向已删曲目的现场。
+  ///   3. 两边都指不到列表里的曲目（光标被删 / 键被清）时**落到列表第一首**，
+  ///      保持暂停、不自动播（终审 R4）：原版
+  ///      `src/state/player.tsx:556` 写的是
+  ///      `storedId && playlist.indexOfId(storedId) >= 0 ? indexOfId(storedId) : 0`
+  ///      —— 任何一次非空启动都落得到一个光标，只有空列表才是空舞台。第 1 轮
+  ///      移植在这里调了 `clearCurrent()`（「没有有效 id 就没有光标」），界面
+  ///      于是停在「未选择曲目」的假空舞台上。随后的 [_syncPrefsTrace] 会把
+  ///      prefs 的 `currentId` 补写成这一首（原版每次 persist 都跟着列表重写，
+  ///      `player.tsx:243-249`），不留「界面指第一首、存档指幽灵」两份真相。
   ///
   /// 原版同一优先级（`src/state/player.tsx:555`：`storedId` 仍在列表里就
   /// `setCurrentIndex(indexOfId(storedId))`），只是它的曲目档案与顺序同在
@@ -218,8 +230,14 @@ class LibraryState extends ChangeNotifier {
         return;
       }
     }
-    // 两边都失效：光标归零，别让 replaceAll 默认的队首冒充存档光标。
-    playlist.clearCurrent();
+    // 没有任何有效光标：与原版一致落到第一首（暂停，不自动播）。
+    // 列表在这里必定非空（`restore()` 对空列表提前返回），但仍按 size 兜一层，
+    // 免得将来有人在别处复用这条判据时凭空造出一个「第 0 首」。
+    if (playlist.size > 0) {
+      playlist.setCurrentIndex(0);
+    } else {
+      playlist.clearCurrent();
+    }
   }
 
   /// prefs 里那份 `order` 是不是与真相逐位相同（不是 List、长度不符、有非字符串
