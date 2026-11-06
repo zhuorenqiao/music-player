@@ -21,15 +21,32 @@ bool isUltraCompact(double width) => width < Breaks.compact;
 /// - 宽 ≥900：`clamp(166px, 18vw, 232px)`；
 /// - 其余：`clamp(108px, 24vh, 150px)`。
 ///
+/// 桌面端（≥900）`.stage__cover-wrap` 还有一道高度上限
+/// `width: min(var(--cover-size), 46vh, 340px)`，所以给了 [viewportHeight]
+/// 时结果是 `min(基准值, 0.46 * viewportHeight, 340)`；不给则按视口充足处理，
+/// 只返回基准值（与改动前的行为一致）。`<900` 分支没有这条上限。
+///
 /// [viewportHeight] 省略时按 700 估算（CSS 的 24vh 需要视口高度）。
 double kCoverSize(double width, {double? viewportHeight}) {
-  if (width >= 1180) return 248;
-  if (width >= Breaks.desktop) return _clamp(166, width * 0.18, 232);
+  if (width >= 1180) {
+    return _capByHeight(248, viewportHeight, width);
+  }
+  if (width >= Breaks.desktop) {
+    return _capByHeight(_clamp(166, width * 0.18, 232), viewportHeight, width);
+  }
   return _clamp(108, (viewportHeight ?? 700) * 0.24, 150);
+}
+
+/// 桌面端的 `min(value, 46vh, 340px)`；[viewportHeight] 缺省或宽 <900 时原样返回。
+double _capByHeight(double value, double? viewportHeight, double width) {
+  if (viewportHeight == null || width < Breaks.desktop) return value;
+  return _min(_min(value, viewportHeight * 0.46), 340);
 }
 
 double _clamp(double min, double value, double max) =>
     value < min ? min : (value > max ? max : value);
+
+double _min(double a, double b) => a < b ? a : b;
 
 /// 控制行圆钮直径：`.controls > .btn { width: 40px; height: 40px }`。
 const double kButtonSize = 40;

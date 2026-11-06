@@ -171,7 +171,7 @@ class AppTokens {
     panelB: Color(0xFF0A0E14), // #0a0e14
     sheetA: Color(0xFF0D1219), // #0d1219
     sheetB: Color(0xFF090C11), // #090c11
-    barA: Color(0xE10E131A), // rgba(14, 19, 26, 0.88)
+    barA: Color(0xE00E131A), // rgba(14, 19, 26, 0.88)，0.88 × 255 = 224.4 → 0xE0
     barB: Color(0xF7090C11), // rgba(9, 12, 17, 0.97)
     progressTrack: Color(0x1CFFFFFF), // --tint-3: rgba(255, 255, 255, 0.11)
     accentSoft: Color(0x242EE6A8), // rgba(46, 230, 168, 0.14)
