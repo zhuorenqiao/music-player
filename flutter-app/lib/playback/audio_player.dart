@@ -179,6 +179,13 @@ class AudioPlayer {
 
   Future<void> pause() => _driver.pause();
 
+  /// 从暂停处继续：只让内核重新出声，**不重开媒体**。
+  ///
+  /// 与 [load] 的差别就是「进度保不保」：`load` 会先 `open` 再 seek 回来，
+  /// 换源那一刻内核的位置已经归零；锁屏上的播放键必须原地续播，所以走这里。
+  /// 自动播放被拦仍由 [_play] 转成 [BlockedEvent]，与首播同一条路径。
+  Future<void> resume() => _play();
+
   /// 跳转。时长未知时先记 [_pendingSeek]，等 duration 到手再补做。
   Future<bool> seek(double seconds) async {
     final requested = seconds.isFinite && seconds > 0 ? seconds : 0.0;

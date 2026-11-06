@@ -218,6 +218,54 @@ class TransportController {
     await _resume(track);
   }
 
+  /// 系统侧（锁屏 / 通知栏 / 媒体键）的「播放」：从当前位置继续，**不重载**。
+  ///
+  /// 与 [togglePlay] 的暂停对称：按钮按下去听觉上不该有任何跳变，进度必须还
+  /// 在原处。内核里没有这首（[stopPlayback] 之后、或列表刚还原还没加载）时退
+  /// 回到「加载当前曲目并自动播放」—— 与 [togglePlay] 的兜底同一入口。
+  Future<void> resume() async {
+    final track = playlist.current;
+    if (track == null) {
+      if (playlist.size == 0) {
+        toasts.info('播放列表为空，请先添加音频文件');
+        return;
+      }
+      // 停止过（当前指针已清空）但列表还有歌：从第一首重新开始。
+      await playTrack(playlist.tracks.first.id);
+      return;
+    }
+    if (player.track?.id != track.id) {
+      await playTrack(track.id);
+      return;
+    }
+    // 与 [_resume] 同一收尾：被拦状态在真的能出声时清掉。
+    _blockedMessage = null;
+    _blockedRetries = 0;
+    await player.resume();
+    _publish();
+  }
+
+  /// 停止播放：暂停、清空当前曲目（界面与系统侧都回到空态），**列表原样保留**。
+  ///
+  /// 只 `player.stop()` 不够：那样 `playlist.current` 还在，推给系统的快照仍
+  /// 带着上一首的标题与封面，通知栏会挂着一条「停止的歌」。所以这里连指针一
+  /// 起清掉，[PublishedSnapshot.title] 才会变空、系统侧才会撤掉控件。
+  Future<void> stopPlayback() async {
+    _cancelPendingSkip();
+    _blockedMessage = null;
+    _blockedRetries = 0;
+    _loading = false;
+    await player.pause();
+    // pause 之后再卸掉内核里已加载的媒体：停止＝回到「什么都没加载」，
+    // 下一次 resume() 会走「加载 + 自动播放」那条兜底。
+    await player.stop();
+    playlist.clearCurrent();
+    _position.value = 0;
+    _buffered.value = 0;
+    _duration.value = null;
+    _publish();
+  }
+
   /// 下一首。[auto] 为 true 表示是播放器自己的动作（跳损坏、播完自动续），
   /// 交给 Playlist 决定单曲循环下原地重播。
   Future<void> next({bool auto = false}) async {

@@ -21,6 +21,7 @@ dependencies:
   fast_gbk: ^1.0.0
   flutter_media_session: ^3.0.9
   crypto: ^3.0.8
+  permission_handler: ^13.0.2
 
 dev_dependencies:
   flutter_test:

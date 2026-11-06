@@ -141,6 +141,15 @@ class Playlist {
     return current;
   }
 
+  /// 清掉「当前曲目」指针，但**保留全部曲目**。
+  ///
+  /// 停止播放用：界面与系统侧都回到空态（快照没有标题 / 封面），列表里的歌
+  /// 一首不少，下一次 [nextIndex] / [prevIndex] 从队首重新开始。
+  void clearCurrent() {
+    _currentIndex = -1;
+    _syncShuffleCursor();
+  }
+
   /// 找不到时返回当前 current，不改状态（原版 setCurrentById）。
   Track? setCurrentById(String id) {
     final at = indexOfId(id);

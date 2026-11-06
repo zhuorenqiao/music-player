@@ -1,6 +1,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 媒体会话 / 前台服务（spec §7.1、§7.2）：
+         - WAKE_LOCK + FOREGROUND_SERVICE(+MEDIA_PLAYBACK)：息屏续播要前台服务，
+           Android 14 起缺 mediaPlayback 类型会被系统直接拒绝启动服务；
+         - POST_NOTIFICATIONS：Android 13+ 通知栏控件的前置权限（运行时申请）；
+         - READ_MEDIA_AUDIO（33+）/ READ_EXTERNAL_STORAGE（≤32）：文件选择与 SAF
+          导入要读的音频。
+         服务声明由 flutter_media_session 自带的 manifest 合并进来
+         （dev.wyrin.flutter_media_session.FlutterMediaSessionService，
+         foregroundServiceType=mediaPlayback|connectedDevice），这里不手写。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
-        android:label="light_music"
+        android:label="流光音乐"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

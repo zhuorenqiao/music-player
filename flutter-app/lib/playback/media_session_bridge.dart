@@ -29,7 +29,7 @@ sealed class MediaSessionCommand {
   const MediaSessionCommand();
 }
 
-/// 播放：回到当前曲目并重新开始播放（等价于界面上的播放按钮）。
+/// 播放：从当前位置继续当前曲目（等价于界面上的播放按钮，进度不打回 0）。
 class PlayCommand extends MediaSessionCommand {
   const PlayCommand();
 }
@@ -49,7 +49,7 @@ class PreviousCommand extends MediaSessionCommand {
   const PreviousCommand();
 }
 
-/// 停止播放内核（清当前加载的媒体，回到未加载状态）。
+/// 停止：暂停并清空当前曲目（回到空态），播放列表原样保留。
 class StopCommand extends MediaSessionCommand {
   const StopCommand();
 }
@@ -231,11 +231,14 @@ class MediaSessionCoordinator {
   }
 
   /// 系统侧动作 → transport 的既有方法。这里是唯一的翻译点。
+  ///
+  /// 播放走 [TransportController.resume]（不重载、接着放），停止走
+  /// [TransportController.stopPlayback]（暂停 + 清当前曲目 → 空态）：
+  /// 锁屏按钮与界面按钮的听觉与数据结果必须一致，不能给系统留第二条路径。
   void _onCommand(MediaSessionCommand command) {
     switch (command) {
       case PlayCommand():
-        final id = transport.current?.id;
-        if (id != null) unawaited(transport.playTrack(id));
+        unawaited(transport.resume());
       case PauseCommand():
         unawaited(transport.player.pause());
       case NextCommand():
@@ -243,7 +246,7 @@ class MediaSessionCoordinator {
       case PreviousCommand():
         unawaited(transport.previous());
       case StopCommand():
-        unawaited(transport.player.stop());
+        unawaited(transport.stopPlayback());
       case SeekCommand(:final seconds):
         unawaited(transport.seekTo(seconds));
     }
