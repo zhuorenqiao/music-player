@@ -143,11 +143,17 @@ int _compareCodePoints(String a, String b) {
 /// - 隐藏项一律跳过：相对于 [root] 的路径里任何一段以 `.` 开头都算
 ///   （`.git`、`.cache` 这类目录，以及 `.DS_Store` 这类文件）；
 /// - 只收白名单扩展名（[isSupportedExtension]）；
-/// - 不跟随符号链接目录：`followLinks: false` 下链接以 [Link] 出现，
-///   天然被上面的 `is File` 过滤掉，不会绕回来把同一批文件扫两遍；
+/// - 符号链接一律跳过，文件和目录都算：`followLinks: false` 下链接以
+///   [Link] 出现，被下面的 `is File` 一并过滤，不会绕回来把同一批文件扫两遍。
+///   这是已知限制而非疏漏——Android 的 SAF 路径（content://）根本不暴露符号
+///   链接，桌面端把音乐库摆在符号链接目录下又是极少见用法，为它承担「同一首
+///   歌出现两次 / 成环」的风险不划算；
 /// - 目录不存在或读不了：返回已扫到的部分（通常是空），不抛异常；
-/// - [maxFiles] 是硬上限，达到即停止枚举。截断发生在枚举顺序上而不是排序后，
-///   因为提前停下才能避免在超大目录里白扫几万个条目。
+/// - [maxFiles] 是硬上限，但截断发生在**自然排序之后**：先把整个目录枚举成
+///   路径列表，排好序再取前 [maxFiles] 个。不在枚举途中提前 break，是因为
+///   留哪几个不能由文件系统的枚举顺序决定——NTFS 大致按字典序、ext4 常常
+///   是哈希序，提前停会让桌面和 Android 留下不同的歌，再被自然排序排成一份
+///   看着合理的列表。代价是超大目录要全部枚举一遍（只存路径，不读文件内容）。
 Future<List<ScannedAudio>> scanAudioDirectory(
   String root, {
   int maxFiles = 2000,
@@ -162,7 +168,6 @@ Future<List<ScannedAudio>> scanAudioDirectory(
       recursive: recursive,
       followLinks: false,
     )) {
-      if (found.length >= maxFiles) break;
       if (entity is! File) continue;
       if (_hasHiddenSegment(entity.path, root)) continue;
       if (!_isAudioPath(entity.path)) continue;
@@ -172,7 +177,8 @@ Future<List<ScannedAudio>> scanAudioDirectory(
     // 权限不足 / 目录在枚举途中被删：把已经扫到的交出去，导入流程继续跑。
   }
   return [
-    for (final path in naturalSort(found)) ScannedAudio(path, p.basename(path)),
+    for (final path in naturalSort(found).take(maxFiles))
+      ScannedAudio(path, p.basename(path)),
   ];
 }
 

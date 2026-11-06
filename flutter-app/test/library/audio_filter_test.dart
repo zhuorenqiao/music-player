@@ -79,13 +79,34 @@ void main() {
     dir.deleteSync(recursive: true);
   });
 
-  test('maxFiles 截断', () async {
+  test('maxFiles 先自然排序再截断，取自然序前三个', () async {
     final dir = Directory.systemTemp.createTempSync('light-scan-limit');
-    for (var i = 0; i < 5; i++) {
-      File('${dir.path}/$i.flac').writeAsStringSync('x');
+    // 故意按数值倒序创建 track-20..track-1：文件系统可能按创建序枚举（此处
+    // 从 20 开始），也可能按字典序枚举（此处 track-1、track-10、track-11
+    // 打头），两种顺序下「枚举到 maxFiles 就停」都拿不到自然序前三个。
+    // 自然序前三个是 1、2、3，与枚举顺序无关。
+    for (var i = 20; i >= 1; i--) {
+      File('${dir.path}/track-$i.flac').writeAsStringSync('x');
     }
+
     final found = await scanAudioDirectory(dir.path, maxFiles: 3);
-    expect(found.length, 3);
+    expect(found.map((e) => e.name).toList(), [
+      'track-1.flac',
+      'track-2.flac',
+      'track-3.flac',
+    ]);
+
+    // 再扫一遍：截断点不能随枚举顺序漂，同一目录永远得到同一份列表。
+    final again = await scanAudioDirectory(dir.path, maxFiles: 3);
+    expect(again.map((e) => e.name).toList(), [
+      'track-1.flac',
+      'track-2.flac',
+      'track-3.flac',
+    ]);
+
+    // 上限大于文件数时全都要，不因截断丢文件。
+    final all = await scanAudioDirectory(dir.path, maxFiles: 20);
+    expect(all.length, 20);
     dir.deleteSync(recursive: true);
   });
 
