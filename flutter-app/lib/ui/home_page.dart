@@ -18,6 +18,7 @@ import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
 import 'header.dart';
 import 'shell.dart';
+import 'stage.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -45,7 +46,7 @@ class HomePage extends StatelessWidget {
             onAddFolder: () => _addFolder(library),
             onClearPlaylist: library.clearPlaylist,
           ),
-          stage: const _StageSlot(), // T26 换成曲目区（封面、歌名、歌词）
+          stage: const Stage(), // T26 起是真的播放卡
           panel: const _PanelSlot(), // T28 换成播放列表 / 最近两个 tab 的面板
           transport: const _TransportSlot(), // T29 换成播放控制条（进度、按钮、音量）
         ),
@@ -66,48 +67,6 @@ class HomePage extends StatelessWidget {
     final folder = await pickAudioFolder();
     if (folder == null) return;
     await library.importDirectory(folder);
-  }
-}
-
-/// 曲目区占位（T26 替换）：空态文案与原版 `IDLE_TITLE` / `IDLE_ARTIST` 一致。
-class _StageSlot extends StatelessWidget {
-  const _StageSlot();
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(kRadiusXl),
-        border: Border.all(color: tokens.border),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [tokens.cardA, tokens.cardB],
-        ),
-      ),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.album_outlined, size: 44, color: tokens.textFaint),
-          const SizedBox(height: 14),
-          Text(
-            '未选择曲目',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: tokens.text,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '从播放列表选一首开始',
-            style: TextStyle(fontSize: 12.8, color: tokens.textDim),
-          ),
-        ],
-      ),
-    );
   }
 }
 
