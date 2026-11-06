@@ -259,10 +259,14 @@ Windows 侧先跑 `flutter run -d windows`（或直接用 A1 构建出来的 Rel
 
 ### B8 Android 真机（**待设备**：本机 `flutter devices` 只有 Windows / Chrome / Edge）
 
-> 采集本记录时这台机器上没有连任何 Android 设备或模拟器，所以 B8 整段是
+> 采集本记录时这台机器上没有连任何 Android 设备或模拟器（本轮 `flutter devices`
+> 实测仍是 3 台：Windows / Chrome / Edge），所以 B8 整段是
 > **pending-device**，一条都没有实跑过。插好设备后按下面顺序补：
-> `flutter devices` 确认 → `flutter run -d android`（或 `flutter build apk --debug`
-> 后 `flutter install` / `adb install -r build/app/outputs/flutter-apk/app-release.apk`）。
+> `flutter devices` 确认 → `flutter run -d windows` 那套不用重来，Android 侧
+> `flutter run -d android`（或直接装 A1 那条构建出来的
+> `build/app/outputs/flutter-apk/app-debug.apk`：`flutter install` /
+> `adb install -r build/app/outputs/flutter-apk/app-debug.apk`）。
+> 本波只产 debug 包，**没有** `app-release.apk`，别照旧路径去找它。
 
 | # | 动作 | 期望 | 结果 |
 | --- | --- | --- | --- |
