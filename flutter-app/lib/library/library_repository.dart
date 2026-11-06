@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../playback/play_mode.dart';
 import '../playback/track.dart';
 
@@ -120,6 +122,10 @@ class LibrarySnapshot {
 /// → 把 `.tmp` rename 成正式文件。首次保存会把新文件同时留一份 `.bak`，
 /// 这样「刚存完就坏」也有得回退。任何文件系统异常都被吞掉：存档失败只丢历史，
 /// 不能反过来打断正在播放的曲目（原版对 IndexedDB 配额不足也是同一路处理）。
+///
+/// 唯一例外：上次 [load] 发现正式文件解析不了（回退过 `.bak`）时，正式文件是脏的，
+/// 把它轮转进 `.bak` 会顶掉唯一一份好存档——这种保存只写 `.tmp` 再就位，
+/// 不碰 `.bak`；正式文件被修好后恢复常规轮转。
 class LibraryRepository {
   LibraryRepository({required this.directory, this.fileName = 'library.json'});
 
@@ -134,6 +140,15 @@ class LibraryRepository {
   /// 最近一次 [load] 是否没能用上正式文件（回退 `.bak` 或两份都读不出）。
   bool get corrupted => _corrupted;
 
+  /// 正式文件内容已确认不可用（上次 [load] 时盘上有文件却解析不出来）。
+  /// 为真时保存不能轮转：那份脏文件会顶掉 `.bak` 里的唯一好存档。
+  bool _primaryKnownBad = false;
+
+  /// 测试用接缝：正式文件就位（rename/copy）之前的钩子，用于验证写入顺序。
+  /// 生产代码从不赋值，行为与没有它时完全一致。
+  @visibleForTesting
+  Future<void> Function()? beforeRename;
+
   String get _path => '$directory/$fileName';
   String get _bakPath => '$_path$_bakSuffix';
   String get _tmpPath => '$_path$_tmpSuffix';
@@ -146,13 +161,18 @@ class LibraryRepository {
     final primaryPresent = await _exists(_path);
     final primary = await _readJson(_path);
     final loaded = primary == null ? null : _parse(primary);
-    if (loaded != null) return loaded;
+    if (loaded != null) {
+      _primaryKnownBad = false;
+      return loaded;
+    }
 
     final backupPresent = await _exists(_bakPath);
     final backup = await _readJson(_bakPath);
     final fallback = backup == null ? null : _parse(backup);
     // 盘上有文件却用不上 = 脏存档；连文件都没有（首次启动）不算
     _corrupted = primaryPresent || backupPresent;
+    // 正式文件在盘上却读不出/解析不出：记住它，下次保存别拿它换掉 `.bak`
+    _primaryKnownBad = primaryPresent;
     if (fallback != null) return fallback..corrupted = true;
     return LibrarySnapshot(corrupted: _corrupted);
   }
@@ -203,14 +223,20 @@ class LibraryRepository {
       return;
     }
     final tmp = File(_tmpPath);
+    // 快照：本次写入要不要轮转备份，只由进入时已知的状态决定
+    final primaryKnownBad = _primaryKnownBad;
     try {
       await Directory(directory).create(recursive: true);
       await tmp.writeAsString(content, flush: true);
+      await beforeRename?.call();
       final primary = File(_path);
-      if (await primary.exists()) {
+      // 已知脏的正式文件绝不轮转：那会把 `.bak` 里唯一的好存档删掉
+      if (!primaryKnownBad && await primary.exists()) {
         await _rotateBackup(primary);
       }
-      await _promote(tmp);
+      if (await _promote(tmp)) {
+        _primaryKnownBad = false; // 正式文件已换成新内容，脏标记作废
+      }
       await _ensureBackup();
     } catch (_) {
       // 目录不可写、配额不足、文件被占用……静默放弃本次保存
@@ -235,13 +261,20 @@ class LibraryRepository {
     }
   }
 
-  Future<void> _promote(File tmp) async {
+  /// 正式文件就位；成功返回 true（`_write` 据此决定能不能清掉「正式文件已知脏」）。
+  Future<bool> _promote(File tmp) async {
     try {
       await tmp.rename(_path);
+      return true;
     } catch (_) {
       // 个别平台 rename 不能覆盖已存在的目标：退回复制，
       // 临时文件由 `_write` 的 finally 清理
-      await tmp.copy(_path);
+      try {
+        await tmp.copy(_path);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
   }
 

@@ -1,4 +1,5 @@
 // test/library/library_repository_test.dart
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -178,6 +179,65 @@ void main() {
     expect(File(tmpPath()).existsSync(), isFalse);
   });
 
+  /// 确定性证明（round 1）：B 在 A 的 rename 之前发起，必须等 A 写完才进写入区，
+  /// 最终落盘的是 B —— 顺序由闸门保证，不是靠并发运气。
+  test('A 未完成 rename 时发起的 B 必须排在其后完成', () async {
+    final repo = LibraryRepository(directory: dir.path);
+    final aEntered = Completer<void>();
+    final releaseA = Completer<void>();
+    final bEntered = Completer<void>();
+    var reached = 0;
+    repo.beforeRename = () async {
+      reached += 1;
+      if (reached == 1) {
+        aEntered.complete();
+        await releaseA.future; // A 停在写入区中间，测试据此判定 B 有没有抢跑
+      } else {
+        bEntered.complete();
+      }
+    };
+
+    final listA = [t('a1'), t('a2'), t('a3'), t('a4')];
+    final listB = [t('b1'), t('b2')];
+    final saveA = repo.save(
+      LibrarySnapshot(tracks: listA, order: listA.map((e) => e.id).toList()),
+    );
+    await aEntered.future;
+
+    final saveB = repo.save(
+      LibrarySnapshot(tracks: listB, order: listB.map((e) => e.id).toList()),
+    );
+    // A 占着闸门期间给 B 充分的抢跑机会（不修闸门时 B 会在这里进写入区）
+    await Future.any<void>([
+      bEntered.future,
+      Future<void>.delayed(const Duration(milliseconds: 300)),
+    ]);
+    expect(reached, 1, reason: 'B 不得在 A 完成 rename 之前进入写入区');
+
+    releaseA.complete();
+    await Future.wait([saveA, saveB]);
+    expect(reached, 2);
+
+    // 后发起的 B 才是最终内容：A 绝不能把 B 的结果盖掉
+    final primary = (jsonDecode(File(primaryPath()).readAsStringSync()) as Map)
+        .cast<String, Object?>();
+    expect((primary['tracks'] as List).map((e) => (e as Map)['id']), [
+      'b1',
+      'b2',
+    ]);
+    expect(primary['order'], ['b1', 'b2']);
+    // `.bak` 是上一代 = A 那一份（轮转没被 B 的排入打乱）
+    expect(
+      (jsonDecode(File(backupPath()).readAsStringSync()) as Map)['order'],
+      ['a1', 'a2', 'a3', 'a4'],
+    );
+    expect(File(tmpPath()).existsSync(), isFalse);
+
+    final snap = await LibraryRepository(directory: dir.path).load();
+    expect(snap.tracks.map((e) => e.id), ['b1', 'b2']);
+    expect(snap.corrupted, isFalse);
+  });
+
   test('order 缺项补末尾、重复只留一次，currentId 指空归零', () async {
     File(primaryPath()).writeAsStringSync(
       jsonEncode({
@@ -208,6 +268,59 @@ void main() {
     File(primaryPath()).writeAsStringSync('{');
     final snap = await repo.load();
     expect(snap.tracks.map((e) => e.id), ['1']);
+  });
+
+  /// 回归（round 1）：恢复之后再保存，不能把脏正式文件轮转进 `.bak`。
+  test('回退之后的保存不顶掉好备份，二次损坏仍能全量恢复', () async {
+    final repo = LibraryRepository(directory: dir.path);
+    final ids = ['1', '2', '3'];
+    final tracks = [t('1'), t('2'), t('3')];
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.4));
+
+    // 1) 正式文件损坏 → load 从 .bak 恢复
+    File(primaryPath()).writeAsStringSync('{ 坏掉的 json');
+    final recovered = await repo.load();
+    expect(recovered.tracks.map((e) => e.id), ids);
+    expect(recovered.corrupted, isTrue);
+
+    // 2) 恢复后的任意保存（音量持久化 / deleteTracks 都走这条路）
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.8));
+
+    // 3) 正式文件二次损坏 → 仍能恢复出完整歌单（修复前这里是空快照）
+    File(primaryPath()).writeAsStringSync('{ 又坏掉了');
+    final second = await repo.load();
+    expect(second.tracks.map((e) => e.id), ids);
+    expect(second.order, ids);
+    expect(second.volume, 0.4);
+    expect(second.corrupted, isTrue);
+    expect(repo.corrupted, isTrue);
+
+    // `.bak` 必须还是回退用的那份好存档，而不是被脏正式文件顶掉
+    final backup = (jsonDecode(File(backupPath()).readAsStringSync()) as Map)
+        .cast<String, Object?>();
+    expect(backup['volume'], 0.4);
+    expect((backup['tracks'] as List).length, 3);
+  });
+
+  test('脏正式文件被保存修好之后，轮转语义恢复', () async {
+    final repo = LibraryRepository(directory: dir.path);
+    final ids = ['1', '2'];
+    final tracks = [t('1'), t('2')];
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.4));
+    File(primaryPath()).writeAsStringSync('{ 坏掉的 json');
+    await repo.load();
+
+    // 这次保存跳过轮转：`.bak` 还是 0.4
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.8));
+    double? backupVolume() =>
+        ((jsonDecode(File(backupPath()).readAsStringSync()) as Map)['volume']
+                as num?)
+            ?.toDouble();
+    expect(backupVolume(), 0.4);
+
+    // 正式文件已健康：再保存就照常把上一代滚进 `.bak`
+    await repo.save(LibrarySnapshot(tracks: tracks, order: ids, volume: 0.9));
+    expect(backupVolume(), 0.8);
   });
 
   test('目录不存在时 save 自动创建', () async {
