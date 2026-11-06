@@ -9,6 +9,10 @@
 // `format` / `year`）：JS 的 `format: 'mp3'` 改钉 `version`（'id3v2.3' /
 // 'id3v1'）；JS 的 `year` 没有对应字段，id3v1 家族改用「不设置 albumArtist」
 // 补足第 5 条断言。详见 task-7-report.md 的偏差表。
+//
+// 另外第 9 个用例（id3v22）不是 JS 家族的对译，而是 fix round 1 的回归证明：
+// JS 侧没有 v2.2 夹具，此前 v2.2 分支的字节布局只在临时探针里验过。上面 8 个
+// 用例的名字与断言一律未改。
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -71,6 +75,25 @@ void main() {
     final tag = await parse(file);
     expect(tag?.title, 'Unsync 测试');
     expect(tag?.version, 'id3v2.4');
+  });
+
+  test('id3v22：3 字节帧头 + PIC 格式码（TT2 / PIC 均解出）', () async {
+    // 回归（fix round 1）：v2.2 的帧头是 3 字节 id + 3 字节大端长度、**没有
+    // flags**；PIC 里 mime 的位置是 3 字符格式码（PNG），格式码后面直接是
+    // 封面类型字节。夹具若按 v2.3 布局写 4 字节长度 + 2 字节 flags，解析器读
+    // 到的帧长恒为 0，整标签一个字段都解不出来 —— 本用例钉住这条端到端路径。
+    final file = bytes([
+      id3v2([
+        textFrame('TT2', '十年', version: 2),
+        apicFrame('image/png', pngBody(), version: 2),
+      ], version: 2),
+      ...mpegFrame(),
+    ]);
+    final tag = (await parse(file))!;
+    expect(tag.version, 'id3v2.2');
+    expect(tag.title, '十年');
+    expect(tag.pictureMime, 'image/png');
+    expect(tag.picture, pngBody());
   });
 
   test('id3v1：尾部 128 字节 TAG（无编码位，Latin-1 兜底）', () async {
