@@ -1,6 +1,7 @@
 // lib/core/app_prefs.dart
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 带容错的键值读写：任何解析失败都回退默认值并清掉脏数据，绝不抛出。
@@ -32,6 +33,15 @@ class AppPrefs {
     return AppPrefs._(_SharedBacking());
   }
 
+  /// 测试钩子：清掉 [_SharedBacking] 进程级缓存的插件句柄，强制下一次读取重新预热。
+  ///
+  /// `SharedPreferences.setMockInitialValues()` 会让插件自身的缓存失效，但
+  /// `warmUp()` 里的 `_cached ??=` 一旦命中非 null 就永不重取，导致跨用例读到
+  /// 上一个用例的陈旧快照、写进被替换掉的 store。用例的 `setUp()` 调本方法即可
+  /// 让 [ready] 或 [shared] 重新预热。仅测试可见，生产路径不受影响。
+  @visibleForTesting
+  static void resetCacheForTest() => _SharedBacking.resetCacheForTest();
+
   /// 测试用，不碰插件。
   factory AppPrefs.inMemory() => AppPrefs._(_MemoryBacking({}));
 
@@ -46,10 +56,11 @@ class AppPrefs {
     }
   }
 
-  /// 清理脏数据：删除失败只影响存储，不影响本次播放。
-  void _removeQuietly(String key) {
+  /// 清理脏数据：删除失败只影响存储，不影响本次播放；等待落盘完成再返回，
+  /// 保证随后经 [readString] 等读取能看到已删（读后写一致）。
+  Future<void> _removeQuietly(String key) async {
     try {
-      _backing.remove(key);
+      await _backing.remove(key);
     } catch (_) {
       // 存储不可用：忽略
     }
@@ -63,7 +74,7 @@ class AppPrefs {
 
   Future<void> writeString(String key, String value) async {
     try {
-      _backing.write(key, value);
+      await _backing.write(key, value);
     } catch (_) {
       // 存储不可用：不影响当前播放，与原版一致（原版提示「刷新后需要重新添加」）
     }
@@ -75,7 +86,7 @@ class AppPrefs {
     if (raw == null) return null;
     final value = num.tryParse(raw);
     if (value == null || !value.isFinite) {
-      _removeQuietly(key);
+      await _removeQuietly(key);
       return null;
     }
     num clamped = value;
@@ -92,7 +103,7 @@ class AppPrefs {
     final raw = _raw(key);
     if (raw == 'true') return true;
     if (raw == 'false') return false;
-    if (raw != null) _removeQuietly(key);
+    if (raw != null) await _removeQuietly(key);
     return fallback;
   }
 
@@ -106,7 +117,7 @@ class AppPrefs {
     try {
       return jsonDecode(raw);
     } catch (_) {
-      _removeQuietly(key);
+      await _removeQuietly(key);
       return null;
     }
   }
@@ -127,8 +138,12 @@ class AppPrefs {
 
 abstract class _Backing {
   String? read(String key);
-  void write(String key, String value);
-  void remove(String key);
+
+  /// 返回落盘 Future（内存后端为同步，返回 null 表示无需等待）。
+  /// 由 [AppPrefs.writeString]/[AppPrefs.remove] 在 try/catch 内 await，
+  /// 保证「await 完成＝值已写入」且平台写失败被吞掉而非逃逸成 zone 错误。
+  Future<void>? write(String key, String value);
+  Future<void>? remove(String key);
 }
 
 class _MemoryBacking implements _Backing {
@@ -139,10 +154,16 @@ class _MemoryBacking implements _Backing {
   String? read(String key) => _store[key];
 
   @override
-  void write(String key, String value) => _store[key] = value;
+  Future<void>? write(String key, String value) {
+    _store[key] = value;
+    return null;
+  }
 
   @override
-  void remove(String key) => _store.remove(key);
+  Future<void>? remove(String key) {
+    _store.remove(key);
+    return null;
+  }
 }
 
 class _SharedBacking implements _Backing {
@@ -161,20 +182,23 @@ class _SharedBacking implements _Backing {
     }
   }
 
+  /// 测试钩子：清空进程级句柄缓存，强制下一次 [warmUp] 重新取实例，
+  /// 避免跨用例读到上一个用例的陈旧快照。见 [AppPrefs.resetCacheForTest]。
+  static void resetCacheForTest() => _cached = null;
+
   @override
   String? read(String key) => _cached?.getString(key);
 
   @override
-  void write(String key, String value) {
-    warmUp().then((_) {
-      _cached?.setString(key, value);
-    }).catchError((Object _) {});
+  Future<void> write(String key, String value) async {
+    await warmUp();
+    // 句柄未就绪（存储不可用）时 _cached 为 null，整段静默跳过、不抛。
+    await _cached?.setString(key, value);
   }
 
   @override
-  void remove(String key) {
-    warmUp().then((_) {
-      _cached?.remove(key);
-    }).catchError((Object _) {});
+  Future<void> remove(String key) async {
+    await warmUp();
+    await _cached?.remove(key);
   }
 }
