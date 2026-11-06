@@ -3,23 +3,21 @@
 // 首页：把 [HomeLayout] 的四个区域接到业务 widget 上的薄壳。
 //
 // T25 起头部是真的 [AppHeader]（品牌 + 菜单抽屉），T26 换了曲目区，T28 换了
-// 列表面板；控制条（T29）仍是 token 着色的占位块。
+// 列表面板，T29 换了控制条（进度、五个按钮、音量、窄屏列表入口）—— 四个槽
+// 全是真 widget 了。
 // **结构不再改**：后续任务只替换传给 [HomeLayout] 的子 widget，`shell.dart`
 // 与这里的接线不动。
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../core/breakpoints.dart';
 import '../core/file_picking.dart';
-import '../core/format_time.dart';
-import '../playback/play_mode.dart';
 import '../state/library_state.dart';
-import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
 import 'header.dart';
 import 'panel.dart';
 import 'shell.dart';
 import 'stage.dart';
+import 'transport.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -49,7 +47,7 @@ class HomePage extends StatelessWidget {
           ),
           stage: const Stage(), // T26 起是真的播放卡
           panel: const Panel(), // T28 起是真的播放列表 / 最近面板
-          transport: const _TransportSlot(), // T29 换成播放控制条（进度、按钮、音量）
+          transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
         ),
       ),
     );
@@ -68,93 +66,5 @@ class HomePage extends StatelessWidget {
     final folder = await pickAudioFolder();
     if (folder == null) return;
     await library.importDirectory(folder);
-  }
-}
-
-/// 控制条占位（T29 替换）：模式文案 + 五个 40px 圆钮 + `--:-- / --:--`。
-class _TransportSlot extends StatelessWidget {
-  const _TransportSlot();
-
-  /// 模式 / 上一首 / 播放 / 下一首 / 静音的图标位（暂时不可点）。
-  static const List<IconData> _buttons = [
-    Icons.repeat,
-    Icons.skip_previous,
-    Icons.play_arrow,
-    Icons.skip_next,
-    Icons.volume_up,
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    // 模式文案读真实状态：存档里是单曲循环时，占位条也不该写「列表循环」
-    final mode = context.watch<PlayerState>().view.value.mode;
-    final time = '${formatTime(null)} / ${formatTime(null)}';
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: tokens.border),
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(kRadiusXl),
-        ),
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [tokens.barA, tokens.barB],
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            time,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12.8,
-              color: tokens.textDim,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          const SizedBox(height: 10),
-          // 换行而不是溢出：≤480 时按钮行本来就该折行（原版 .controls 换行）
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 10,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                playModeLabel(mode),
-                style: TextStyle(fontSize: 12.8, color: tokens.textDim),
-              ),
-              for (final icon in _buttons) _SlotButton(icon: icon),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 控制条上的圆钮位（T29 换成真正的按钮）。
-class _SlotButton extends StatelessWidget {
-  const _SlotButton({required this.icon});
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return Container(
-      width: kButtonSize,
-      height: kButtonSize,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: tokens.cardB,
-        border: Border.all(color: tokens.border),
-      ),
-      child: Icon(icon, size: 20, color: tokens.textDim),
-    );
   }
 }

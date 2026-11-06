@@ -241,6 +241,7 @@ class _CloseButton extends StatelessWidget {
       child: Tooltip(
         message: '收起',
         child: InkWell(
+          key: const Key('panel-close'),
           onTap: onClose,
           borderRadius: BorderRadius.circular(8),
           child: SizedBox(
