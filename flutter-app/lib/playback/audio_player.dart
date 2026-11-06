@@ -186,15 +186,15 @@ class AudioPlayer {
   Future<bool> seekBy(double delta) =>
       seek(position + (delta.isFinite ? delta : 0));
 
-  /// 设置音量。0 视为静音但保留 [_lastVolume]（原版 player.js:315-324）。
+  /// 设置音量。`v > 0` 解静音并记住；`v == 0` 只把音量留 0，**不动**静音标志
+  /// （原版 player.js:315-324 的 else 分支写 `muted = false`，静音与否由音量读数
+  /// 决定；`volume` getter 在这一支本来就返回 0）。
   Future<void> setVolume(double value) async {
     final v = _clamp01(value);
     _volume = v;
     if (v > 0) {
       _lastVolume = v;
       _muted = false;
-    } else {
-      _muted = true;
     }
     await _driver.setVolume(v);
     _emit(VolumeEvent(volume, _muted));

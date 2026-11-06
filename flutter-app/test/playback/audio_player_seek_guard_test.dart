@@ -48,7 +48,8 @@ void main() {
     // 内核只走到 40（落后超过 0.75s）：flush 应把它补到 50
     driver.emitPosition(40);
     scheduler.flush();
-    expect(driver.calls, contains('seek:50.0'));
+    // 原始一次 + 补做一次：只断言 contains 会被原始 seek 满足（同义反复）
+    expect(driver.calls.where((c) => c == 'seek:50.0').length, 2);
   });
 
   test('容差内（差 0.5s）不补做，避免打断正常推进', () async {
@@ -72,8 +73,15 @@ void main() {
     driver.emitPosition(0);
     driver.emitPlaying(true);
     await settle();
+    // 自激来源：给位置赋值本身会再派发一次 playing，且内核可能又把位置冲回起点。
+    // 第二次 playing(true) 时位置依然落后目标，若没有 corrected 标记就会再补一次。
+    driver.emitPosition(0);
+    driver.emitPlaying(true);
+    await settle();
     final seekCalls = driver.calls.where((c) => c.startsWith('seek:')).length;
-    expect(seekCalls, 2); // 原始一次 + 补做一次，不多不少
+    // 原始一次 + 补做一次，不多不少：第二次 playing(true) 必须一次都不加
+    expect(seekCalls, 2);
+    expect(driver.calls.where((c) => c == 'seek:60.0').length, 2);
     expect(scheduler.lastDelay, const Duration(milliseconds: 400));
   });
 
