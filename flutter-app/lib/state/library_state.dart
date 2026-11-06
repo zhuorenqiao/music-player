@@ -10,7 +10,7 @@
 //     输入框用即时值回显，过滤用 [filteredTracks] 里的生效值。
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import '../core/app_prefs.dart';
 import '../core/storage_keys.dart';
@@ -53,6 +53,13 @@ class LibraryState extends ChangeNotifier {
   bool _restoring = false;
   Timer? _searchDebounce;
 
+  /// 搜索框的文本控制器（T28 面板用）。
+  ///
+  /// 输入框的即时值就是它自己的内容；[keyword] 被外部改写时（点清空按钮、
+  /// 快捷键）这里也跟着同步，否则输入框会停在旧文字上。过滤一律走
+  /// [filteredTracks]（防抖后的生效值），不要把控制器内容直接拿去过滤。
+  final TextEditingController searchController = TextEditingController();
+
   /// 曲目列表与 `ImportService` 共用同一份（导入即入列，不需要二次同步）。
   Playlist get playlist => importer.playlist;
 
@@ -61,6 +68,12 @@ class LibraryState extends ChangeNotifier {
 
   /// 输入框里的即时值。
   String get keyword => _keyword;
+
+  /// 防抖之后真正参与过滤的关键词（`trim` + 小写）。
+  ///
+  /// 统计行用它判断「现在是不是过滤中」：拿 [keyword] 判断会让统计行比列表
+  /// 早一拍跳变，200ms 里出现「找到 N 首」配着完整列表的矛盾画面。
+  String get effectiveKeyword => _effectiveKeyword;
 
   /// 是否正在从文件仓还原。整个异步加载期间都为真。
   bool get restoring => _restoring;
@@ -87,6 +100,7 @@ class LibraryState extends ChangeNotifier {
   set keyword(String next) {
     if (_keyword == next) return;
     _keyword = next;
+    _syncSearchText(next);
     _searchDebounce?.cancel();
     _searchDebounce = null;
     final normalized = next.trim().toLowerCase();
@@ -101,6 +115,22 @@ class LibraryState extends ChangeNotifier {
     });
     notifyListeners();
   }
+
+  /// 把 [keyword] 的新值同步回输入框。文本没变就不动 —— 重新赋 `value` 会
+  /// 把光标挪到末尾，用户正在中间插字时不该被打断。
+  void _syncSearchText(String next) {
+    if (searchController.text == next) return;
+    searchController.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+  }
+
+  /// 点了「最近播放」里已经不在列表中的条目：只提示，不假装播放。
+  ///
+  /// 同 key 的提示只留一条（连点不会叠一串），与原版 `show(..., 'info')` 一致。
+  void toastMissingInPlaylist() =>
+      toasts.show('这首歌已经不在播放列表里了', key: 'recent-missing');
 
   /// 冷启动还原：读存档 → 按存档顺序整体替换列表 → 恢复模式与当前曲目。
   ///
@@ -232,6 +262,7 @@ class LibraryState extends ChangeNotifier {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    searchController.dispose();
     super.dispose();
   }
 }

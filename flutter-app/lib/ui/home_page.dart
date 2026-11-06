@@ -2,8 +2,8 @@
 //
 // 首页：把 [HomeLayout] 的四个区域接到业务 widget 上的薄壳。
 //
-// T25 起头部是真的 [AppHeader]（品牌 + 菜单抽屉），其余三个区域仍是 token
-// 着色的占位块，由后续任务逐个替换 —— T26 曲目区、T28 列表面板、T29 控制条。
+// T25 起头部是真的 [AppHeader]（品牌 + 菜单抽屉），T26 换了曲目区，T28 换了
+// 列表面板；控制条（T29）仍是 token 着色的占位块。
 // **结构不再改**：后续任务只替换传给 [HomeLayout] 的子 widget，`shell.dart`
 // 与这里的接线不动。
 import 'package:flutter/material.dart';
@@ -17,6 +17,7 @@ import '../state/library_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
 import 'header.dart';
+import 'panel.dart';
 import 'shell.dart';
 import 'stage.dart';
 
@@ -47,7 +48,7 @@ class HomePage extends StatelessWidget {
             onClearPlaylist: library.clearPlaylist,
           ),
           stage: const Stage(), // T26 起是真的播放卡
-          panel: const _PanelSlot(), // T28 换成播放列表 / 最近两个 tab 的面板
+          panel: const Panel(), // T28 起是真的播放列表 / 最近面板
           transport: const _TransportSlot(), // T29 换成播放控制条（进度、按钮、音量）
         ),
       ),
@@ -67,53 +68,6 @@ class HomePage extends StatelessWidget {
     final folder = await pickAudioFolder();
     if (folder == null) return;
     await library.importDirectory(folder);
-  }
-}
-
-/// 列表面板占位（T28 替换）：只画两个 tab 标签与空列表底。
-class _PanelSlot extends StatelessWidget {
-  const _PanelSlot();
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(kRadiusXl),
-        border: Border.all(color: tokens.border),
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [tokens.panelA, tokens.panelB],
-        ),
-      ),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Text(
-                '播放列表',
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  color: tokens.accent,
-                ),
-              ),
-              const SizedBox(width: 18),
-              Text(
-                '最近',
-                style: TextStyle(fontSize: 13.5, color: tokens.textDim),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Container(height: 1, color: tokens.border),
-          const Expanded(child: SizedBox.shrink()),
-        ],
-      ),
-    );
   }
 }
 

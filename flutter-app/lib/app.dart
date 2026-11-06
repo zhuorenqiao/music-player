@@ -16,6 +16,7 @@ import 'playback/media_session_bridge.dart' show MediaSessionCoordinator;
 import 'playback/playlist.dart';
 import 'playback/transport_controller.dart';
 import 'state/library_state.dart';
+import 'state/panel_controller.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
 import 'state/toast_state.dart';
@@ -90,6 +91,9 @@ class LightMusicApp extends StatelessWidget {
         ChangeNotifierProvider<PlayerState>.value(value: bootstrap.player),
         ChangeNotifierProvider<RecentState>.value(value: bootstrap.recent),
         ChangeNotifierProvider<ToastState>.value(value: bootstrap.toasts),
+        // 面板的选中 tab 是纯界面态：不属于组合根，界面装配时建即可。
+        // 放在路由之上，T29 的弹层复用同一份。
+        ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
         Provider<AppPrefs>.value(value: bootstrap.prefs),
       ],
       child: MaterialApp(
