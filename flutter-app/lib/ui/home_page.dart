@@ -2,17 +2,21 @@
 //
 // 首页：把 [HomeLayout] 的四个区域接到业务 widget 上的薄壳。
 //
-// T24 只搭骨架与装配：四个区域现在都还是 token 着色的占位块，由后续任务
-// 逐个替换 —— T25 头部、T26 曲目区、T28 列表面板、T29 控制条。**结构不再改**：
-// 后续任务只替换传给 [HomeLayout] 的子 widget，`shell.dart` 与这里的接线不动。
+// T25 起头部是真的 [AppHeader]（品牌 + 菜单抽屉），其余三个区域仍是 token
+// 着色的占位块，由后续任务逐个替换 —— T26 曲目区、T28 列表面板、T29 控制条。
+// **结构不再改**：后续任务只替换传给 [HomeLayout] 的子 widget，`shell.dart`
+// 与这里的接线不动。
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/breakpoints.dart';
+import '../core/file_picking.dart';
 import '../core/format_time.dart';
 import '../playback/play_mode.dart';
+import '../state/library_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
+import 'header.dart';
 import 'shell.dart';
 
 class HomePage extends StatelessWidget {
@@ -21,6 +25,9 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
+    // 抽屉的动作要落在同一份曲库状态上；先取出来，回调触发时再 await，
+    // 不在 await 之后碰 context。
+    final library = context.read<LibraryState>();
     return Scaffold(
       backgroundColor: tokens.bg,
       // `body::before`：一整面对角渐变，不参与滚动
@@ -32,51 +39,33 @@ class HomePage extends StatelessWidget {
             colors: [tokens.bgGradA, tokens.bgGradB],
           ),
         ),
-        child: const HomeLayout(
-          header: _HeaderSlot(), // T25 换成真正的头部（品牌 + 导入 / 菜单）
-          stage: _StageSlot(), // T26 换成曲目区（封面、歌名、歌词）
-          panel: _PanelSlot(), // T28 换成播放列表 / 最近两个 tab 的面板
-          transport: _TransportSlot(), // T29 换成播放控制条（进度、按钮、音量）
+        child: HomeLayout(
+          header: AppHeader(
+            onAddFiles: () => _addFiles(library),
+            onAddFolder: () => _addFolder(library),
+            onClearPlaylist: library.clearPlaylist,
+          ),
+          stage: const _StageSlot(), // T26 换成曲目区（封面、歌名、歌词）
+          panel: const _PanelSlot(), // T28 换成播放列表 / 最近两个 tab 的面板
+          transport: const _TransportSlot(), // T29 换成播放控制条（进度、按钮、音量）
         ),
       ),
     );
   }
-}
 
-/// 头部占位（T25 替换）。
-class _HeaderSlot extends StatelessWidget {
-  const _HeaderSlot();
+  /// 「添加音乐」：选完文件再交给状态层。取消（空结果）什么都不做 ——
+  /// 导入服务自己会挡掉不支持的格式与空结果，这里不弹提示。
+  Future<void> _addFiles(LibraryState library) async {
+    final paths = await pickAudioFiles();
+    if (paths.isEmpty) return;
+    await library.importPaths(paths);
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return SizedBox(
-      height: 44,
-      child: Row(
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: tokens.accentSoft,
-              shape: BoxShape.circle,
-              border: Border.all(color: tokens.accentLine),
-            ),
-            child: Icon(Icons.graphic_eq, size: 16, color: tokens.accent),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            '流光音乐',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-              color: tokens.text,
-            ),
-          ),
-        ],
-      ),
-    );
+  /// 「添加整个文件夹」：同理，取消不提示。
+  Future<void> _addFolder(LibraryState library) async {
+    final folder = await pickAudioFolder();
+    if (folder == null) return;
+    await library.importDirectory(folder);
   }
 }
 
