@@ -192,4 +192,39 @@ void main() {
     expect(fresh.currentId, secondId);
     expect(fresh.playlist.mode, PlayMode.one);
   });
+
+  /// 造一个记录回调的实例：`onPlaylistChanged` 的每次调用都落进 [calls]。
+  LibraryState buildRecordingState(List<String?> calls) => LibraryState(
+    prefs: prefs,
+    repo: LibraryRepository(directory: dir.path),
+    importer: ImportService(playlist: Playlist(tracks: const []), toasts: toasts),
+    toasts: toasts,
+    onPlaylistChanged: ({String? removedId}) => calls.add(removedId),
+  );
+
+  test('删除曲目：回调带上被删掉的 id，装配层据此判断是不是在播的那首', () async {
+    final calls = <String?>[];
+    final seam = buildRecordingState(calls);
+    addTearDown(seam.dispose);
+    await seam.importPaths(['/m/a.flac', '/m/b.flac']);
+    calls.clear(); // 导入那一次的收尾不算
+
+    final id = seam.tracks.first.id;
+    await seam.removeTrack(id);
+
+    expect(calls, [id]);
+  });
+
+  test('清空播放列表：回调不带 id（列表已空，装配层据此停播）', () async {
+    final calls = <String?>[];
+    final seam = buildRecordingState(calls);
+    addTearDown(seam.dispose);
+    await seam.importPaths(['/m/a.flac']);
+    calls.clear();
+
+    await seam.clearPlaylist();
+
+    expect(calls, [null]);
+    expect(seam.tracks, isEmpty);
+  });
 }

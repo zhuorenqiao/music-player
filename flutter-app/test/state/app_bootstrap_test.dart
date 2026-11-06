@@ -5,10 +5,14 @@
 //
 // 另有两条启动健壮性（T22 修正）：媒体会话起不来 / 永不返回都不许挡住
 // `runApp`，通知权限只查询不申请。
+//
+// 以及 T24 补上的接线（T23 遗留）：删掉正在播的那首要接着播下一首，
+// 清空列表要停播并卸载内核里的曲目。
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:light_music/app.dart';
 import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/core/storage_keys.dart';
 import 'package:light_music/library/library_repository.dart';
@@ -21,6 +25,8 @@ import 'package:light_music/state/library_state.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
 import 'package:light_music/state/toast_state.dart';
+import 'package:light_music/ui/home_page.dart';
+import 'package:light_music/ui/toasts.dart';
 import 'package:provider/provider.dart';
 
 Track track(String id, String title) =>
@@ -187,10 +193,55 @@ void main() {
 
     await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
 
-    final context = tester.element(find.text('流光音乐 · M1 骨架'));
+    final context = tester.element(find.byType(HomePage));
     expect(context.read<LibraryState>(), same(bootstrap.library));
     expect(context.read<PlayerState>(), same(bootstrap.player));
     expect(context.read<RecentState>(), same(bootstrap.recent));
     expect(context.read<ToastState>(), same(bootstrap.toasts));
+    // 提示条宿主编在路由之上：任何页面都能看到同一条提示
+    expect(find.byType(ToastsHost), findsOneWidget);
+  });
+
+  test('删除正在播的曲目：接续曲目接手播放', () async {
+    final driver = FakeAudioDriver();
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: driver,
+      bridge: FakeMediaSessionBridge(),
+    );
+    // 存档顺序是 [b, a]、当前曲目 a：先真的把 a 加载起来
+    await bootstrap.player.playTrack('a');
+    expect(driver.calls, contains('open:/m/a.flac'));
+    driver.calls.clear();
+
+    await bootstrap.library.removeTrack('a');
+    await pumpEventQueue();
+
+    expect(bootstrap.player.current?.id, 'b');
+    // 内核里那首被删掉了，接续的那首必须真的被加载 —— 否则界面显示 b、
+    // 声音还停在已删的 a 上（或直接静音）
+    expect(driver.calls, contains('open:/m/b.flac'));
+  });
+
+  test('清空播放列表：停播并卸载内核里的曲目', () async {
+    final driver = FakeAudioDriver();
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: driver,
+      bridge: FakeMediaSessionBridge(),
+    );
+    await bootstrap.player.playTrack('a');
+    driver.calls.clear();
+
+    await bootstrap.library.clearPlaylist();
+    await pumpEventQueue();
+
+    expect(bootstrap.player.current, isNull);
+    expect(bootstrap.player.view.value.current, isNull);
+    // stopPlayback：暂停 + 卸载；只清列表不卸载，通知栏会留一条幽灵条目
+    expect(driver.calls, contains('pause'));
+    expect(driver.calls, contains('stop'));
   });
 }

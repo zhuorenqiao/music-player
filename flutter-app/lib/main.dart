@@ -15,16 +15,18 @@
 // （[notificationPermissionGranted]，绝不 prompt），供界面提示条用真实状态。
 // 被拒也不阻断播放，只是通知栏控件拿不到（界面另给 info 级提示）。
 //
-// 界面层不 new 任何业务对象：`LightMusicApp(bootstrap: ...)` 拿到的是建好的
-// 三个状态层与提示条，并在应用根注册给 provider。T24 会把 `LightMusicApp` /
-// `AppBootstrap` 搬到 `lib/app.dart`，并用 `HomePage`/`HomeLayout` 的双栏骨架
-// 替换下面这个占位 home；状态层本身不再改动。
+// 界面层不 new 任何业务对象：`LightMusicApp(bootstrap: ...)` 只拿建好的三个
+// 状态层与提示条（注册给 provider 的事在 `app.dart`）。状态层本身不认识播放
+// 编排，列表改动后的收尾由这里的 [_playlistChangeHandler] 接到
+// [TransportController] 上。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 // 只取 MediaKit.ensureInitialized：包里的 Playlist 与我们的歌单模型重名。
 import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:path_provider/path_provider.dart';
-import 'package:provider/provider.dart';
 
+import 'app.dart';
 import 'core/app_prefs.dart';
 import 'core/platform_services.dart';
 import 'library/import_service.dart';
@@ -42,8 +44,6 @@ import 'state/library_state.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
 import 'state/toast_state.dart';
-import 'theme/app_theme.dart';
-import 'theme/app_tokens.dart';
 
 /// 媒体会话附着的上限。`activate()` 会抛（Android 没有 Activity 时 `NO_ACTIVITY`）
 /// 也可能长时间不返回（13+ 要等用户点系统权限对话框），而它一旦把启动扣住，
@@ -69,56 +69,6 @@ Future<void> main() async {
     bridge: FlutterMediaSessionBridge(),
   );
   runApp(LightMusicApp(bootstrap: bootstrap));
-}
-
-/// 组合根的构造结果。界面层从这里取对象，不自己 new 业务单例。
-class AppBootstrap {
-  AppBootstrap({
-    required this.prefs,
-    required this.repository,
-    required this.library,
-    required this.player,
-    required this.recent,
-    required this.toasts,
-    required this.mediaSession,
-    required this.notificationGranted,
-    required this.notificationPermission,
-  });
-
-  final AppPrefs prefs;
-  final LibraryRepository repository;
-
-  /// 曲库（播放列表、搜索、导入、落库）。
-  final LibraryState library;
-
-  /// 播放器（进度 notifier、模式、音量、持久化时机）。
-  final PlayerState player;
-
-  /// 最近播放（薄包装，条目本体在 [RecentState.store]）。
-  final RecentState recent;
-
-  final ToastState toasts;
-
-  /// 把系统侧动作接回 [TransportController] 的协调器；已在 [buildBootstrap]
-  /// 里 attach 过，界面层只持有引用，不需要再启动它。
-  final MediaSessionCoordinator mediaSession;
-
-  /// 通知权限是否可用。false 只影响通知栏 / 锁屏控件的可见性，不影响播放。
-  ///
-  /// 这是**首帧时**的快照：Android 上 `activate()` 的弹窗在 attach 里已经弹完，
-  /// 所以通常就是用户的真实选择。它有两个不新鲜的时刻 —— 权限框的答复晚于
-  /// attach 的 3 秒上限、以及用户后来在系统设置里改权限 —— 需要实时值时用
-  /// [notificationPermission]（只查询、绝不弹窗）。
-  final bool notificationGranted;
-
-  /// 实时查询通知权限，不弹窗（申请归 `activate()`）。提示条（T24）用它。
-  final Future<bool> Function() notificationPermission;
-
-  /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
-  Playlist get playlist => library.playlist;
-  TransportController get transport => player.transport;
-  ImportService get importer => library.importer;
-  RecentStore get recentStore => recent.store;
 }
 
 /// 建对象、恢复存档、挂上媒体会话。测试可注入假 driver / 假 bridge。
@@ -156,8 +106,8 @@ Future<AppBootstrap> buildBootstrap({
     repo: repository,
     importer: importer,
     toasts: toasts,
-    // 还原 / 导入 / 删除 / 换曲都不经过播放编排，补推视图这一步交给装配层
-    onPlaylistChanged: transport.syncView,
+    // 还原 / 导入 / 删除 / 清空 / 换曲都不经过播放编排，收尾交给装配层
+    onPlaylistChanged: _playlistChangeHandler(transport),
   );
   final player = PlayerState(prefs: prefs, transport: transport);
   final recent = RecentState(recentStore);
@@ -220,36 +170,35 @@ Future<bool> _queryNotificationPermission(
   }
 }
 
-/// 应用根：注册状态层给 provider，再挂主题与占位 home。
+/// 列表改动后的收尾：补推视图，并把两种「内核里还挂着已删曲目」的情况
+/// 翻译成播放层动作。
 ///
-/// provider 放在 `MaterialApp` 外面（与原版 Context 的位置一致）：T24 起的
-/// `HomePage` 与任何路由都能 `context.watch<LibraryState>()` 拿到同一份实例。
-/// `.value` 不接管 dispose —— 这些状态在应用生命周期内常驻。
-/// M1 期间 home 只是占位，真正的双栏骨架由 T24 的 `HomePage`/`HomeLayout`
-/// 接管，这里不参与布局，免得两处结构互相打架。
-class LightMusicApp extends StatelessWidget {
-  const LightMusicApp({required this.bootstrap, super.key});
-
-  final AppBootstrap bootstrap;
-
-  @override
-  Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider<LibraryState>.value(value: bootstrap.library),
-        ChangeNotifierProvider<PlayerState>.value(value: bootstrap.player),
-        ChangeNotifierProvider<RecentState>.value(value: bootstrap.recent),
-        ChangeNotifierProvider<ToastState>.value(value: bootstrap.toasts),
-        Provider<AppPrefs>.value(value: bootstrap.prefs),
-      ],
-      child: MaterialApp(
-        title: '流光音乐',
-        debugShowCheckedModeBanner: false,
-        theme: buildTheme(tokens: AppTokens.dark),
-        home: const Scaffold(
-          body: Center(child: Text('流光音乐 · M1 骨架')),
-        ),
-      ),
-    );
-  }
+/// [LibraryState] 只负责在改动后喊一声（[removedId] 是刚被删掉的 id）；做
+/// 什么是装配层的事 —— 状态层不认识 [TransportController]。列表本身由两边
+/// 共享（同一个 [Playlist] 实例），所以这里读 `transport.playlist` 就是最新
+/// 列表。两档对应原版 `player.tsx` 的 `removeTrack` / `clearList`：
+///   - 删掉的正是内核里加载的那首：接续曲目接手播放（原版 `goTo` + autoplay）；
+///   - 列表空了（清空或删空）：停播并卸载，否则通知栏会留一条指向不存在
+///     文件的幽灵条目（原版 `player.stop()`）。
+void Function({String? removedId}) _playlistChangeHandler(
+  TransportController transport,
+) {
+  return ({String? removedId}) {
+    final playlist = transport.playlist;
+    if (removedId != null &&
+        removedId == transport.player.track?.id &&
+        playlist.tracks.isNotEmpty) {
+      final nextId = playlist.current?.id;
+      if (nextId != null) {
+        unawaited(transport.playTrack(nextId));
+        return;
+      }
+    }
+    // 什么都没加载（例如冷启动就是空列表）时不必去碰驱动
+    if (playlist.tracks.isEmpty && transport.player.track != null) {
+      unawaited(transport.stopPlayback());
+      return;
+    }
+    transport.syncView();
+  };
 }

@@ -41,8 +41,12 @@ class LibraryState extends ChangeNotifier {
   /// 播放列表被改动（还原 / 导入 / 删除 / 清空 / 换当前曲目）后的回调。
   ///
   /// 这些路径不经过播放编排，不会产生播放器事件；装配层把它接到
-  /// `TransportController.syncView`，界面与系统通知栏的视图快照才不会停在旧值。
-  final VoidCallback? onPlaylistChanged;
+  /// `TransportController` 上，界面与系统通知栏的视图快照才不会停在旧值。
+  ///
+  /// [removedId] 只在删除时有值：装配层据此判断「删掉的是不是正在播的那首」
+  /// （是就接着播下一首）。清空 / 删空没有单独的标记 —— 列表空了就该停播，
+  /// 装配层看 `tracks.isEmpty` 即可。状态层只负责喊这一声，不认识播放编排。
+  final void Function({String? removedId})? onPlaylistChanged;
 
   String _keyword = '';
   String _effectiveKeyword = '';
@@ -170,7 +174,7 @@ class LibraryState extends ChangeNotifier {
     await repo.deleteTracks([id]);
     toasts.show('已移除《${track.title}》', key: 'remove');
     await persist();
-    _changed();
+    _changed(removedId: id);
   }
 
   /// 清空播放列表：内存、文件仓与两份 prefs 键一起清。
@@ -203,12 +207,13 @@ class LibraryState extends ChangeNotifier {
     await prefs.writeJson(StorageKeys.order, ids);
   }
 
-  /// 列表改动后的统一收尾：先补推播放器视图，再通知界面。
+  /// 列表改动后的统一收尾：先喊装配层（补推播放器视图 / 接着播下一首 / 停播），
+  /// 再通知界面。
   ///
   /// 同一帧里界面重建时会同时读到新的列表与新视图，不会出现
   /// 「列表有这首歌、舞台还写着未选择曲目」的中间态。
-  void _changed() {
-    onPlaylistChanged?.call();
+  void _changed({String? removedId}) {
+    onPlaylistChanged?.call(removedId: removedId);
     notifyListeners();
   }
 

@@ -27,7 +27,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"light_music", origin, size)) {
+  // Title "Liu Guang Yin Yue" as universal character names (U+6D41 U+5149
+  // U+97F3 U+4E50): keeps this file pure ASCII, so MSVC (/W4 /WX, no /utf-8)
+  // cannot mis-decode it as the system code page.
+  if (!window.Create(L"\u6D41\u5149\u97F3\u4E50", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
