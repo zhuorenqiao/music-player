@@ -149,6 +149,35 @@ void main() {
     expect(driver.calls, ['open:/a.flac', 'play', 'pause']);
   });
 
+  test('播放中 open 另一首会先停播并推 playing(false)', () async {
+    final driver = FakeAudioDriver();
+    await driver.open(aTrack());
+    final states = <bool>[];
+    final sub = driver.playingStream.listen(states.add);
+    await driver.play();
+    // 原版 load() 先 audio.pause()（src/lib/player.js:185）：切歌必须看到停播。
+    expect(await driver.open(Track(id: '2', src: '/b.mp3', title: 'B')), isTrue);
+    await settle();
+    await sub.cancel();
+    expect(states, [true, false]);
+    expect(driver.isPlaying, isFalse);
+    expect(driver.calls, ['open:/a.flac', 'play', 'open:/b.mp3']);
+  });
+
+  test('已暂停时 open 不重复推 playing(false)', () async {
+    final driver = FakeAudioDriver();
+    await driver.open(aTrack());
+    await driver.play();
+    await driver.pause();
+    final states = <bool>[];
+    final sub = driver.playingStream.listen(states.add);
+    expect(await driver.open(aTrack()), isTrue);
+    await settle();
+    await sub.cancel();
+    expect(states, isEmpty);
+    expect(driver.isPlaying, isFalse);
+  });
+
   test('emitPlaying 直达流与同步取值', () async {
     final driver = FakeAudioDriver();
     final states = <bool>[];
@@ -193,12 +222,17 @@ void main() {
     await driver.open(aTrack());
     await driver.play();
     var completions = 0;
+    final plays = <bool>[];
     final sub = driver.completedStream.listen((_) => completions += 1);
+    final playSub = driver.playingStream.listen(plays.add);
     driver.emitCompleted();
     await settle();
     await sub.cancel();
+    await playSub.cancel();
     expect(completions, 1);
     expect(driver.isPlaying, isFalse);
+    // ended 隐含暂停：取值与流最后的值必须一致（以后两边都会被读）。
+    expect(plays, [false]);
     expect(driver.calls, ['open:/a.flac', 'play']);
   });
 

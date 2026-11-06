@@ -39,9 +39,14 @@ class DriverError {
 /// 「先订阅、后动作」。
 ///
 /// 同一个值是否重复上报由实现决定：真实内核只在状态真正变化时发事件，
-/// 替身的 [FakeAudioDriver] 内部状态迁移同样做了去重（显式的 `emitXxx` 除外）。
+/// 替身的 [FakeAudioDriver] 内部状态迁移同样做了去重
+/// （`emitPlaying` / `emitLoading` 这类显式注入除外）。
 abstract class AudioDriver {
-  /// 打开一个曲目（不改播放态，也不自动播放）。返回是否成功发起加载。
+  /// 打开一个曲目（先停掉当前播放，但不自动播放）。
+  ///
+  /// 对齐原版 `load()`：它切源前先 `audio.pause()`（`src/lib/player.js:185`），
+  /// 所以「播放中换歌」必须让调用方看到 `playing(false)`，而不是自己去猜。
+  /// 返回是否成功发起加载。
   Future<bool> open(Track track);
 
   Future<void> play();
@@ -161,10 +166,11 @@ class FakeAudioDriver implements AudioDriver {
   /// 推一条 canplay。加载态不跟着变 —— 需要时自己调 [emitLoading]。
   void emitCanplay() => _push(_canplay, null);
 
-  /// 推一条结束事件并把播放态置为暂停（ended 之后内核不再播放）。
-  /// 不额外推 playingStream：原版的 statechange(false) 由调用方自行决定是否补。
+  /// 推一条结束事件并同步播放态：`ended` 隐含暂停，所以 `isPlaying` 置假，
+  /// 播放中还会补一条 `playing(false)` —— 否则取值与流最后的值会互相矛盾
+  /// （调用方两边都读）。未播放时结束不额外发事件，对齐 `pause()` 只在真迁移时报。
   void emitCompleted() {
-    _isPlaying = false;
+    _setPlaying(false);
     _push(_completed, null);
   }
 
@@ -189,6 +195,9 @@ class FakeAudioDriver implements AudioDriver {
       _push(_errors, DriverError(PlayErrorKind.decode, alwaysFailMessage));
       return false;
     }
+    // 切源先停播（原版 load 的第一步就是 audio.pause()）：成功路径上正在播放
+    // 就补一条 playing(false)，已暂停则静默 —— 与 pause() 一样只在真迁移时报。
+    _setPlaying(false);
     if (blockOpen) {
       _setLoading(true);
       return true;
