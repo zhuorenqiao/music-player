@@ -134,6 +134,9 @@ class LibraryState extends ChangeNotifier {
 
   /// 冷启动还原：读存档 → 按存档顺序整体替换列表 → 恢复模式与当前曲目。
   ///
+  /// 当前曲目由 [_restoreCursor] 在「文件仓的 currentId」与「prefs 的现场」之间
+  /// 定优先级（终审 I4：这两个键从前只写不读）；顺序一律以文件仓为准。
+  ///
   /// [restoring] 覆盖整个异步加载（首帧就画骨架），结束无论成败都置回 false。
   /// 脏存档绝不外抛：仓储自己会退回空快照，这里再兜一层，启动流程不许因此中断。
   ///
@@ -147,6 +150,7 @@ class LibraryState extends ChangeNotifier {
       final snap = await repo.load();
       if (snap.tracks.isEmpty) {
         playlist.clear();
+        await _syncPrefsTrace();
         return;
       }
       final byId = {for (final track in snap.tracks) track.id: track};
@@ -157,8 +161,12 @@ class LibraryState extends ChangeNotifier {
       playlist
         ..replaceAll(ordered)
         ..setMode(snap.mode);
-      final savedId = snap.currentId;
-      if (savedId != null) playlist.setCurrentById(savedId);
+      // 顺序的权威一律是文件仓（上面 `ordered` 只由 snap.order 构造，prefs 里
+      // 那份陈旧 order 参与不了顺序）；光标按 [_restoreCursor] 的优先级定。
+      await _restoreCursor(snap);
+      // 痕迹要跟真相一致：纠正 prefs 的那份 order，并清掉指向已删曲目的光标
+      //（终审 I4）。
+      await _syncPrefsTrace();
       _flushAfterEnrichment(importer.rehydrateIncomplete());
     } catch (_) {
       // 理论上到不了这里（仓储是总函数），留作最后一道闸：启动不许炸
@@ -167,6 +175,55 @@ class LibraryState extends ChangeNotifier {
       _restoring = false;
       _changed();
     }
+  }
+
+  /// 还原时当前指针的判定（终审 I4，方案 (a)+(b) 的混合：prefs 既写**也读**，
+  /// 并且如实清除）。
+  ///
+  /// `prefs` 的 [StorageKeys.currentId] 与 [StorageKeys.order] 是**一对现场快照**，
+  /// 要信就整份信，怀疑就整份怀疑：
+  ///   1. 快照自洽（它的 order 与文件仓顺序逐位相同）时，[StorageKeys.currentId]
+  ///      就是最后一次如实写入的光标 —— 播放推进只经 `PlayerState.flushPersist`
+  ///      更新 prefs，并不会重写文件仓，此时 prefs 比存档里的 `currentId` 更新；
+  ///      它仍指向列表里的曲目就用它。
+  ///   2. 快照自相矛盾（order 与文件仓不一致）或缺失时，整份按过期处理，
+  ///      退回文件仓快照的 `currentId` —— 顺序与曲目以文件仓为权威。
+  ///   3. 两边都指不到列表里的曲目（光标被删 / 键被清）就保持**无光标**，
+  ///      随后的 [_syncPrefsTrace] 会把 prefs 的 `currentId` 删掉，绝不留
+  ///      「prefs 指一首、界面指另一首」或指向已删曲目的现场。
+  ///
+  /// 原版同一优先级（`src/state/player.tsx:555`：`storedId` 仍在列表里就
+  /// `setCurrentIndex(indexOfId(storedId))`），只是它的曲目档案与顺序同在
+  /// `localStorage.playlist` 一份里、没有「文件仓 vs prefs」这对矛盾。
+  Future<void> _restoreCursor(LibrarySnapshot snap) async {
+    final traceId = await prefs.readString(StorageKeys.currentId);
+    final traceOrder = await prefs.readJson(StorageKeys.order);
+    final traceIsCurrent = _sameIds(
+      traceOrder,
+      playlist.tracks.map((track) => track.id).toList(),
+    );
+    // 候选顺序随「现场是否自洽」翻转：自洽时 prefs 更新，矛盾时文件仓更新。
+    final candidates = traceIsCurrent
+        ? <String?>[traceId, snap.currentId]
+        : <String?>[snap.currentId, traceId];
+    for (final id in candidates) {
+      if (id != null && playlist.indexOfId(id) >= 0) {
+        playlist.setCurrentById(id);
+        return;
+      }
+    }
+    // 两边都失效：光标归零，别让 replaceAll 默认的队首冒充存档光标。
+    playlist.clearCurrent();
+  }
+
+  /// prefs 里那份 `order` 是不是与真相逐位相同（不是 List、长度不符、有非字符串
+  /// 都算「不一致」，按过期现场处理）。
+  bool _sameIds(Object? raw, List<String> truth) {
+    if (raw is! List || raw.length != truth.length) return false;
+    for (var i = 0; i < truth.length; i++) {
+      if (raw[i] != truth[i]) return false;
+    }
+    return true;
   }
 
   /// 导入一批文件；有新入列就落库并提示，回填批次收尾时再落一次。
@@ -230,8 +287,12 @@ class LibraryState extends ChangeNotifier {
 
   /// 落库：曲目元数据 + 顺序 + 当前曲目 + 模式。
   ///
-  /// 顺序同时写一份到 prefs（[StorageKeys.order]），与原版一致：文件仓是权威，
-  /// prefs 那份给「仓储不可用」的场景留个可读的痕迹。
+  /// 顺序与当前曲目同时各写一份到 prefs（[StorageKeys.order] /
+  /// [StorageKeys.currentId]），与原版一致：文件仓是权威，prefs 那份给
+  /// 「仓储不可用」的场景留个**看得懂的现场**。既然是现场就必须如实 ——
+  /// 光标没了（删空 / 停止播放）或指向一首已知坏掉的曲目时要把键删掉，
+  /// 只写不删就会在重启后复活一个不该再播的 currentId（终审 I4）。
+  /// 同一条规则在 `PlayerState.flushPersist` 里也有一份，两边必须一致。
   Future<void> persist() async {
     final ids = playlist.tracks.map((t) => t.id).toList();
     await repo.save(
@@ -242,7 +303,25 @@ class LibraryState extends ChangeNotifier {
         mode: playlist.mode,
       ),
     );
-    await prefs.writeJson(StorageKeys.order, ids);
+    await _syncPrefsTrace();
+  }
+
+  /// prefs 的两份痕迹（`order` + `currentId`）按当前列表对齐。
+  ///
+  /// 落库与还原都走这一条：痕迹要么与真相一致，要么就没有 —— 留一份陈旧的
+  /// 反序 order 或一个指向已删曲目的 currentId，比不写更容易在「文件仓不可用」
+  /// 时把现场读歪（终审 I4）。
+  Future<void> _syncPrefsTrace() async {
+    await prefs.writeJson(
+      StorageKeys.order,
+      playlist.tracks.map((t) => t.id).toList(),
+    );
+    final current = playlist.current;
+    if (current == null || current.broken) {
+      await prefs.remove(StorageKeys.currentId);
+    } else {
+      await prefs.writeString(StorageKeys.currentId, current.id);
+    }
   }
 
   /// 列表改动后的统一收尾：先喊装配层（补推播放器视图 / 接着播下一首 / 停播），

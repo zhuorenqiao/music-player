@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/app.dart';
 import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/core/storage_keys.dart';
+import 'package:light_music/library/import_service.dart';
 import 'package:light_music/library/library_repository.dart';
 import 'package:light_music/main.dart';
 import 'package:light_music/playback/audio_driver.dart';
@@ -243,6 +244,56 @@ void main() {
     // stopPlayback：暂停 + 卸载；只清列表不卸载，通知栏会留一条幽灵条目
     expect(driver.calls, contains('pause'));
     expect(driver.calls, contains('stop'));
+  });
+
+  test('组合根给导入服务接上时长探测（I1）', () async {
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+
+    // 这条线以前根本没接：`ImportService.durationProbe` 在 lib/ 里没有任何赋值点，
+    // ID3v1-only / FLAC 无 Vorbis comment 一类的曲目就永远没有时长（进度条 --:--）。
+    // 真探测走 media_kit，测试环境里起不来，所以这里只验「装配有没有接上」，
+    // 探测逻辑本身的可测接缝见 test/library/duration_probe_test.dart。
+    expect(bootstrap.library.importer.durationProbe, isNotNull);
+  });
+
+  test('注入的探测接缝真的接到导入：无时长曲目落库时带上了时长', () async {
+    // 只带 ID3v1（无 ID3v2）的文件：标签里没有时长，全靠探测补。
+    final file = File('${dir.path}${Platform.pathSeparator}probe.flac')
+      ..writeAsBytesSync(List<int>.filled(1024, 0));
+    final stale = Track(
+      id: localIdFor(file.path),
+      src: file.path,
+      title: '无标签曲',
+      duration: double.nan,
+      isLocal: true,
+    );
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(tracks: [stale], order: [stale.id]),
+    );
+
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+      durationOpener: (source) async => 203.5,
+    );
+    addTearDown(bootstrap.player.dispose);
+    addTearDown(bootstrap.library.dispose);
+    addTearDown(bootstrap.recent.dispose);
+    addTearDown(bootstrap.toasts.dispose);
+
+    expect(bootstrap.library.tracks.single.hasDuration, isFalse);
+    await bootstrap.library.enrichmentSettled;
+
+    expect(bootstrap.library.tracks.single.duration, 203.5);
+    final snap = await LibraryRepository(directory: dir.path).load();
+    expect(snap.tracks.single.duration, 203.5, reason: '探测到的时长要跟着批次落库');
   });
 
   test('播放推进就刷「最近播放」；删掉已听过的歌，失效标记跟着变（C2）', () async {

@@ -123,11 +123,17 @@ class PlayerState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 设置音量：只写 `volume`，静音标志按播放层的真实读数写。
+  ///
+  /// 以前这里有一句 `writeBool(muted, value == 0)` —— 原版没有的行为：拖到 0
+  /// 之后重启读回来是「已静音」，用户取消静音也解不掉（音量还是 0），看起来
+  /// 像坏了。原版 `volume` 与 `muted` 是两个独立键，`setVolume(>0)` 由播放层
+  /// 顺手清掉 muted（`src/lib/player.js:315-324`），这里只如实反映它的结果
+  /// （终审 I3 + T13 那条 deferred minor）。
   Future<void> setVolume(double value) async {
     await transport.setVolume(value);
     await prefs.writeNumber(StorageKeys.volume, value);
-    // 拖到 0 视为静音：下次启动读回的是「静音」，不是「音量 0 但没静音」
-    await prefs.writeBool(StorageKeys.muted, value == 0);
+    await prefs.writeBool(StorageKeys.muted, transport.player.muted);
     notifyListeners();
   }
 
@@ -156,20 +162,34 @@ class PlayerState extends ChangeNotifier {
 
   /// 立刻落盘：currentId / order / mode。
   ///
-  /// 损坏的曲目绝不写进 currentId —— 否则下次启动会试图加载一首已知坏掉的文件。
+  /// currentId **如实同步**（终审 I4，取方案 (b)）：光标没了或指向一首已知坏掉
+  /// 的曲目时把键删掉，而不是留着上一次的旧值。以前只有「非空且不损坏」才写、
+  /// 从不删，于是停止播放 / 当前曲目变损坏 / 列表被清空之后重启，会复活一个
+  /// 指向不该再播的曲目的 currentId —— 原版每次变化都写（包括 `Storage.remove`）。
+  ///
+  /// `order` 同样按当前列表重写：文件仓才是顺序的权威（`LibraryState.restore`
+  /// 只读它），这份只是「仓储不可用」时能看懂现场的可读痕迹。
   Future<void> flushPersist() async {
     _persistDebounce?.cancel();
     _persistDebounce = null;
     final playlist = transport.playlist;
+    await _syncCurrentIdAndOrder(playlist);
+    await prefs.writeString(StorageKeys.mode, playlist.mode.name);
+  }
+
+  /// 按当前列表写 / 清 `currentId` 与 `order` 两个键（[flushPersist] 与
+  /// `LibraryState.persist` 共用同一条规则，避免两处各写一半）。
+  Future<void> _syncCurrentIdAndOrder(Playlist playlist) async {
     final current = playlist.current;
-    if (current != null && !current.broken) {
+    if (current == null || current.broken) {
+      await prefs.remove(StorageKeys.currentId);
+    } else {
       await prefs.writeString(StorageKeys.currentId, current.id);
     }
     await prefs.writeJson(
       StorageKeys.order,
       playlist.tracks.map((t) => t.id).toList(),
     );
-    await prefs.writeString(StorageKeys.mode, playlist.mode.name);
   }
 
   /// 无 IO 的测试构造（T28 的 PanelHarness 用）：假驱动 + 内存 prefs。

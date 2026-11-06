@@ -24,6 +24,7 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'audio_driver.dart';
 import 'play_error.dart';
 import 'track.dart';
+import 'track_handle.dart';
 
 class MediaKitDriver implements AudioDriver {
   MediaKitDriver({Player? player}) : _player = player ?? Player() {
@@ -199,5 +200,81 @@ class MediaKitDriver implements AudioDriver {
   void _emit<T>(StreamController<T> controller, T value) {
     if (_disposed || controller.isClosed) return;
     controller.add(value);
+  }
+}
+
+/// 独立内核的时长探测 opener（终审 I1）。
+///
+/// 与播放用的 [MediaKitDriver] 各持一个 `Player`：探测不许打断正在播的曲目，
+/// 也不许把自己的状态混进主播放链路 —— 原版同样是开一个临时 `<audio>` 元素读
+/// `loadedmetadata`（`src/state/duration.ts`）。排队与「一次只开一首」由
+/// `library/duration_probe.dart` 负责，这里只实现「打开 → 拿第一个有限时长 →
+/// 卸掉」这一件事。
+///
+/// 实例**懒建**：组合根在 widget 测试里也会被构造，而那里从未调过
+/// `MediaKit.ensureInitialized()`，`Player()` 直接抛。这条路径按「探不出来」
+/// 处理成 NaN，绝不冒泡 —— 没有时长可比界面崩掉轻得多。
+class MediaKitDurationOpener {
+  /// [timeoutMs] 由装配层给（与 `DurationProbe` 同一预算），两个数值必须一致：
+  /// 这里先到点，才能保证 `finally` 的清理赶在队列放行之前。
+  MediaKitDurationOpener({required this.timeoutMs});
+
+  final int timeoutMs;
+
+  Player? _player;
+  bool _disposed = false;
+
+  /// 探一个来源（文件路径或已经是 URI）；失败 / 超时都是 NaN，绝不抛。
+  Future<double> call(String source) async {
+    if (_disposed) return double.nan;
+    final Player player;
+    try {
+      player = _player ??= Player();
+    } catch (_) {
+      // 原生库不可用（测试环境、缺 libmpv 的平台）：全部当「探不出来」。
+      return double.nan;
+    }
+    final deadline = Duration(milliseconds: timeoutMs);
+    final completer = Completer<double>();
+    StreamSubscription<Duration>? subscription;
+    try {
+      // 先订阅再开：media_kit 的 duration 只在变化时发，晚订阅会错过这一首的值。
+      subscription = player.stream.duration.listen((value) {
+        if (value.inMilliseconds > 0 && !completer.isCompleted) {
+          completer.complete(value.inMilliseconds / 1000.0);
+        }
+      });
+      await player.open(Media(FilePathHandle(source).uri), play: false);
+      // open 已经把现值算好了的（常见）就不用再等一条流事件。
+      final settled = player.state.duration;
+      if (settled.inMilliseconds > 0) return settled.inMilliseconds / 1000.0;
+      return await completer.future.timeout(deadline, onTimeout: () => double.nan);
+    } catch (_) {
+      return double.nan;
+    } finally {
+      try {
+        await subscription?.cancel();
+      } catch (_) {
+        // 取消失败不影响下面那次 stop
+      }
+      // 无论成败都把媒体卸掉：留着上一首会污染下一首的 duration 流。
+      try {
+        await player.stop();
+      } catch (_) {
+        // 停止失败只当这次没清理，交给下一次探测或 dispose
+      }
+    }
+  }
+
+  Future<void> dispose() async {
+    _disposed = true;
+    final player = _player;
+    _player = null;
+    if (player == null) return;
+    try {
+      await player.dispose();
+    } catch (_) {
+      // 原生实例释放失败没有可操作的东西，也不该反过来打断收尾。
+    }
   }
 }

@@ -605,8 +605,12 @@ void main() {
 
       await c.togglePlay();
       await settle();
-      // 暂停恢复不该从 0 开始
-      expect(driver.calls, contains('seek:12.0'));
+      // 内核里就是这一首：续播不该整首重载，所以既不再 open 也不 seek 回去
+      // （终审 I2 —— 旧写法 load+seek 会有一下静音/loading、进度先跳 0 再跳回来）
+      expect(driver.calls, isNot(contains(startsWith('open:'))));
+      expect(driver.calls, isNot(contains(startsWith('seek:'))));
+      expect(driver.calls, contains('play'));
+      expect(c.position.value, 12);
 
       await c.seekTo(30);
       expect(driver.calls.last, 'seek:30.0');
@@ -619,6 +623,53 @@ void main() {
 
       await c.toggleMute();
       expect(c.view.value.muted, isTrue);
+    });
+
+    test('暂停再点是重放同一条 resume：load 次数不增加、位置不变（I2）', () async {
+      final driver = FakeAudioDriver();
+      final c = build(
+        playlist: Playlist.fromTracks([t('1'), t('2')]),
+        driver: driver,
+      );
+
+      await c.playTrack('1');
+      await settle();
+      driver.emitPosition(30);
+      await settle();
+
+      await c.togglePlay(); // 暂停
+      await settle();
+      driver.calls.clear(); // 只留「再按一次播放」这一步
+
+      await c.togglePlay(); // 播放
+      await settle();
+
+      expect(
+        driver.calls.where((call) => call.startsWith('open:')),
+        isEmpty,
+        reason: '已加载同一首时界面按钮不该走整首重载',
+      );
+      expect(driver.calls, contains('play'));
+      expect(c.position.value, 30, reason: '进度纹丝不动，与原版 audio.play() 一致');
+      expect(c.view.value.playing, isTrue);
+    });
+
+    test('内核里没有这一首时 togglePlay 才加载', () async {
+      final driver = FakeAudioDriver();
+      final c = build(
+        playlist: Playlist.fromTracks([t('1'), t('2')]),
+        driver: driver,
+      );
+
+      // 只把播放列表的指针挪到 2，内核里还什么都没加载
+      c.playlist.setCurrentById('2');
+      expect(c.player.track, isNull);
+
+      await c.togglePlay();
+      await settle();
+
+      expect(driver.calls, contains('open:/2.flac'));
+      expect(c.view.value.playing, isTrue);
     });
 
     test('空列表时 togglePlay 只提示，不碰驱动', () async {

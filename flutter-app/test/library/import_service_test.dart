@@ -288,7 +288,8 @@ void main() {
     final service = ImportService(
       playlist: playlist,
       toasts: RecordingToasts(),
-      durationProbe: (path) {
+      // 异步签名：真探测要等原生内核回报时长（I1），假的也得是同一个形态。
+      durationProbe: (path) async {
         probed.add(path);
         return path.contains('slow') ? double.nan : 187.5;
       },

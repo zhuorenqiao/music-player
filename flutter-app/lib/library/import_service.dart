@@ -112,11 +112,17 @@ class ImportService {
   /// 封面落盘目录（应用缓存目录下的 covers/）。
   final String? coverDirectory;
 
-  /// 时长探测：路径 → 秒；探不出给任意非有限值 / 非正数（保持「未知」）。
+  /// 时长探测：来源 → 秒（探不到给任意非有限值 / 非正数，保持「未知」）。
   ///
-  /// 注入而不是在这里引播放器：导入属于数据层，探时长是平台能力，
-  /// 由上层（T23 起的界面层）把播放器那侧的探测函数递进来。
-  final double Function(String path)? durationProbe;
+  /// 注入而不是在这里引播放器：导入属于数据层，探时长是平台能力，由装配层
+  /// （`main.dart`）把内核那侧递进来 —— 生产上是 `DurationProbe` 包着的
+  /// media_kit opener（终审 I1：这条线以前根本没接，ID3v1-only / FLAC 无
+  /// Vorbis comment 的曲目就永远没有时长，进度条一直是 `--:--`）。
+  ///
+  /// 异步签名：真探测要等原生内核回报时长，同步版只能靠阻塞读，而那会冻住
+  ///  isolate。实现必须在自己的预算内返回且绝不抛（排队 / 超时见
+  /// `library/duration_probe.dart`）。
+  final Future<double> Function(String source)? durationProbe;
 
   /// 新曲目入列后回调（落库用）。fire-and-forget，出错不影响导入结果。
   final Future<void> Function(List<String> ids)? onImported;
@@ -260,7 +266,8 @@ class ImportService {
     await hydrateMetadata(live);
     final probe = durationProbe;
     if (probe == null || live.hasDuration) return;
-    final value = probe(live.handle.pathish);
+    // 探时长排在标签之后、也排在整批完成信号之前：批次的落库收尾会连它一起落盘。
+    final value = await probe(live.handle.pathish);
     // NaN / 0 / 负数 / 无穷都算「探不出来」：未知时长必须保持 NaN，不是 0。
     if (value.isFinite && value > 0) live.duration = value;
   }

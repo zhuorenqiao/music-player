@@ -201,6 +201,11 @@ class TransportController {
   }
 
   /// 播放 / 暂停。没有当前曲目时从第一首开始。
+  ///
+  /// 播放分支只有一条路（终审 I2）：内核里已经挂着这一首就**原地续播**
+  /// （[resume]，等价原版 `audio.play()`，进度纹丝不动），根本没有这首才
+  /// [playTrack] 加载。以前这里做 `load + seek(resumeAt)`，暂停再点播放会整首
+  /// 重载 —— 一下静音、画面转圈、进度先跳 0 再跳回来。
   Future<void> togglePlay() async {
     if (playlist.size == 0) {
       toasts.info('播放列表为空，请先添加音频文件');
@@ -215,14 +220,20 @@ class TransportController {
       await player.pause();
       return;
     }
-    await _resume(track);
+    if (player.track?.id != track.id) {
+      // 列表指针与内核里加载的不是同一首（切过列表没接上）：按新的一首加载。
+      await playTrack(track.id);
+      return;
+    }
+    // 同一首：与锁屏 / 通知栏的播放键共用同一个入口，不留两份实现。
+    await resume();
   }
 
-  /// 系统侧（锁屏 / 通知栏 / 媒体键）的「播放」：从当前位置继续，**不重载**。
+  /// 从暂停处继续：从原位置接着放，而不是从头开始。
   ///
-  /// 与 [togglePlay] 的暂停对称：按钮按下去听觉上不该有任何跳变，进度必须还
-  /// 在原处。内核里没有这首（[stopPlayback] 之后、或列表刚还原还没加载）时退
-  /// 回到「加载当前曲目并自动播放」—— 与 [togglePlay] 的兜底同一入口。
+  /// 系统侧（锁屏 / 通知栏 / 媒体键）与界面播放按钮共用这一条（[togglePlay]
+  /// 的播放分支），因此「同一首」的判定只有一处 —— 原版 `togglePlay` 在已加载
+  /// 同一首时只调 `audio.play()`，位置纹丝不动。
   Future<void> resume() async {
     final track = playlist.current;
     if (track == null) {
@@ -238,7 +249,7 @@ class TransportController {
       await playTrack(track.id);
       return;
     }
-    // 与 [_resume] 同一收尾：被拦状态在真的能出声时清掉。
+    // 被拦状态在真的能出声时清掉。
     _blockedMessage = null;
     _blockedRetries = 0;
     await player.resume();
@@ -348,16 +359,6 @@ class TransportController {
     _duration.value = track.hasDuration ? track.duration : null;
     _publish();
     await player.load(track, autoplay: autoplay);
-  }
-
-  /// 暂停后恢复：从原位置接着放，而不是从头开始。
-  Future<void> _resume(Track track) async {
-    final sameTrack = player.track?.id == track.id;
-    final resumeAt = sameTrack ? player.position : 0.0;
-    _blockedMessage = null;
-    _blockedRetries = 0;
-    await player.load(track, autoplay: true);
-    if (resumeAt > 0) await player.seek(resumeAt);
   }
 
   void _syncProgressFrom(AudioPlayer source) {

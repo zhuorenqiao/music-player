@@ -70,6 +70,47 @@ void main() {
     expect(state.transport.playlist.mode.name, 'shuffle');
   });
 
+  test('音量拖到 0 只写音量：重启读回 volume=0 且 muted=false', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs);
+    addTearDown(state.dispose);
+
+    await state.setVolume(0);
+    // 原版 `volume` 与 `muted` 是两个独立键：拖到 0 只是「没有声音」，
+    // 不是「按了静音」。写成 muted=true 会让重启后取消静音也解不掉（I3）。
+    expect(await prefs.readNumber(StorageKeys.volume), 0);
+    expect(await prefs.readBool(StorageKeys.muted), isFalse);
+
+    // 「重开应用」：新的状态层实例读同一份存档
+    final restart = buildState(prefs);
+    addTearDown(restart.dispose);
+    await restart.ready();
+
+    expect(restart.volume, 0);
+    expect(restart.muted, isFalse);
+  });
+
+  test('静音状态下拖音量会解掉静音，prefs 里的 muted 跟着改对', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs);
+    addTearDown(state.dispose);
+
+    await state.toggleMute();
+    expect(state.muted, isTrue);
+    expect(await prefs.readBool(StorageKeys.muted), isTrue);
+
+    // 对齐 player.js:315-324：`setVolume(>0)` 顺带把 muted 清掉
+    await state.setVolume(0.5);
+    expect(state.muted, isFalse);
+    expect(await prefs.readBool(StorageKeys.muted), isFalse);
+    expect(state.volume, closeTo(0.5, 1e-9));
+
+    // 取消静音恢复的是记忆音量，不是 0
+    await state.toggleMute();
+    await state.toggleMute();
+    expect(state.volume, closeTo(0.5, 1e-9));
+  });
+
   test('当前曲目与顺序落 prefs', () async {
     final prefs = AppPrefs.inMemory();
     final state = buildState(prefs, tracks: [t('1'), t('2')]);
@@ -114,6 +155,47 @@ void main() {
     await settle();
     expect(positionCalls, 6);
     expect(stateCalls, beforePositions);
+  });
+
+  test('停止播放之后 flushPersist 清掉 currentId，重启不复活已停的曲目', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs, tracks: [t('1'), t('2')]);
+    addTearDown(state.dispose);
+
+    await state.playTrack('2');
+    await state.flushPersist();
+    expect(await prefs.readString(StorageKeys.currentId), '2');
+
+    await state.transport.stopPlayback();
+    await state.flushPersist();
+
+    // 以前只写不清：停止播放之后重启，会复活一个「不该再播」的 currentId（I4）
+    expect(await prefs.readString(StorageKeys.currentId), isNull);
+    expect(await prefs.readJson(StorageKeys.order), ['1', '2']);
+  });
+
+  test('当前曲目后来变坏：旧的 currentId 要被清掉', () async {
+    final prefs = AppPrefs.inMemory();
+    final driver = FakeAudioDriver();
+    final state = buildState(prefs, tracks: [t('1'), t('2')], driver: driver);
+    addTearDown(state.dispose);
+
+    await state.playTrack('1');
+    await state.flushPersist();
+    expect(await prefs.readString(StorageKeys.currentId), '1');
+
+    // 播过之后文件坏了：这一首不该再是重启时的光标
+    driver.alwaysFail = true;
+    await state.playTrack('1');
+    await settle();
+    await state.flushPersist();
+
+    expect(state.current?.broken, isTrue);
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      isNull,
+      reason: '写进去过又留着，就是「指向已损坏曲目的 currentId」',
+    );
   });
 
   test('损坏曲目不写进 currentId', () async {

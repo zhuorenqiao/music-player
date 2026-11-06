@@ -304,7 +304,7 @@ void main() {
   LibraryState buildEnrichingState({
     LibraryRepository? repo,
     Playlist? target,
-    double Function(String path)? probe,
+    Future<double> Function(String path)? probe,
   }) => LibraryState(
     prefs: prefs,
     repo: repo ?? LibraryRepository(directory: dir.path),
@@ -325,7 +325,7 @@ void main() {
       textFrame('TALB', '认了吧'),
       apicFrame('image/png', onePixelPng),
     ]);
-    final enriching = buildEnrichingState(probe: (path) => 187.5);
+    final enriching = buildEnrichingState(probe: (path) async => 187.5);
     addTearDown(enriching.dispose);
 
     await enriching.importPaths([file.path]);
@@ -356,7 +356,7 @@ void main() {
     final counting = _CountingRepository(directory: dir.path);
     final enriching = buildEnrichingState(
       repo: counting,
-      probe: (path) => 120,
+      probe: (path) async => 120,
     );
     addTearDown(enriching.dispose);
 
@@ -372,7 +372,7 @@ void main() {
 
   test('回填批次收尾会通知界面（不只是改了内存对象）', () async {
     final file = taggedFile('a.mp3', [textFrame('TIT2', '甲')]);
-    final enriching = buildEnrichingState(probe: (path) => 90);
+    final enriching = buildEnrichingState(probe: (path) async => 90);
     addTearDown(enriching.dispose);
 
     var notifications = 0;
@@ -442,7 +442,7 @@ void main() {
     var probes = 0;
     final fresh = buildEnrichingState(
       repo: counting,
-      probe: (path) {
+      probe: (path) async {
         probes += 1;
         return 300;
       },
@@ -455,5 +455,111 @@ void main() {
     expect(fresh.tracks.single.title, '甲');
     expect(probes, 0, reason: '时长与封面都在了，不该再探一次');
     expect(counting.saves, 0, reason: '没有东西被补上就不必再落库');
+  });
+
+  // -- 终审 I4：prefs 的 currentId / order 必须如实同步 ----------------------
+
+  test('落库时 currentId 跟着列表走：换曲写、删空清', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac']);
+    await state.enrichmentSettled;
+    final firstId = state.tracks.first.id;
+
+    await state.setCurrent(firstId);
+    // 以前 persist() 根本不碰这个键：只有播放层 flushPersist 会写，
+    // 「只改列表不碰播放」的路径留下的就是空值或旧值。
+    expect(await prefs.readString(StorageKeys.currentId), firstId);
+
+    await state.removeTrack(firstId);
+    expect(await prefs.readString(StorageKeys.currentId), state.currentId);
+
+    await state.removeTrack(state.tracks.first.id);
+    expect(state.currentId, isNull);
+    expect(await prefs.readString(StorageKeys.currentId), isNull);
+  });
+
+  test('还原以文件仓为准：陈旧 order 被纠正、过期 currentId 被清掉', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac', '/m/c.flac']);
+    await state.enrichmentSettled;
+    final ids = state.tracks.map((t) => t.id).toList();
+    final firstId = ids.first;
+
+    // 一份与文件仓矛盾的 prefs：顺序反着，光标指着「即将被删掉」的那首
+    await prefs.writeJson(StorageKeys.order, ids.reversed.toList());
+    await prefs.writeString(StorageKeys.currentId, firstId);
+    await LibraryRepository(directory: dir.path).deleteTracks([firstId]);
+
+    final fresh = buildState();
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+
+    final survived = ids.skip(1).toList();
+    // 顺序一律以文件仓为准，prefs 那份陈旧值不许把列表带偏
+    expect(fresh.tracks.map((t) => t.id).toList(), survived);
+    // 痕迹要跟真相一致：纠正 prefs 的那份 order，并清掉指向已删曲目的光标
+    expect(await prefs.readJson(StorageKeys.order), survived);
+    expect(await prefs.readString(StorageKeys.currentId), isNull);
+  });
+
+  test('还原时光标仍在列表里就保留，两边一起指向同一首', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac']);
+    await state.enrichmentSettled;
+    final secondId = state.tracks.last.id;
+    await prefs.writeString(StorageKeys.currentId, secondId);
+
+    final fresh = buildState();
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+
+    expect(await prefs.readString(StorageKeys.currentId), secondId);
+    expect(fresh.currentId, secondId);
+  });
+
+  test('现场自洽而文件仓没记光标：prefs 那份 currentId 也要接住', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac', '/m/c.flac']);
+    await state.enrichmentSettled;
+    final ids = state.tracks.map((t) => t.id).toList();
+    final thirdId = ids.last;
+    // 老版本存的档 / 仓储重建后的档：顺序在、光标没记。prefs 那份现场是自洽的
+    // （order 与文件仓逐位相同），它才是最后一次如实写入的光标。
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(tracks: state.tracks, order: ids),
+    );
+    await prefs.writeString(StorageKeys.currentId, thirdId);
+
+    final fresh = buildState();
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+
+    // 以前 restore() 根本不读这个键：光标停在 replaceAll 默认的队首，
+    // 现场也被 `_syncPrefsTrace` 改写成队首 —— 用户重启后光标跳回第一首。
+    expect(fresh.currentId, thirdId);
+    expect(await prefs.readString(StorageKeys.currentId), thirdId);
+  });
+
+  test('两边都指不到曲目：保持无光标，过期 currentId 被清掉而不是复活队首', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac']);
+    await state.enrichmentSettled;
+    final ids = state.tracks.map((t) => t.id).toList();
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(tracks: state.tracks, order: ids),
+    );
+    // 一个早已不在列表里的光标（停在已删曲目上的旧现场）
+    await prefs.writeString(StorageKeys.currentId, 'local:ghost');
+
+    final fresh = buildState();
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+
+    expect(fresh.currentId, isNull);
+    expect(await prefs.readString(StorageKeys.currentId), isNull);
+    expect(
+      await prefs.readJson(StorageKeys.order),
+      ids,
+      reason: '顺序仍按文件仓纠正成现场',
+    );
   });
 }

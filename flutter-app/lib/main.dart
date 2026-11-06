@@ -29,6 +29,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app.dart';
 import 'core/app_prefs.dart';
 import 'core/platform_services.dart';
+import 'library/duration_probe.dart';
 import 'library/import_service.dart';
 import 'library/library_repository.dart';
 import 'library/recent_store.dart';
@@ -76,6 +77,9 @@ Future<void> main() async {
 /// [notificationGranted] 为 null 时按 [queryNotificationPermission]（默认
 /// [notificationPermissionGranted]）查询当前状态；直接传 bool 可跳过查询。
 /// [mediaSessionAttachTimeout] 只在测试里缩短。
+/// [durationOpener] 只在测试里注入：生产上是 media_kit 的独立内核 opener
+/// （I1 —— `ImportService.durationProbe` 从前没有任何赋值点，无标签曲目的
+/// 时长就永远缺失），排队与 3000ms 预算由 [DurationProbe] 统一管。
 Future<AppBootstrap> buildBootstrap({
   required AppPrefs prefs,
   required String dataDirectory,
@@ -84,6 +88,7 @@ Future<AppBootstrap> buildBootstrap({
   bool? notificationGranted,
   Future<bool> Function()? queryNotificationPermission,
   Duration mediaSessionAttachTimeout = kMediaSessionAttachTimeout,
+  Future<double> Function(String source)? durationOpener,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -95,11 +100,18 @@ Future<AppBootstrap> buildBootstrap({
     toasts: toasts,
     playlist: playlist,
   );
+  // 探时长用的是**另一台**内核（不是 [driver]）：回填不许打断正在播的曲目。
+  final probe = DurationProbe(
+    durationOpener ??
+        MediaKitDurationOpener(timeoutMs: kDurationProbeTimeoutMs).call,
+    timeoutMs: kDurationProbeTimeoutMs,
+  );
   final importer = ImportService(
     playlist: playlist,
     toasts: toasts,
     covers: const CoverImageWriter(),
     coverDirectory: '$dataDirectory/covers',
+    durationProbe: probe.call,
   );
   final recent = RecentState(recentStore);
   final library = LibraryState(
