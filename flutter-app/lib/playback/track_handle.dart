@@ -28,6 +28,13 @@ sealed class TrackHandle {
 
   String get uri;
   String get displayName;
+
+  /// 能直接交给本地读写的形态：文件句柄给真实路径，SAF 给原 URI。
+  ///
+  /// 播放一律走 [uri]，这个只给「用 `dart:io` 读字节 / 探时长」的调用方
+  /// 当标识用 —— 它可能是一个 `content://` 串，读不出来就是读不出来。
+  String get pathish => uri;
+
   Future<bool> exists();
   Future<int?> sizeBytes();
   Map<String, Object?> toJson();
@@ -59,6 +66,9 @@ class FilePathHandle extends TrackHandle {
 
   @override
   String get uri => _toFileUri(path);
+
+  @override
+  String get pathish => path;
 
   @override
   String get displayName => p.basename(path);

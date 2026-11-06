@@ -18,11 +18,18 @@ import 'dart:typed_data';
 /// * 越界、负数、文件不存在、句柄打开失败，统统退化成「空 / 可用前缀」，绝不抛出，
 ///   也绝不返回 null —— 调用方拿到的一定是可迭代的字节。
 class ByteSource {
-  ByteSource._(this._bytes, this._path, int maxBytes)
+  ByteSource._(this._bytes, this._path, int maxBytes, {List<int>? prefetched})
     : _maxBytes = maxBytes < 0 ? 0 : maxBytes {
     final bytes = _bytes;
     if (bytes != null) {
       _length = bytes.length;
+    }
+    if (prefetched != null && prefetched.isNotEmpty) {
+      // 调用方已经读过头部：只认窗口内的前缀，超出的部分留给偏移读。
+      var size = prefetched.length;
+      if (size > headProbeBytes) size = headProbeBytes;
+      if (size > _maxBytes) size = _maxBytes;
+      _head = Uint8List.fromList(prefetched.sublist(0, size));
     }
   }
 
@@ -31,8 +38,15 @@ class ByteSource {
       ByteSource._(Uint8List.fromList(bytes), null, defaultMaxBytes);
 
   /// 文件源：读取量上限 [maxBytes]（默认 8MB）。
-  factory ByteSource.fromFile(String path, {int maxBytes = defaultMaxBytes}) =>
-      ByteSource._(null, path, maxBytes);
+  ///
+  /// [prefetched] 是调用方已经读进来的头部字节（导入时一次开文件读 64KB），
+  /// 命中它的读取不再开文件句柄；只接受头部窗口内的前缀，长度不对也安全 ——
+  /// 窗口之外的偏移照旧走真正的偏移读。
+  factory ByteSource.fromFile(
+    String path, {
+    int maxBytes = defaultMaxBytes,
+    List<int>? prefetched,
+  }) => ByteSource._(null, path, maxBytes, prefetched: prefetched);
 
   /// 标签区（含内嵌封面）最多读这么多，与原版 `MAX_TAG_BYTES` 对齐。
   static const int defaultMaxBytes = 8 * 1024 * 1024;

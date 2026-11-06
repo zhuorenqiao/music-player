@@ -20,6 +20,7 @@ dependencies:
   file_picker: ^13.3.2
   fast_gbk: ^1.0.0
   flutter_media_session: ^3.0.9
+  crypto: ^3.0.8
 
 dev_dependencies:
   flutter_test:
