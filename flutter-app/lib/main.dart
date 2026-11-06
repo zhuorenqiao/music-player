@@ -133,12 +133,16 @@ Future<AppBootstrap> buildBootstrap({
     onPlaylistChanged: _playlistChangeHandler(transport, recent),
   );
   final player = PlayerState(prefs: prefs, transport: transport);
-  // 停止播放也要排一次落盘（终审 R2）：`stopPlayback` 清掉的是播放指针，而
-  // 指针就是 prefs 那份 `currentId` 现场的真相。从暂停态按停止时内核状态本来
-  // 就没变，一个驱动事件都不会发，`PlayerState._onEvent` 一次盘也排不上，
-  // 留下的就是停止前那个 currentId —— 重启复活一首用户明明停掉的歌。
+  // 停止播放也要落一次盘，而且**当场落完**（终审 R2 + 它的残留）：
+  // `stopPlayback` 清掉的是播放指针，而指针就是 prefs 那份 `currentId` 现场的
+  // 真相。从暂停态按停止时内核状态本来就没变，一个驱动事件都不会发，
+  // `PlayerState._onEvent` 一次盘也排不上，留下的就是停止前那个 currentId ——
+  // 重启复活一首用户明明停掉的歌。
+  //
+  // 这里接的是 `flushPersist` 而不是 `schedulePersist`：后者排在 400ms 防抖之后，
+  // 「停止 → 马上杀进程」就等于没停过（防抖对播放推进是省写盘，对停止是丢数据）。
   // transport 建在 player 之前，所以这条线只能建好之后接。
-  transport.onStopped = player.schedulePersist;
+  transport.onStopped = player.flushPersist;
 
   // 先把音量 / 静音 / 模式读回来，再还原曲库：存档里的模式是权威值，
   // 顺序反过来会被 prefs 里的旧值覆盖。

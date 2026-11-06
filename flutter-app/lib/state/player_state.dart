@@ -94,10 +94,11 @@ class PlayerState extends ChangeNotifier {
   ///
   /// 「只有真的开始出声才落盘」这条第 1 轮的注释本身没错，但它**不足以覆盖
   /// 光标的全部变化**：`stopPlayback` 把指针清空之后，从暂停态走过去连一条
-  /// 驱动事件都不会有（内核状态本来就没变），于是这个通道一次也没被触发，
+  /// 驱动事件都不会有（内核状态本来就没变），这个通道一次也没被触发，
   /// prefs 里留下的还是停止前那个 currentId（终审 R2）。停止那一条腿现在由
-  /// 装配层把 `TransportController.onStopped` 接到 [schedulePersist] 上补上；
-  /// 加载失败与被拦仍**不**在这里落盘 —— 那些时刻指针没有变成「正在播」。
+  /// 装配层把 `TransportController.onStopped` 接到 [flushPersist]（**不是**
+  /// [schedulePersist]，见那里），加载失败与被拦仍**不**在这里落盘 ——
+  /// 那些时刻指针没有变成「正在播」。
   void _onEvent(PlayerEvent event) {
     if (event is StateChangedEvent && event.playing) schedulePersist();
   }
@@ -159,6 +160,11 @@ class PlayerState extends ChangeNotifier {
   Future<void> userGesture() => transport.userGesture();
 
   /// 排一次落盘（400ms 防抖）。连续切歌只写最后一次。
+  ///
+  /// 防抖的适用范围是**播放推进**这类「一会儿还会再变」的现场变化。
+  /// 停止播放不走这里（终审 R2 的残留）：那是一次性的、用户随后就可能杀掉进程的
+  /// 变化，排在窗口里就等于没写，所以 `TransportController.onStopped` 直接接
+  /// [flushPersist]，由 `stopPlayback` await 到落完才返回。
   void schedulePersist() {
     _persistDebounce?.cancel();
     _persistDebounce = Timer(
@@ -178,8 +184,9 @@ class PlayerState extends ChangeNotifier {
   /// 那是「用户停过播放 / 当前曲目被清过」的**否定断言**，`LibraryState.
   /// _restoreCursor` 不再回落到文件仓里那份 `currentId`。写侧因此必须真的走到
   /// 这里 —— `TransportController.stopPlayback` 那一条腿由装配层接线
-  /// （`main.dart` 里 `transport.onStopped = player.schedulePersist`），
-  /// 光靠播放器事件是接不住的。
+  /// （`main.dart` 里 `transport.onStopped = player.flushPersist`，而 `stopPlayback`
+  /// **await** 它：停止之后不存在「还没落盘」那 400ms，见 [schedulePersist] 的
+  /// 注释），光靠播放器事件是接不住的。
   ///
   /// `order` 同样按当前列表重写：**列表顺序的权威永远是文件仓**（`LibraryState.
   /// restore` 只按它重建列表），prefs 这份是「最后一次现场」——它与文件仓逐位

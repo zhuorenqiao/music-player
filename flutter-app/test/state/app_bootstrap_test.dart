@@ -227,6 +227,54 @@ void main() {
     expect(await prefs.readString(StorageKeys.currentId), 'b');
   });
 
+  /// 终审 R2 的**残留**（A 段报告第 5 条）：上面那条等的是「防抖自己跑完」，
+  /// 可停止这一条腿接的正是 `schedulePersist` 那个 400ms 窗口 ——
+  /// 「按了停止，应用随即被杀 / 立刻重开」就落在窗口里，prefs 留的还是停止前
+  /// 那个 currentId，重启照样复活用户明明停掉的那一首。
+  /// 所以停止这一次必须**同步落盘**（`await stopPlayback()` 返回即已落定）。
+  /// 只做在停止这一条腿上：播放推进的防抖语义（连续切歌只写最后一次）不动。
+  test('停止后不落防抖窗口：立刻重建也不复活', () async {
+    final first = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+
+    await first.player.playTrack('a');
+    expect(first.player.playing, isTrue);
+    await afterPersistDebounce();
+    expect(await prefs.readString(StorageKeys.currentId), 'a');
+
+    await first.player.transport.stopPlayback();
+    // 一个毫秒都不等：防抖窗口不是「可以丢」的窗口
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      isNull,
+      reason: 'stopPlayback 返回时现场必须已经落定，不留 400ms 的空档',
+    );
+
+    first.player.dispose();
+    final secondDriver = FakeAudioDriver();
+    final second = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: secondDriver,
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(second.player.dispose);
+
+    expect(
+      second.library.currentId,
+      isNot('a'),
+      reason: '「停止 → 马上杀进程」不是没停过：已停的那首不许复活',
+    );
+    // 与 R4 同一条结论：停过之后重启落到列表第一首（顺序 [b, a]），保持暂停。
+    expect(second.library.currentId, 'b');
+    expect(second.player.playing, isFalse);
+    expect(secondDriver.calls, isNot(contains('play')));
+  });
+
   /// 终审 R6：模式与光标同源同权 —— 播放推进只写 prefs（`PlayerState.cycleMode`
   /// 那句 `writeString(mode)`），文件仓只在列表变化时才跟着重写，所以**prefs 才是
   /// 更新的陈述**。原版更是只认 prefs 一处（`src/state/player.tsx:567`

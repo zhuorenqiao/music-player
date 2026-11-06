@@ -186,8 +186,8 @@ class TransportController {
   String _lastRecentId = '';
   int _lastRecentAt = 0;
 
-  /// 停止播放之后的收尾钩子（终审 R2）：装配层把它接到
-  /// `PlayerState.schedulePersist`，让「指针已被清空」这个事实真的落进 prefs。
+  /// 停止播放之后的收尾钩子（终审 R2，落盘时机见 R2 的残留那条）：装配层把它
+  /// 接到 `PlayerState.flushPersist`，让「指针已被清空」这个事实**当场**落进 prefs。
   ///
   /// 为什么必须由 [stopPlayback] 自己喊这一声：它清掉的是**播放指针**，而指针
   /// 正是 prefs `currentId` 那一份现场的唯一真相；这条路径上原本没有任何东西
@@ -197,9 +197,15 @@ class TransportController {
   /// 停掉的那首歌复活了。第 1 轮那条用例手调 `flushPersist()`，正好把这个缺口
   /// 绕了过去，所以它一直绿、真实链路一直是断的。
   ///
+  /// 为什么签名是 `Future<void> Function()` 而且必须 `await`（第 2 轮 B 段补的
+  /// 那半句）：接 `schedulePersist` 时落盘排在 400ms 防抖之后，于是「按了停止
+  /// 马上杀进程」这一次停止等于没发生 —— 防抖窗口对**播放推进**是省写盘的
+  /// 优化，对**停止**却是一段真实的丢数据窗口。改成异步可等待的同步语义后，
+  /// `await stopPlayback()` 返回即代表现场已经落定。
+  ///
   /// 可变字段而不是构造参数：组合根先建 `TransportController` 才建
   /// [PlayerState]，只能建好之后再接。
-  void Function()? onStopped;
+  Future<void> Function()? onStopped;
 
   /// 播放进度（秒）。每次 timeupdate 都变，只推这个，不碰 [view]。
   ValueNotifier<double> get position => _position;
@@ -306,8 +312,9 @@ class TransportController {
   /// 起清掉，[PublishedSnapshot.title] 才会变空、系统侧才会撤掉控件。
   ///
   /// 清掉指针之后还要把这份现场落盘（终审 R2，走 [onStopped] →
-  /// `PlayerState.schedulePersist`）：prefs 的 `currentId` 是还原时光标的
-  /// 第一权威，留着停止前那个值，重启就会复活用户明明停掉的那一首。
+  /// `PlayerState.flushPersist`）：prefs 的 `currentId` 是还原时光标的第一权威，
+  /// 留着停止前那个值，重启就会复活用户明明停掉的那一首。落盘是 **await 过的**
+  /// （R2 残留），所以「停止 → 立刻杀进程」也不留空档。
   Future<void> stopPlayback() async {
     _cancelPendingSkip();
     _blockedMessage = null;
@@ -322,8 +329,9 @@ class TransportController {
     _buffered.value = 0;
     _duration.value = null;
     _publish();
-    // 指针没了 = 存档现场变了，必须排一次落盘（终审 R2，见 [onStopped]）。
-    onStopped?.call();
+    // 指针没了 = 存档现场变了，必须落一次盘，而且**等它落完**
+    // （终审 R2 + 它的残留，见 [onStopped]）。
+    await onStopped?.call();
   }
 
   /// 下一首。[auto] 为 true 表示是播放器自己的动作（跳损坏、播完自动续），
