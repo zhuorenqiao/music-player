@@ -316,3 +316,56 @@ List<int> oggComment(
     for (final picture in base64Pictures) 'METADATA_BLOCK_PICTURE=$picture',
   ]),
 ];
+
+// ---------------------------------------------------------------------------
+// MP4 / M4A（Task 9 追加，语义对齐 JS 的 mp4Box / dataAtom / m4a）
+// ---------------------------------------------------------------------------
+
+/// iTunes 的版权符：latin-1 单字节 `0xA9`。
+///
+/// 用 UTF-8 写会变成两字节 `0xC2 0xA9`，box 名就对不上了 —— JS 侧同样用
+/// `latin1('©nam')` 造字节。
+const String copyright = '\u00A9';
+
+/// MP4 box：`长度(大端) + 4 字符类型 + 内容`。[type] 按 Latin-1 编码，
+/// 所以 `'${copyright}nam'` 造出来的就是 `0xA9 'n' 'a' 'm'`。
+List<int> mp4Box(String type, List<List<int>> parts) {
+  final body = [for (final part in parts) ...part];
+  return [...u32be(body.length + 8), ...latin1.encode(type), ...body];
+}
+
+/// `data` 子 box：`长度 + 'data' + version/flags(4) + locale(4) + 载荷`。
+///
+/// [flags] 写进整个 4 字节字段（高 8 位名义上是 version，夹具一律 0），
+/// 与 JS 的 `u32be(flags)` 字节一致。13 = JPEG、14 = PNG。
+List<int> dataAtom(List<int> payload, {int flags = 1}) => [
+  ...u32be(payload.length + 16),
+  ...fourcc('data'),
+  ...u32be(flags),
+  ...u32be(0),
+  ...payload,
+];
+
+/// ilst 容器：条目列表（每个条目本身是一个 box）。
+List<int> ilst(List<List<int>> atoms) => mp4Box('ilst', atoms);
+
+/// M4A 文件：`ftyp` + 可选 `moov.mvhd / moov.udta.meta(u32be 0).ilst` + 音频字节。
+///
+/// `mvhd` 是 udta 之前的兄弟 box（对齐 JS 夹具），用来钉住「按长度跳过无关
+/// box」；`meta` 里的 4 字节是 version/flags 占位，真正的子 box 从第 12 字节起。
+List<int> mp4File({
+  required bool withMoov,
+  List<List<int>> atoms = const [],
+}) => [
+  ...mp4Box('ftyp', [
+    [...latin1.encode('M4A '), ...u32be(0), ...latin1.encode('M4A ')],
+  ]),
+  if (withMoov)
+    ...mp4Box('moov', [
+      mp4Box('mvhd', [List<int>.filled(100, 0)]),
+      mp4Box('udta', [
+        mp4Box('meta', [u32be(0), ilst(atoms)]),
+      ]),
+    ]),
+  ...mpegFrame(),
+];
