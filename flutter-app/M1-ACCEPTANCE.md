@@ -14,9 +14,6 @@
 
 ## A. 已自动执行
 
-工作目录 `flutter-app/`，Flutter 3.47.9 / Dart 3.13.7，
-分支 `feat/flutter-m1-core-playback`，采集时间 2026-11-07。
-
 ### A1 四条闸口的真实尾巴（终审修复波收尾重新采集）
 
 工作目录 `flutter-app/`，Flutter 3.47.9 / Dart 3.13.7，
@@ -102,9 +99,6 @@ Gradle task assembleDebug failed with exit code 1
 修法（换 `permission_handler` 版本 / 升 AGP 到支持 compileSdk 37 的那一档 /
 调 `android/app/build.gradle.kts`）都超出「本波不改依赖与构建配置」的授权范围，
 留待裁定；因此 B8（Android 真机段）连构建产物一起仍是 pending。
-
-`data/app.so` 的时间戳跟着构建更新，启动器 exe 本身没重编，
-所以它的时间戳不变 —— 这是正常的，别当成「没构建」。
 
 ### A2 每条自动验收对应哪些用例
 
