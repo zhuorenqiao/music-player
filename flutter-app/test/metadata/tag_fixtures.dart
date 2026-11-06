@@ -201,3 +201,118 @@ List<int> v1FieldBytes(List<int> raw, [int width = 30]) => [
   ...raw,
   ...List<int>.filled(width - raw.length, 0),
 ];
+
+// ---------------------------------------------------------------------------
+// FLAC / OGG（Task 8 追加，语义对齐 JS 的 vorbisComment / flacPictureBlock /
+// metaBlock / streaminfo / flacFile / oggPacket / oggIdent / oggComment）
+// ---------------------------------------------------------------------------
+
+/// Vorbis Comment 块内容：`vendor 长度 + vendor + 条目数 + 每条[长度 + 字节]`。
+///
+/// JS 侧 vendor 与条目都按 UTF-8（`TextEncoder`）写，这里同样默认 UTF-8；
+/// GBK 样本（非标准但真实存在）自己给字节，所以 [entries] 也接受 `List<int>`。
+List<int> vorbisComment(
+  List<Object> entries, {
+  String vendor = 'test-tagging',
+}) {
+  final vendorBytes = utf8.encode(vendor);
+  final body = <int>[...u32le(vendorBytes.length), ...vendorBytes];
+  body.addAll(u32le(entries.length));
+  for (final entry in entries) {
+    final raw = entry is String ? utf8.encode(entry) : entry as List<int>;
+    body.addAll(u32le(raw.length));
+    body.addAll(raw);
+  }
+  return body;
+}
+
+/// FLAC PICTURE 块内容：type + mime + description + 宽/高/位深/调色板数 + 数据。
+///
+/// 宽高与位深照抄 JS 夹具（120 / 120 / 24 / 0），解析器不看这些值。
+List<int> flacPictureBlock(
+  String mime,
+  List<int> picture, {
+  String description = '',
+}) {
+  final mimeBytes = latin1.encode(mime);
+  final descBytes = latin1.encode(description);
+  return [
+    ...u32be(3), // 封面类型 3 = 正面封面
+    ...u32be(mimeBytes.length),
+    ...mimeBytes,
+    ...u32be(descBytes.length),
+    ...descBytes,
+    ...u32be(120),
+    ...u32be(120),
+    ...u32be(24),
+    ...u32be(0),
+    ...u32be(picture.length),
+    ...picture,
+  ];
+}
+
+/// FLAC 元数据块：1 字节（type）+ 3 字节大端长度 + 内容。
+///
+/// last-flag（0x80）不在这里写，交给 [flacFile] 给最后一块补 —— 与 JS 夹具
+/// `metaBlock(0x86 / 0x84, …)` 造出的字节一致。
+List<int> metaBlock(int type, List<int> content) => [
+  type,
+  ...u32be(content.length).sublist(1),
+  ...content,
+];
+
+/// STREAMINFO 34 字节全 0：解析器只按长度跳过，内容无关。
+List<int> streamInfo() => List<int>.filled(34, 0);
+
+/// FLAC 文件：`fLaC` 魔数 + 块链（最后一块打 last-flag）+ 64 字节音频区。
+List<int> flacFile(List<List<int>> blocks) => [
+  ...fourcc('fLaC'),
+  for (var i = 0; i < blocks.length; i += 1) ...[
+    blocks[i][0] | (i == blocks.length - 1 ? 0x80 : 0),
+    ...blocks[i].sublist(1),
+  ],
+  ...List<int>.filled(64, 0),
+];
+
+/// Ogg 页：27 字节页头 + 段表 + 负载。
+///
+/// 段表照抄 JS 夹具：只写一个 `payload.length ~/ 255` 的条目（小于 255 字节
+/// 的报文就是 0），页头其余字段一律 0（serial 0、序号 1）。原版解析器根本不
+/// 看页头，是直接扫 `0x03 'vorbis'` 魔数，所以这里以「字节与 JS 一致」为准。
+List<int> oggPacket(
+  List<int> payload, {
+  int granule = 0,
+  int serial = 0,
+  int seq = 1,
+  bool bos = false,
+}) => [
+  ...fourcc('OggS'),
+  0,
+  bos ? 0x02 : 0x00,
+  ...u32le(granule), // granule 低 32 位
+  ...u32le(0), // granule 高 32 位
+  ...u32le(serial),
+  ...u32le(seq),
+  ...List<int>.filled(4, 0), // 校验和（原版不校验）
+  (payload.length ~/ 255) & 0xff,
+  ...payload,
+];
+
+/// Vorbis identification 报文：`0x01 'vorbis'` + 40 字节版本/声道/采样率区。
+List<int> oggIdent() => [0x01, ...fourcc('vorbis'), ...List<int>.filled(40, 0)];
+
+/// Vorbis comment 报文：`0x03 'vorbis'` + Vorbis Comment。
+///
+/// [base64Pictures] 里的每一项都会追加成一条 `METADATA_BLOCK_PICTURE=<base64>`
+/// （OGG 的封面约定，值是 base64 的 FLAC PICTURE 块）。
+List<int> oggComment(
+  List<String> entries, {
+  List<String> base64Pictures = const [],
+}) => [
+  0x03,
+  ...fourcc('vorbis'),
+  ...vorbisComment([
+    ...entries,
+    for (final picture in base64Pictures) 'METADATA_BLOCK_PICTURE=$picture',
+  ]),
+];
