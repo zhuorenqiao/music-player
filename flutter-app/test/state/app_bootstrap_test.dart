@@ -34,6 +34,15 @@ import 'package:provider/provider.dart';
 Track track(String id, String title) =>
     Track(id: id, src: '/m/$id.flac', title: title, duration: 61);
 
+/// 等落盘防抖真的到点（终审 R2）。
+///
+/// 停止播放那条腿必须由 `schedulePersist` 的定时器自己跑完才算数：第 1 轮那条
+/// 用例手调 `flushPersist()`，于是「stopPlayback 根本不排盘」这个缺陷只在测试
+/// 里被绕过。这里一律等真实窗口，不手调。
+Future<void> afterPersistDebounce() => Future<void>.delayed(
+  const Duration(milliseconds: kPersistDebounceMs + 150),
+);
+
 /// `start()` 直接抛：Android 没有 Activity 时 `activate()` 报 `NO_ACTIVITY`。
 class _ThrowingBridge implements MediaSessionBridge {
   @override
@@ -109,6 +118,113 @@ void main() {
     // 媒体会话 attach 时列表已就位，首推就是还原出来的当前曲目
     expect(bridge.startCount, 1);
     expect(bridge.published.last.title, '十年');
+  });
+
+  /// 终审 R4：原版 `src/state/player.tsx:556` 的还原光标规则是
+  /// `storedId && playlist.indexOfId(storedId) >= 0 ? indexOfId(storedId) : 0`
+  /// —— **任何一次启动都落得到一个光标**：没有有效存档就是列表第一首，而且是
+  /// `player.load(track, { autoplay: false })` 的暂停态；只有空列表才是空舞台。
+  /// 第 1 轮移植在这里写了 `clearCurrent()`（「没有有效 id 就没有光标」），
+  /// 与本用例正面冲突。
+  test('无有效存档时光标落到第一首且不自动播', () async {
+    final driver = FakeAudioDriver();
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(
+        tracks: [track('a', '十年'), track('b', '孤勇者')],
+        order: ['b', 'a'],
+        mode: PlayMode.list,
+      ),
+    );
+    // prefs 那份现场与文件仓逐位一致（自洽），但 currentId 指着一首先前就被删掉
+    // 的曲目：两份痕迹都给不出有效光标。
+    await prefs.writeJson(StorageKeys.order, ['b', 'a']);
+    await prefs.writeString(StorageKeys.currentId, 'local:ghost');
+
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: driver,
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+
+    expect(bootstrap.library.tracks.map((t) => t.id), ['b', 'a']);
+    expect(
+      bootstrap.library.currentId,
+      'b',
+      reason: '没有有效存档 ⇒ 落到列表第一首（原版 player.tsx:556），不是空舞台',
+    );
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      'b',
+      reason: '定了光标就要把 prefs 的 currentId 补写一致'
+          '（原版 persist 每次都跟着 playlist 重写，player.tsx:243-249）',
+    );
+    // 光标只是「指着」第一首，绝不该自动播起来（自动播放策略）
+    expect(bootstrap.player.playing, isFalse);
+    expect(driver.calls, isNot(contains('play')));
+  });
+
+  /// 终审 R2：I4 的「停止播放」那条腿从前只活在手调 `flushPersist()` 的用例里。
+  /// 这里走真实链路：播 → 停（系统侧 Stop 命令走的就是同一个
+  /// `TransportController.stopPlayback`）→ 等防抖自己落盘 → **重建 bootstrap**
+  /// （它内部就会 `library.restore()`）→ 已停的那首不许复活。
+  test('stopPlayback 后重建 bootstrap 再 restore：不复活已停的曲目', () async {
+    final firstDriver = FakeAudioDriver();
+    final first = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: firstDriver,
+      bridge: FakeMediaSessionBridge(),
+    );
+
+    // 存档现场是顺序 [b, a]、光标 a：先把 a 真的播起来，让 prefs 落下这份现场。
+    await first.player.playTrack('a');
+    expect(first.player.playing, isTrue);
+    await afterPersistDebounce();
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      'a',
+      reason: '播放推进那一次落下的现场（对照用：停止之后必须把它推翻）',
+    );
+    expect(await prefs.readJson(StorageKeys.order), ['b', 'a']);
+
+    await first.player.transport.stopPlayback();
+    await afterPersistDebounce();
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      isNull,
+      reason: 'stopPlayback 必须自己排一次落盘：prefs 里的光标要如实清掉',
+    );
+    expect(
+      await prefs.readJson(StorageKeys.order),
+      ['b', 'a'],
+      reason: '列表原样保留，痕迹里只清光标那一项',
+    );
+
+    // 「重开应用」：新的 bootstrap 读同一份存档与 prefs 现场。
+    // 先把上一份的落盘定时器与事件订阅关掉（dispose 是同步的），否则它迟到的
+    // 那一次 flush 会踩在第二个 bootstrap 刚写好的痕迹上。
+    first.player.dispose();
+    final secondDriver = FakeAudioDriver();
+    final second = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: secondDriver,
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(second.player.dispose);
+
+    expect(
+      second.library.currentId,
+      isNot('a'),
+      reason: 'prefs 现场自洽而 currentId 键缺失 = 用户停过，不许回落到档案值',
+    );
+    // 与 R4 合起来的最终语义：停过之后重启落到第一首（这里就是 b），保持暂停。
+    expect(second.library.currentId, 'b');
+    expect(second.player.playing, isFalse);
+    expect(secondDriver.calls, isNot(contains('play')));
+    expect(await prefs.readString(StorageKeys.currentId), 'b');
   });
 
   /// 终审 A1：音量与静音的真相只有 prefs 那两个键。

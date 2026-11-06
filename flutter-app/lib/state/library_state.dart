@@ -140,7 +140,8 @@ class LibraryState extends ChangeNotifier {
   ///   - **光标**在「现场自洽」时以 prefs 的 `currentId` 为准：播放推进只经
   ///     `PlayerState.flushPersist()` 写 prefs、不重写文件仓，所以 prefs 才是
   ///     最后一次如实写入的光标；两份 order 逐位一致就是「这份现场没跨代过期」
-  ///     的闸门。矛盾（或缺 order）时整份现场按陈旧处理，退回文件仓的
+  ///     的闸门。自洽而**键缺失**是否定断言（用户停过播放，终审 R2），不许再
+  ///     回落到档案值；矛盾（或缺 order）时整份现场按陈旧处理，退回文件仓的
   ///     `currentId`。**两边都给不出有效光标时落到列表第一首**（终审 R4，
   ///     原版 `src/state/player.tsx:556`），只有空列表才是空舞台。
   ///
@@ -197,7 +198,10 @@ class LibraryState extends ChangeNotifier {
   ///   1. 快照自洽（它的 order 与文件仓顺序逐位相同）时，[StorageKeys.currentId]
   ///      就是最后一次如实写入的光标 —— 播放推进只经 `PlayerState.flushPersist`
   ///      更新 prefs，并不会重写文件仓，此时 prefs 比存档里的 `currentId` 更新；
-  ///      它仍指向列表里的曲目就用它。
+  ///      它仍指向列表里的曲目就用它。**这个键缺失**在同一前提下是一句
+  ///      **否定断言**（用户停过播放 / 当前曲目被删空过，两边都把它如实清了，
+  ///      终审 R2），于是候选是空集：绝不回落到 `snap.currentId` —— 那正是
+  ///      停止之前那次 persist 写下的旧值，回落它就是把停掉的歌复活。
   ///   2. 快照自相矛盾（order 与文件仓不一致）或缺失时，整份按过期处理，
   ///      退回文件仓快照的 `currentId` —— 顺序与曲目以文件仓为权威。
   ///   3. 两边都指不到列表里的曲目（光标被删 / 键被清）时**落到列表第一首**，
@@ -220,10 +224,13 @@ class LibraryState extends ChangeNotifier {
       traceOrder,
       playlist.tracks.map((track) => track.id).toList(),
     );
-    // 候选顺序随「现场是否自洽」翻转：自洽时 prefs 更新，矛盾时文件仓更新。
-    final candidates = traceIsCurrent
-        ? <String?>[traceId, snap.currentId]
-        : <String?>[snap.currentId, traceId];
+    // 「现场自洽」时键缺失＝否定断言（R2），键在就用它；「现场过期」时整份
+    // prefs 都不作数，才轮到文件仓的 `currentId` 打头。
+    final candidates = !traceIsCurrent
+        ? <String?>[snap.currentId, traceId]
+        : prefs.containsKey(StorageKeys.currentId)
+        ? <String?>[traceId]
+        : const <String?>[];
     for (final id in candidates) {
       if (id != null && playlist.indexOfId(id) >= 0) {
         playlist.setCurrentById(id);

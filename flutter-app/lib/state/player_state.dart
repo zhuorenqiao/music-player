@@ -90,7 +90,14 @@ class PlayerState extends ChangeNotifier {
     }
   }
 
-  /// 真的开始出声才落盘：暂停 / 加载失败都不该写 currentId。
+  /// 出声之后排一次落盘。
+  ///
+  /// 「只有真的开始出声才落盘」这条第 1 轮的注释本身没错，但它**不足以覆盖
+  /// 光标的全部变化**：`stopPlayback` 把指针清空之后，从暂停态走过去连一条
+  /// 驱动事件都不会有（内核状态本来就没变），于是这个通道一次也没被触发，
+  /// prefs 里留下的还是停止前那个 currentId（终审 R2）。停止那一条腿现在由
+  /// 装配层把 `TransportController.onStopped` 接到 [schedulePersist] 上补上；
+  /// 加载失败与被拦仍**不**在这里落盘 —— 那些时刻指针没有变成「正在播」。
   void _onEvent(PlayerEvent event) {
     if (event is StateChangedEvent && event.playing) schedulePersist();
   }
@@ -166,6 +173,13 @@ class PlayerState extends ChangeNotifier {
   /// 的曲目时把键删掉，而不是留着上一次的旧值。以前只有「非空且不损坏」才写、
   /// 从不删，于是停止播放 / 当前曲目变损坏 / 列表被清空之后重启，会复活一个
   /// 指向不该再播的曲目的 currentId —— 原版每次变化都写（包括 `Storage.remove`）。
+  ///
+  /// **「把键删掉」本身就是一句陈述**（终审 R2）：还原时若痕迹自洽而这个键缺失，
+  /// 那是「用户停过播放 / 当前曲目被清过」的**否定断言**，`LibraryState.
+  /// _restoreCursor` 不再回落到文件仓里那份 `currentId`。写侧因此必须真的走到
+  /// 这里 —— `TransportController.stopPlayback` 那一条腿由装配层接线
+  /// （`main.dart` 里 `transport.onStopped = player.schedulePersist`），
+  /// 光靠播放器事件是接不住的。
   ///
   /// `order` 同样按当前列表重写：**列表顺序的权威永远是文件仓**（`LibraryState.
   /// restore` 只按它重建列表），prefs 这份是「最后一次现场」——它与文件仓逐位

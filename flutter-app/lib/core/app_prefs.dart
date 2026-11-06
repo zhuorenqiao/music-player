@@ -68,7 +68,17 @@ class AppPrefs {
 
   void debugSeed(String key, String value) => _backing.write(key, value);
 
-  bool debugContains(String key) => _backing.read(key) != null;
+  bool debugContains(String key) => containsKey(key);
+
+  /// 这个键**在不在**存储里（与「在、但值是脏的」是两件事）。
+  ///
+  /// 还原时的**否定断言**要用它区分两种「读到 null」：键被如实删掉（用户停过
+  /// 播放 / 当前曲目被删 / 列表被清空，见 `PlayerState.flushPersist` 与
+  /// `LibraryState._syncPrefsTrace`）是一句明确的陈述；这个键从来没人写过
+  /// （首次使用、老版本存档）才是「没有信息」。只靠 [readString] 的 null
+  /// 分不出这两者，于是停止播放那条腿哪怕落盘修好了，重启仍会回落到档案值
+  ///（终审 R2）。
+  bool containsKey(String key) => _backing.read(key) != null;
 
   Future<String?> readString(String key) async => _raw(key);
 
