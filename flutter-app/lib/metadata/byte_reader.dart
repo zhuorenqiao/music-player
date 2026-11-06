@@ -11,8 +11,10 @@ import 'dart:typed_data';
 ///
 /// * 首次读取文件时把开头 [headProbeBytes]（64KB）缓存下来，后续在窗口内的
 ///   小读取都不再开文件句柄 —— 判格式、扫帧头正是这种「大量小读取」；
-/// * 窗口之外的读取走真正的偏移读取，但**一律不超过 [maxBytes]**，防止畸形
-///   标签里的超大长度把内存吃光；
+/// * 窗口之外的读取走真正的偏移读取，但**单次读取长度不超过 [maxBytes]**，防止
+///   畸形标签里的超大长度把内存吃光。上限约束的是「一次读多少」而不是「从哪儿读」
+///   —— 原版 `readSlice` 就是这个语义（尾部标签用 `file.size - tailSize` 起读），
+///   否则大于上限的文件连末尾 128 字节的 ID3v1 都读不到；
 /// * 越界、负数、文件不存在、句柄打开失败，统统退化成「空 / 可用前缀」，绝不抛出，
 ///   也绝不返回 null —— 调用方拿到的一定是可迭代的字节。
 class ByteSource {
@@ -46,8 +48,8 @@ class ByteSource {
   Uint8List? _head;
 
   /// 数据总长度。文件源报告**文件真实大小**（不是被上限截断的长度），
-  /// 好让调用方能据此算「末尾 128 字节」这类偏移；真正读不到的部分由
-  /// [read] 按上限返回空，不会谎报可读。
+  /// 好让调用方能据此算「末尾 128 字节」这类偏移；[maxBytes] 只限制单次读取量，
+  /// 所以任意偏移都读得到，超长区间由调用方分段读。
   int get length {
     final cached = _length;
     if (cached != null) return cached;
@@ -62,7 +64,8 @@ class ByteSource {
   /// 读 [count] 字节；不够就只给可用的前缀。
   ///
   /// 越界（偏移 >= 长度）、负数偏移、非正长度都返回空列表，不抛。
-  /// 文件源还会被 [maxBytes]/读取上限截断：超出上限的部分读不到，返回空。
+  /// 文件源的**单次读取长度**还会被 [maxBytes] 截断：只要偏移在文件内，从任何
+  /// 位置（含末尾）起读都可行，但一次最多给 [maxBytes] 字节。
   Future<List<int>> read(int offset, int count) async {
     if (count <= 0 || offset < 0) return Uint8List(0);
     final total = length;
@@ -71,9 +74,9 @@ class ByteSource {
     final bytes = _bytes;
     if (bytes != null) return bytes.sublist(offset, offset + want);
 
-    final reachable = _maxBytes - offset;
-    if (reachable <= 0) return Uint8List(0);
-    if (want > reachable) want = reachable;
+    // 上限只约束「这一次读多少」，不约束起点：大文件的尾部（ID3v1、尾部 moov）
+    // 同样可达，与原版 `readSlice(file, Math.max(0, size - 128), 128)` 一致。
+    if (want > _maxBytes) want = _maxBytes;
     final head = await _headBytes();
     // 命中 64KB 头窗口就不开文件句柄；返回副本，避免调用方改写缓存。
     if (offset + want <= head.length) {
@@ -82,7 +85,8 @@ class ByteSource {
     return _readRange(offset, want);
   }
 
-  /// 读末尾 [count] 字节（ID3v1 的 128 字节尾巴靠它）。跨越不过就取整段。
+  /// 读末尾 [count] 字节（ID3v1 的 128 字节尾巴靠它）。文件比 [count] 短就取整段；
+  /// 一次最多给 [maxBytes] 字节（与 [read] 的上限一致）。
   Future<List<int>> readTail(int count) async {
     if (count <= 0) return Uint8List(0);
     final total = length;

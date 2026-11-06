@@ -1,5 +1,6 @@
 // test/metadata/byte_reader_test.dart
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/metadata/byte_reader.dart';
@@ -70,15 +71,43 @@ void main() {
     expect(await src.matchesText(0, 'he'), isTrue);
   });
 
-  test('文件源 maxBytes 之外的读取返回空', () async {
-    final file = await _tempFile('capped', List<int>.generate(10, (i) => i));
+  test('文件源只限制单次读取长度，不限制起点', () async {
+    final file = await _tempFile('capped', List<int>.generate(9, (i) => i + 1));
     final src = ByteSource.fromFile(file.path, maxBytes: 4);
     // 长度按文件真实大小如实报告，读取才受上限约束。
-    expect(src.length, 10);
-    expect(await src.read(0, 10), [0, 1, 2, 3]);
-    expect(await src.read(2, 4), [2, 3]);
-    expect(await src.read(6, 2), isEmpty);
-    expect(await src.readTail(2), isEmpty);
+    expect(src.length, 9);
+    // 请求长度超过上限时截断到 maxBytes。
+    expect(await src.read(0, 10), [1, 2, 3, 4]);
+    // 起点超过上限也照读：旧实现按 offset 截断，这里只会给 2 字节。
+    expect(await src.read(2, 4), [3, 4, 5, 6]);
+    // 越界（偏移 >= 长度）返回空。
+    expect(await src.read(9, 2), isEmpty);
+    expect(await src.read(99, 4), isEmpty);
+    // 尾部在 offset > maxBytes 处：旧实现返回空，ID3v1 因此丢失。
+    expect(await src.readTail(2), [8, 9]);
+    // 超出 EOF 只给可用前缀。
+    expect(await src.read(7, 100), [8, 9]);
+  });
+
+  test('超过 8MB 的文件仍能读到末尾标记', () async {
+    // 9MB 零字节，末尾 4 字节写 'TAG!'：旧实现把上限套在偏移上，
+    // readTail(4) 会返回空，ID3v1 与尾部 moov 的 MP4 因此静默丢失。
+    const marker = [0x54, 0x41, 0x47, 0x21];
+    const size = 9 * 1024 * 1024;
+    final file = File('test/.tmp-large.bin');
+    final handle = file.openSync(mode: FileMode.write);
+    try {
+      handle.writeFromSync(Uint8List(size - marker.length));
+      handle.writeFromSync(Uint8List.fromList(marker));
+    } finally {
+      handle.closeSync();
+    }
+    addTearDown(() async {
+      if (await file.exists()) await file.delete();
+    });
+    final src = ByteSource.fromFile(file.path);
+    expect(src.length, size);
+    expect(await src.readTail(marker.length), marker);
   });
 
   test('文件不存在时长度 0、读取不抛', () async {
