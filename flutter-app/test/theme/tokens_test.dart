@@ -53,6 +53,11 @@ void main() {
     expect(tokens.progressTrack, const Color(0x1CFFFFFF)); // rgba(255,255,255,0.11)
     expect(tokens.barA, const Color(0xE00E131A)); // rgba(14,19,26,0.88)
     expect(tokens.barB, const Color(0xF7090C11)); // rgba(9,12,17,0.97)
+    // 滑杆圆点的白：app.css 里是字面量 `background: #ffffff`
+    // （`.progress__input::-webkit-slider-thumb` / `.volume__input::-…`），
+    // 从前 ui/progress_slider.dart 直接写 Colors.white —— ui/ 内不许有颜色字面量，
+    // 换成 token 字段后 M3 加浅色那套才不用回来改界面（终审 minor 1）。
+    expect(tokens.sliderThumb, const Color(0xFFFFFFFF));
     // 阴影与毛玻璃：颜色 / 位移 / 模糊 / 扩散逐项对齐 app.css。
     expect(tokens.shadowCard, hasLength(1));
     expect(tokens.shadowCard.single.color, const Color(0xF2000000));
@@ -98,6 +103,8 @@ void main() {
     expect(theme.splashFactory, NoSplash.splashFactory);
     expect(theme.sliderTheme.activeTrackColor, AppTokens.dark.accent);
     expect(theme.sliderTheme.inactiveTrackColor, AppTokens.dark.progressTrack);
+    // Material 滑杆的圆点也从 token 取，不留 Colors.white（终审 minor 1）
+    expect(theme.sliderTheme.thumbColor, AppTokens.dark.sliderThumb);
     expect(theme.textTheme.bodyMedium!.color, AppTokens.dark.text);
     expect(theme.extension<AppTokensData>()!.tokens.accentRgb, (46, 230, 168));
   });

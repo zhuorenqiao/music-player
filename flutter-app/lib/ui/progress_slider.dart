@@ -276,7 +276,8 @@ class _Thumb extends StatelessWidget {
       height: _thumbSize,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: Colors.white,
+        // 圆点底是 token（app.css 的 `background: #ffffff`），ui/ 内不写颜色字面量
+        color: tokens.sliderThumb,
         border: Border.all(color: tokens.accent, width: _thumbBorder),
       ),
     );

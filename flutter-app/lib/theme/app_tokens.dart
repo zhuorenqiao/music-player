@@ -38,6 +38,7 @@ class AppTokens {
     required this.barA,
     required this.barB,
     required this.progressTrack,
+    required this.sliderThumb,
     required this.accentSoft,
     required this.accentLine,
     required this.dangerSoft,
@@ -125,6 +126,12 @@ class AppTokens {
   /// 进度条轨道（CSS 用 `--tint-3`）
   final Color progressTrack;
 
+  /// 滑杆圆点的填充色：app.css 里是字面量 `background: #ffffff`
+  /// （`.progress__input::-webkit-slider-thumb`、`.volume__input::-webkit-slider-thumb`），
+  /// 不是变量，所以表里给它一个字段 —— `ui/` 内不许出现颜色字面量（T19 定的规矩），
+  /// M3 加浅色那套时这里才跟着翻（终审 minor 1）。
+  final Color sliderThumb;
+
   /// `--accent-soft`
   final Color accentSoft;
 
@@ -174,6 +181,7 @@ class AppTokens {
     barA: Color(0xE00E131A), // rgba(14, 19, 26, 0.88)，0.88 × 255 = 224.4 → 0xE0
     barB: Color(0xF7090C11), // rgba(9, 12, 17, 0.97)
     progressTrack: Color(0x1CFFFFFF), // --tint-3: rgba(255, 255, 255, 0.11)
+    sliderThumb: Color(0xFFFFFFFF), // #ffffff（滑杆圆点底）
     accentSoft: Color(0x242EE6A8), // rgba(46, 230, 168, 0.14)
     accentLine: Color(0x522EE6A8), // rgba(46, 230, 168, 0.32)
     dangerSoft: Color(0x1FFF6B81), // rgba(255, 107, 129, 0.12)

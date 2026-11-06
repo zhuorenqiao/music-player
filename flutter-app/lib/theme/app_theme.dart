@@ -21,7 +21,7 @@ ThemeData buildTheme({AppTokens tokens = AppTokens.dark}) {
     sliderTheme: base.sliderTheme.copyWith(
       activeTrackColor: tokens.accent,
       inactiveTrackColor: tokens.progressTrack,
-      thumbColor: Colors.white,
+      thumbColor: tokens.sliderThumb,
       overlayColor: tokens.accentSoft,
       disabledActiveTrackColor: tokens.accentSoft,
       disabledInactiveTrackColor: tokens.progressTrack,
