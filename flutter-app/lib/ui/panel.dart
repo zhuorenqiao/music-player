@@ -15,8 +15,9 @@
 //
 // 四条硬约束：
 //   1. **一个搜索框管两个 tab，只搜歌名**。输入即时回显，过滤值走
-//      [LibraryState.filteredTracks]（200ms 防抖后的生效值）；清空立刻生效，
-//      所以「删到空」不会先闪一帧空态。
+//      [LibraryState.effectiveKeyword]（200ms 防抖后的生效值）：播放列表按
+//      [LibraryState.filteredTracks]，最近按条目标题，折叠规则同一份；清空立刻
+//      生效，所以「删到空」不会先闪一帧空态。
 //   2. **统计行跟着生效值走**：过滤时 `找到 N 首 · 共 M 首`，否则
 //      `M 首 · 总时长 mm:ss`。用原始输入判断会让统计行比列表早一拍跳变。
 //   3. **错误常驻在列表上方**：自动播放被拦 / 全列表失败这类事不该用会消失的
@@ -428,6 +429,11 @@ class _PlaylistBody extends StatelessWidget {
 }
 
 /// 最近播放 tab：26 高的说明行 + 列表 / 空态。
+///
+/// 搜索框同样管这个 tab（原版 `visibleRecent`，App.tsx:601-603）：按条目标题
+/// 过滤，关键词折叠规则与播放列表一致；空态因此有四种 —— 没有记录 / 关键词
+/// 没命中。顶部说明行与「清空历史」的禁用态读**未过滤**的条目：历史还在，
+/// 只是当前关键词看不到，清空按钮不该跟着变灰。
 class _RecentBody extends StatelessWidget {
   const _RecentBody({
     required this.recent,
@@ -443,6 +449,12 @@ class _RecentBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     final entries = recent.entries;
+    final keyword = library.effectiveKeyword;
+    final visible = keyword.isEmpty
+        ? entries
+        : entries
+              .where((entry) => entry.title.toLowerCase().contains(keyword))
+              .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -476,17 +488,24 @@ class _RecentBody extends StatelessWidget {
           ),
         ),
         Expanded(
+          // 四种空态：没有记录 vs 关键词没命中（后者只在「有记录但都被滤掉」
+          // 时出现，文案与播放列表的搜索空态逐字相同）
           child: entries.isEmpty
               ? const EmptyState(
                   title: '还没有播放记录',
                   hint: '播放过的歌会自动出现在这里',
                 )
+              : visible.isEmpty
+              ? EmptyState(
+                  title: '没有找到《${library.keyword.trim()}》',
+                  hint: '换个关键词试试',
+                )
               : ListView.builder(
                   key: const Key('recent-list'),
                   padding: EdgeInsets.zero,
-                  itemCount: entries.length,
+                  itemCount: visible.length,
                   itemBuilder: (context, index) {
-                    final entry = entries[index];
+                    final entry = visible[index];
                     return RecentRow(
                       key: ValueKey<String>(entry.id),
                       title: entry.title,
