@@ -1,12 +1,14 @@
 // test/core/shortcuts_test.dart
 //
-// 桌面快捷键层（T30）：对译 `src/App.tsx:1582-1655` 的键盘 effect 与 README
-// 的「快捷键」表（空格播放/暂停、←→ ±5 秒、↑↓ ±5%、M 静音）。
+// 桌面快捷键层（T30 + 终审 I5）：对译 `src/App.tsx:1582-1655` 的键盘 effect 与
+// README 的「快捷键」表（空格播放/暂停、←→ ±5 秒、↑↓ ±5%、M 静音、
+// N 下一首、P 上一首）。
 //
 // 四条规则各占一条用例，全程用**记录型假回调**断言，不碰音频内核也不建真播放器
 // （真 PlayerState 的接线在 test/integration/m1_smoke_test.dart 里跑）：
-//   1. 六组键各自触发正确的动作与正确的步长；
-//   2. 输入框聚焦时整套让位（原版 `tag === 'INPUT' || 'TEXTAREA' || 'SELECT'`）；
+//   1. 八组键各自触发正确的动作与正确的步长；
+//   2. 输入框聚焦时整套让位（原版 `tag === 'INPUT' || 'TEXTAREA' || 'SELECT'`，
+//      N / P 靠的就是这一条：搜索框里打 n 不该切歌）；
 //   3. 滑块聚焦时方向键由滑块自己处理，绝不双触发（原版 `isRange` 分支）；
 //   4. 空格被本层消费 —— 等价于原版的 `preventDefault()`，所以列表不会被顶下去。
 //
@@ -52,7 +54,7 @@ Intent? intentOf(LogicalKeyboardKey key) {
 }
 
 void main() {
-  test('快捷键表覆盖六组键，且不抢媒体键与歌词页的 L / Esc', () {
+  test('快捷键表覆盖八组键，且不抢媒体键与歌词页的 L / Esc', () {
     final pressed = kLightMusicShortcuts.keys
         .map(
           (activator) =>
@@ -69,6 +71,9 @@ void main() {
         LogicalKeyboardKey.arrowUp,
         LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.keyM,
+        // 终审 I5：原版 `src/App.tsx:1639-1645` 的 N / P 两张牌此前漏移植
+        LogicalKeyboardKey.keyN,
+        LogicalKeyboardKey.keyP,
       },
     );
     // 歌词页两个键属 M2：这里注册了就会和未来的歌词页抢按键
@@ -78,13 +83,18 @@ void main() {
     expect(pressed, isNot(contains(LogicalKeyboardKey.mediaPlayPause)));
     expect(pressed, isNot(contains(LogicalKeyboardKey.mediaTrackNext)));
     expect(pressed, isNot(contains(LogicalKeyboardKey.mediaTrackPrevious)));
+    // N / P 与静音的 M 不冲突：三张牌各指各的动作
+    expect(intentOf(LogicalKeyboardKey.keyM), isA<ToggleMuteIntent>());
+    expect(intentOf(LogicalKeyboardKey.keyN), isNot(intentOf(LogicalKeyboardKey.keyM)));
   });
 
-  test('六个 Intent 的步长与 README 一致：±5 秒 / ±5%', () {
+  test('八个 Intent 的步长与 README 一致：±5 秒 / ±5%', () {
     expect(kSeekStep, 5);
     expect(kVolumeStep, 0.05);
     expect(intentOf(LogicalKeyboardKey.space), isA<TogglePlayIntent>());
     expect(intentOf(LogicalKeyboardKey.keyM), isA<ToggleMuteIntent>());
+    expect(intentOf(LogicalKeyboardKey.keyN), isA<PlayNextIntent>());
+    expect(intentOf(LogicalKeyboardKey.keyP), isA<PlayPrevIntent>());
     expect((intentOf(LogicalKeyboardKey.arrowLeft)! as SeekByIntent).delta, -5);
     expect((intentOf(LogicalKeyboardKey.arrowRight)! as SeekByIntent).delta, 5);
     expect(
@@ -119,6 +129,19 @@ void main() {
     ]);
   });
 
+  // 终审 I5：N = 下一首、P = 上一首（原版 `case 'KeyN': playNext()` /
+  // `case 'KeyP': playPrev()`）。名字与界面层派发给 PlayerState 的动作一致。
+  testWidgets('N 下一首、P 上一首', (tester) async {
+    final calls = <String>[];
+    await pumpHost(tester, calls, const Text('x'));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+
+    expect(calls, ['playNext', 'playPrev', 'playNext']);
+  });
+
   testWidgets('输入框聚焦时快捷键全部让位', (tester) async {
     final calls = <String>[];
     final controller = TextEditingController();
@@ -134,6 +157,9 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.keyM);
+    // 终审 I5 那条硬要求：面板搜索框正在输入 n / p 时不许切歌
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
 
     expect(calls, isEmpty);
   });

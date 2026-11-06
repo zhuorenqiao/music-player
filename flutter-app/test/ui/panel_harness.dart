@@ -59,7 +59,7 @@ class PanelHarness {
       importer: ImportService(playlist: playlist, toasts: toasts),
       toasts: toasts,
     );
-    player = _HarnessPlayer(
+    player = _harnessPlayer = _HarnessPlayer(
       playlist,
       notice: notice,
       breaker: circuitOpen,
@@ -101,6 +101,12 @@ class PanelHarness {
   late final PlayerState player;
   late final RecentState recent;
 
+  /// 假播放器本体（只覆写两条 getter），用 [PlayerState] 的静态类型拿不到。
+  late final _HarnessPlayer _harnessPlayer;
+
+  /// 「继续播放」被点了几次（终审 I5 / ledger T28：这条从前没有断言）。
+  int get gestureCalls => _harnessPlayer.gestures;
+
   Widget build() => MultiProvider(
     providers: [
       ChangeNotifierProvider<LibraryState>.value(value: library),
@@ -137,6 +143,14 @@ class _HarnessPlayer extends PlayerState {
 
   final String? notice;
   final bool breaker;
+
+  /// 被点到的「继续播放」次数：真 `userGesture` 会去碰内核，这里只计数。
+  int gestures = 0;
+
+  @override
+  Future<void> userGesture() async {
+    gestures += 1;
+  }
 
   @override
   String? get blockedMessage => notice;

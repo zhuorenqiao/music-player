@@ -1,7 +1,9 @@
 // lib/core/shortcuts.dart
 //
 // 桌面快捷键层：对译 `src/App.tsx:1582-1655` 的键盘 effect 与 README
-// 「快捷键」表（空格播放/暂停、←→ 快退/快进 5 秒、↑↓ 音量 ±5%、M 静音）。
+// 「快捷键」表（空格播放/暂停、←→ 快退/快进 5 秒、↑↓ 音量 ±5%、M 静音、
+// N 下一首、P 上一首 —— 后两个是终审 I5 补上的漏移植，原版在
+// `src/App.tsx:1639-1645`）。
 //
 // 三层各管一件事，跟原版的分工一一对应：
 //   1. [kLightMusicShortcuts] = 那张 switch 的「哪个键 → 哪个动作」；
@@ -43,7 +45,9 @@ const double kVolumeStep = 0.05;
 
 /// 快捷键的动作名：[AppShortcuts] 往外报、界面层往 [PlayerState] 派。
 ///
-/// 只有这四个字符串，界面层的 switch 与测试的断言共用它们，别再新增第五个。
+/// 只有这六个字符串（`togglePlay` / `seekBy` / `volumeBy` / `toggleMute` /
+/// `playNext` / `playPrev`），界面层的 switch 与测试的断言共用它们，
+/// 别再新增第七个。
 typedef ShortcutCallback = void Function(String name, [Object? arg]);
 
 /// 播放 / 暂停。
@@ -70,6 +74,16 @@ class ToggleMuteIntent extends Intent {
   const ToggleMuteIntent();
 }
 
+/// 下一首（终审 I5，原版 `case 'KeyN': playNext()`）。
+class PlayNextIntent extends Intent {
+  const PlayNextIntent();
+}
+
+/// 上一首（终审 I5，原版 `case 'KeyP': playPrev()`）。
+class PlayPrevIntent extends Intent {
+  const PlayPrevIntent();
+}
+
 const Map<ShortcutActivator, Intent> _kLightMusicShortcutMap =
     <ShortcutActivator, Intent>{
       SingleActivator(LogicalKeyboardKey.space): TogglePlayIntent(),
@@ -78,10 +92,13 @@ const Map<ShortcutActivator, Intent> _kLightMusicShortcutMap =
       SingleActivator(LogicalKeyboardKey.arrowUp): VolumeByIntent(kVolumeStep),
       SingleActivator(LogicalKeyboardKey.arrowDown): VolumeByIntent(-kVolumeStep),
       SingleActivator(LogicalKeyboardKey.keyM): ToggleMuteIntent(),
+      // N / P：与 M 不冲突，也不与系统媒体键冲突（上下曲由 MediaSessionBridge 管）。
+      SingleActivator(LogicalKeyboardKey.keyN): PlayNextIntent(),
+      SingleActivator(LogicalKeyboardKey.keyP): PlayPrevIntent(),
       // L（歌词页）/ Escape（关歌词页）留给 M2，见文件头。
     };
 
-/// 快捷键表：六个键，一组一个动作。
+/// 快捷键表：八个键，一组一个动作。
 ///
 /// 表里**刻意没有**修饰键组合：原版第一件事就是 `if (altKey || ctrlKey ||
 /// metaKey) return;`，`SingleActivator` 的四个修饰位默认全要求松开，同一件事。
@@ -124,10 +141,11 @@ class _LightMusicAction<T extends Intent> extends CallbackAction<T> {
   bool get isActionEnabled => enabled();
 }
 
-/// 把六个键接成回调的宿主层。
+/// 把八个键接成回调的宿主层。
 ///
-/// [onAction] 收到的名字是 `togglePlay` / `seekBy` / `volumeBy` / `toggleMute`，
-/// 后两个带 `double` 参数（增量，不是绝对值）。界面层负责把它落到播放器上，
+/// [onAction] 收到的名字是 `togglePlay` / `seekBy` / `volumeBy` / `toggleMute`
+/// / `playNext` / `playPrev`，其中 `seekBy`、`volumeBy` 带 `double` 参数
+/// （增量，不是绝对值）。界面层负责把它落到播放器上，
 /// core 层不认识 [PlayerState]，方向依赖不反过来。
 class AppShortcuts extends StatelessWidget {
   const AppShortcuts({
@@ -170,6 +188,22 @@ class AppShortcuts extends StatelessWidget {
             enabled: () => !_hasTextEditingFocus(),
             onInvoke: (ToggleMuteIntent intent) {
               onAction('toggleMute');
+              return null;
+            },
+          ),
+          // N / P 的「输入框让位」不是可选项：面板搜索框里打 n 本该只进文字，
+          // 原版靠 INPUT 自己吃掉 keydown，这里靠同一个 `_hasTextEditingFocus`。
+          PlayNextIntent: _LightMusicAction<PlayNextIntent>(
+            enabled: () => !_hasTextEditingFocus(),
+            onInvoke: (PlayNextIntent intent) {
+              onAction('playNext');
+              return null;
+            },
+          ),
+          PlayPrevIntent: _LightMusicAction<PlayPrevIntent>(
+            enabled: () => !_hasTextEditingFocus(),
+            onInvoke: (PlayPrevIntent intent) {
+              onAction('playPrev');
               return null;
             },
           ),

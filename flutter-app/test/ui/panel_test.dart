@@ -137,6 +137,26 @@ void main() {
     expect(notice.bottom, lessThanOrEqualTo(row.top));
   });
 
+  // 终审 I5 / ledger T28 那条 deferred minor：这颗按钮从前只是画出来，
+  // 没有任何断言证明它接到 `userGesture()`。
+  testWidgets('「继续播放」按下去就是一次 userGesture 重试', (tester) async {
+    final harness = PanelHarness(
+      titles: ['十年'],
+      notice: '音频解码失败，文件可能已损坏',
+    );
+    addTearDown(harness.dispose);
+    await pump(tester, harness);
+
+    expect(harness.gestureCalls, 0);
+    await tester.tap(find.text('继续播放'));
+    await tester.pump();
+    expect(harness.gestureCalls, 1);
+
+    await tester.tap(find.text('继续播放'));
+    await tester.pump();
+    expect(harness.gestureCalls, 2, reason: '每次点击各算一次手势');
+  });
+
   testWidgets('熔断提示单独一条文案，带说明', (tester) async {
     final harness = PanelHarness(titles: ['十年'], circuitOpen: true);
     addTearDown(harness.dispose);

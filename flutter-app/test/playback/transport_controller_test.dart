@@ -565,6 +565,38 @@ void main() {
       expect(c.blockedMessage, isNotNull);
     });
 
+    // 终审 I5：手势入口从「只有继续播放按钮」扩成「被拦状态下任何一次真实交互」，
+    // 于是这条重试路径会被按钮自己的播放碰上一次。原版 `resumeAutoplay` 调的是
+    // `player.play()`（原地续播），不是重载 —— 重载会把进度清零、还会跟播放
+    // 按钮互相打断（现象：点一下播放，歌从 0:00 重新开始）。
+    test('手势重试是原地续播，不重载也不丢进度（I5）', () async {
+      final driver = FakeAudioDriver()
+        ..playThrows = StateError('NotAllowedError: play blocked');
+      final c = build(
+        playlist: Playlist.fromTracks([t('1'), t('2')]),
+        driver: driver,
+      );
+
+      await c.playTrack('1', autoplay: true);
+      await settle();
+      expect(c.blockedMessage, kAutoplayBlockedMessage);
+
+      driver.emitPosition(48);
+      await settle();
+      driver.calls.clear();
+
+      await c.userGesture();
+      await settle();
+
+      expect(
+        driver.calls.where((call) => call.startsWith('open:')),
+        isEmpty,
+        reason: '内核里就是这一首，重试不该重新换源',
+      );
+      expect(driver.calls, contains('play'));
+      expect(c.position.value, 48, reason: '重试之后进度仍停在原处');
+    });
+
     test('没有被拦时 userGesture 不动播放器', () async {
       final driver = FakeAudioDriver();
       final c = build(

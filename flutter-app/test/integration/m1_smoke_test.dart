@@ -286,4 +286,62 @@ void main() {
     semantics.dispose();
     expect(tester.takeException(), isNull);
   });
+
+  // 终审 I5：`src/App.tsx:1639-1645` 的 `case 'KeyN': playNext()` /
+  // `case 'KeyP': playPrev()` 此前整个漏移植。这条走真应用根，验的是**接线**
+  // （shortcuts 那份用例只验到回调名），顺带验「搜索框里有焦点时打 n 不切歌」。
+  testWidgets('N 下一首 / P 上一首接到播放器；搜索框里打 n 不切歌', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1280, 900);
+
+    final driver = FakeAudioDriver();
+    final bootstrap = (await tester.runAsync(
+      () => buildBootstrap(
+        prefs: prefs,
+        dataDirectory: dir.path,
+        driver: driver,
+        bridge: FakeMediaSessionBridge(),
+      ),
+    ))!;
+    addTearDown(bootstrap.player.dispose);
+    addTearDown(bootstrap.library.dispose);
+    addTearDown(bootstrap.recent.dispose);
+    addTearDown(bootstrap.toasts.dispose);
+
+    await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
+    await tester.pump();
+
+    final player = bootstrap.player;
+    expect(player.current?.id, 'a');
+
+    await press(tester, LogicalKeyboardKey.keyN);
+    expect(player.current?.id, 'b', reason: 'N = 下一首');
+    expect(driver.calls, contains('open:/m/b.flac'));
+
+    await press(tester, LogicalKeyboardKey.keyP);
+    expect(player.current?.id, 'a', reason: 'P = 上一首');
+
+    // 面板搜索框拿到焦点：同一个键归输入框，播放器一次都不该被碰
+    await tester.tap(find.byKey(const Key('panel-search')).first);
+    await tester.pump();
+    driver.calls.clear();
+
+    await press(tester, LogicalKeyboardKey.keyN);
+    await press(tester, LogicalKeyboardKey.keyP);
+
+    expect(player.current?.id, 'a');
+    expect(
+      driver.calls.where((call) => call.startsWith('open:')),
+      isEmpty,
+      reason: '搜索框里打 n / p 不许发起播放',
+    );
+    expect(
+      tester.widget<TextField>(find.byKey(const Key('panel-search')).first)
+          .focusNode!
+          .hasFocus,
+      isTrue,
+      reason: '焦点确实落在输入框上（否则这条用例什么都没验到）',
+    );
+  });
 }

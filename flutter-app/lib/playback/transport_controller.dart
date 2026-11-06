@@ -332,11 +332,23 @@ class TransportController {
 
   /// 页面里一次真实交互：把被拦住的播放再拉一次，最多 [kMaxAutoplayRetries] 次。
   /// 用完就保持 [blockedMessage] 不变 —— 让用户自己点播放，绝不无限打转。
+  ///
+  /// 重试走**原地续播**（终审 I5，对齐原版 `resumeAutoplay()` 里那句
+  /// `player.play()`）：内核里已经挂着这一首就只 `resume()`，不再 `load`。
+  /// 两条理由：① 重载会把进度清零，「被拦之后随手点一下」不该让歌从 0:00
+  /// 重新开始；② 现在手势入口是全局的（`ui/autoplay_gate.dart`），播放按钮
+  /// 那颗自己也会走 [togglePlay]，两边都用重载就会互相打断 —— 原版注释里
+  /// 「交给它们，别互相打断」防的就是这个。只有内核里根本没有这首
+  /// （被 [stopPlayback] 卸掉过）才回到「加载 + 自动播放」。
   Future<void> userGesture() async {
     final track = playlist.current;
     if (_blockedMessage == null || track == null) return;
     if (_blockedRetries >= kMaxAutoplayRetries) return;
     _blockedRetries += 1;
+    if (player.track?.id == track.id) {
+      await player.resume();
+      return;
+    }
     await player.load(track, autoplay: true);
   }
 

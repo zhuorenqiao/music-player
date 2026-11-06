@@ -25,6 +25,7 @@ import 'state/recent_state.dart';
 import 'state/toast_state.dart';
 import 'theme/app_theme.dart';
 import 'theme/app_tokens.dart';
+import 'ui/autoplay_gate.dart';
 import 'ui/home_page.dart';
 import 'ui/toasts.dart';
 
@@ -105,8 +106,12 @@ class LightMusicApp extends StatelessWidget {
         theme: buildTheme(tokens: AppTokens.dark),
         // 提示条压在路由之上：任何页面 / 弹层看到的都是同一条，且不随页面重建
         // 丢失计时。`home` 只放骨架页，提示条不该由它自己挂。
-        builder: (context, child) => Stack(
-          children: [?child, const ToastsHost()],
+        // 网关（终审 I5）再压一层：原版的 pointerdown / keydown 监听挂在
+        // document 上，弹层、抽屉、提示条里的一次交互同样算「真实手势」。
+        builder: (context, child) => AutoplayGestureGate(
+          child: Stack(
+            children: [?child, const ToastsHost()],
+          ),
         ),
         // 桌面快捷键（T30）：包在 HomePage 外面、路由里面 —— 弹层与对话框自带
         // 焦点域，按键不会从它们背后漏到播放器上（与原版「弹层开着时只认 Esc」
@@ -126,6 +131,11 @@ class LightMusicApp extends StatelessWidget {
                 );
               case 'toggleMute':
                 unawaited(player.toggleMute());
+              // 终审 I5：N / P 是原版键盘表里漏移植的两张牌（上下曲）
+              case 'playNext':
+                unawaited(player.next());
+              case 'playPrev':
+                unawaited(player.previous());
             }
           },
           child: const HomePage(),
