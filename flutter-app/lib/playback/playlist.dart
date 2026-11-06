@@ -233,6 +233,20 @@ class Playlist {
     return old;
   }
 
+  /// 冷启动还原：整体替换，不逐条 addAt。
+  ///
+  /// 逐条追加会让洗牌队列与「首条自动成为当前」这两条规则各自跑一遍，还原出来
+  /// 的顺序还可能被 addAt 的插入逻辑挪动；这里一次性换掉内容，当前指针固定回
+  /// 队首（随后由 `setCurrentById` 校正到存档里的那首），再重建一次洗牌队列。
+  /// 传进来的 [next] 原样持有，不再经过 toJson→normalizeTrack 克隆。
+  void replaceAll(List<Track> next) {
+    _tracks
+      ..clear()
+      ..addAll(next);
+    _currentIndex = next.isEmpty ? -1 : 0;
+    _rebuildShuffle();
+  }
+
   /// 计算下一首索引。**不改** `_currentIndex`，但随机模式下会推进洗牌游标
   /// （原版 JSDoc 明确记录的有意副作用，playlist.js:345-347）。
   /// [auto] 为 true 且处于单曲循环时返回当前索引（原地重播）。

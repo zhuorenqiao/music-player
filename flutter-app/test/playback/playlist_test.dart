@@ -285,4 +285,24 @@ void main() {
     expect(p.nextIndex(), -1);
     expect(p.prevIndex(), -1);
   });
+
+  test('replaceAll 整体替换：当前项回队首、洗牌队列按新长度重建', () {
+    final p = Playlist(tracks: [t('old1'), t('old2')], mode: PlayMode.shuffle);
+    final next = [t('c'), t('a'), t('b')];
+
+    p.replaceAll(next);
+
+    expect(p.tracks.map((e) => e.id), ['c', 'a', 'b']);
+    expect(p.currentIndex, 0);
+    expect(p.current?.id, 'c');
+    // 传入的列表原样持有，不再经 toJson 克隆成副本
+    expect(identical(p.tracks.first, next.first), isTrue);
+    expect(p.shuffleOrderForTest.length, 3);
+
+    p.replaceAll(const []);
+    expect(p.size, 0);
+    expect(p.currentIndex, -1);
+    expect(p.current, isNull);
+    expect(p.shuffleOrderForTest, isEmpty);
+  });
 }

@@ -301,6 +301,13 @@ class TransportController {
 
   Future<bool> seekBy(double delta) => player.seekBy(delta);
 
+  /// 播放列表被**外部**改动（冷启动还原、导入、删除、清空）后补推一次视图。
+  ///
+  /// 正常切歌都会经 [playTrack] / [next] 等入口自己 publish；只有「不经过播放
+  /// 编排、直接改 Playlist」的路径不会产生任何播放器事件。少了这一下，界面与
+  /// 系统通知栏会停在旧快照上（冷启动后明明有当前曲目，却显示「未选择曲目」）。
+  void syncView() => _publish();
+
   Future<void> setVolume(double value) async {
     await player.setVolume(value);
     // volumechange 事件是异步投递的；这里顺手推一次，调用方 await 完就能读到。
