@@ -94,9 +94,35 @@ class RecentStore implements RecentRecorder {
   final AppPrefs _prefs;
   final int Function() _now;
   final List<RecentEntry> _entries = [];
+  final List<void Function()> _changeListeners = [];
 
   /// 只读视图：外部拿到的是快照，改不了内部列表。
   List<RecentEntry> get entries => List.unmodifiable(_entries);
+
+  /// 记下「历史变了」这件事（[record] / [remove] / [clear] / [markInPlaylist]
+  /// 之后各喊一次），界面层据此重绘。
+  ///
+  /// 为什么必须有：记账的唯一入口在 `TransportController._recordIfAudible`，
+  /// 它不经过任何状态层。没有这条回调，面板的「最近播放」就只在冷启动
+  /// `restore()+refresh()` 时画过一次，整场会话不再变化（终审 C2 —— 原版是
+  /// `recent` 状态一变即重绘）。用监听者列表而不是单个 `onChanged` 字段：
+  /// 「谁注册谁解开」才成立，两个状态层共用一份 store 时不会互相踩掉回调。
+  void addChangeListener(void Function() listener) {
+    if (_changeListeners.contains(listener)) return;
+    _changeListeners.add(listener);
+  }
+
+  /// 解开 [addChangeListener]：幂等，没注册过什么都不做。
+  void removeChangeListener(void Function() listener) {
+    _changeListeners.remove(listener);
+  }
+
+  /// 拷贝一份再遍历：监听者自己反注册（dispose 就在其中）不该影响本轮派发。
+  void _notifyChanged() {
+    for (final listener in List<void Function()>.of(_changeListeners)) {
+      listener();
+    }
+  }
 
   /// 冷启动读档。顺序即存档顺序（写入时永远是「最新在前」），
   /// 单条坏掉只丢那一条，超过上限丢掉尾部（最旧的）。
@@ -125,6 +151,8 @@ class RecentStore implements RecentRecorder {
 
   /// 记一次播放。同一首重播：挪到最前并刷新时间；500ms 内的重复事件
   /// （暂停后又恢复这类抖动）直接忽略，不重排也不写盘。
+  ///
+  /// 忽略分支什么都不通知：没有变化就没有重绘。
   @override
   void record(Track track, {DateTime? at}) {
     final timestamp = at?.millisecondsSinceEpoch ?? _now();
@@ -152,7 +180,9 @@ class RecentStore implements RecentRecorder {
     if (_entries.length > kRecentLimit) {
       _entries.removeRange(kRecentLimit, _entries.length);
     }
-    // 落盘不挡播放路径：一次播放不该等磁盘
+    // 落盘不挡播放路径：一次播放不该等磁盘。通知在落盘之前 ——
+    // 界面看的是内存里的条目，存档只是它的那一份副本。
+    _notifyChanged();
     unawaited(_persist());
   }
 
@@ -161,16 +191,19 @@ class RecentStore implements RecentRecorder {
     for (final entry in _entries) {
       entry.inPlaylist = ids.contains(entry.id);
     }
+    _notifyChanged();
     await _persist();
   }
 
   Future<void> remove(String id) async {
     _entries.removeWhere((e) => e.id == id);
+    _notifyChanged();
     await _persist();
   }
 
   Future<void> clear() async {
     _entries.clear();
+    _notifyChanged();
     await _persist();
   }
 

@@ -1,13 +1,16 @@
 // lib/library/import_service.dart
 //
 // 导入流程的最后一环（spec §8）：校验扩展名 → 立即入列（可播）→ 解析内嵌标签
-// → 探时长 → 交给调用方落库（[ImportService.onImported]）。
+// → 探时长 → 交给调用方落库（[ImportService.onImported] / [ImportResult.enrichment]）。
 //
 // 两条硬约束：
 //
 //   1. **入列不等元数据**。用户点了导入，歌就该马上出现在列表里并能播；标签与
 //      时长是增值项，晚到几百毫秒无所谓，但一个字都不许阻塞入列，更不许因为
 //      「标签读不出来」把文件挡在门外（能不能播由播放错误那条路判定）。
+//      代价是「谁去落这批回填」必须有个明确答案：本批的完成信号就是
+//      [ImportResult.enrichment]，调用方（`LibraryState`）在它之上再做一次
+//      落库 + 重绘，一批只做一次（终审 C1）。
 //   2. **回填写回活对象**。`Playlist.addAt` / `addMany` 都会经
 //      toJson→normalizeTrack 克隆一份，改传进去的那份，界面上永远是文件名拆
 //      出来的样子 —— 这就是原版 `applyAudioTags` 注释里记的坑（tagging.ts:
@@ -41,6 +44,7 @@ class ImportResult {
     this.rejected = 0,
     this.rejectedNames = const [],
     this.addedIds = const [],
+    this.enrichment,
   });
 
   /// 真正新入列的条数（已在列表里的不重复计入，也不会触发 [onImported]）。
@@ -59,6 +63,15 @@ class ImportResult {
   /// 调用方拿它就能回答「这些文件现在都在列表里了」，做「选中刚导入的曲目」
   /// 这类事时不必再自己算 id。新增了多少看 [added]。
   final List<String> addedIds;
+
+  /// 本批后台回填（标签 → 时长 → 封面）的完成信号；没有新曲目时为 null。
+  ///
+  /// **导入返回刻意不等它**：入列立刻可见、立刻可播这条不许倒退（见文件头第 1 条）。
+  /// 但调用方必须在它完成之后再落一次库、刷一次界面 —— 回填改的是内存里的活对象，
+  /// 没人再 persist 的话，文件仓里永远存着「只有文件名、时长 NaN、无封面」的记录，
+  /// 用户加完歌直接重启就永久丢标签（终审 C1）。一个批次只等这一条 Future，
+  /// 落库也只做一次，几百首歌不许写几百遍。
+  final Future<void>? enrichment;
 }
 
 /// 头部预读窗口：判容器格式要用的字节（与 [ByteSource.headProbeBytes] 同值，
@@ -121,9 +134,11 @@ class ImportService {
 
     // idsInCall：本次涉及的 id（含本来就在列表里的），按首次出现顺序去重。
     // newIds：真正新入列的，决定 added、后台回填与落库钩子。
+    // enrichTasks：本批回填的任务，汇成 [ImportResult.enrichment] 交调用方收尾。
     final idsInCall = <String>[];
     final seen = <String>{};
     final newIds = <String>[];
+    final enrichTasks = <Future<void>>[];
     for (final path in partition.accepted) {
       final id = localIdFor(path);
       final isNew = playlist.byId(id) == null;
@@ -131,8 +146,9 @@ class ImportService {
         final inserted = playlist.addAt(_buildTrack(path, id));
         if (inserted == null) continue; // 理论上不会：字段都是这里给的
         newIds.add(id);
-        // 入列即可播；元数据不阻塞（见文件头第 1 条）。
-        _spawn(() => _enrich(inserted));
+        // 入列即可播；元数据不阻塞（见文件头第 1 条）。任务现在就开跑，
+        // 但整批的完成信号交出去，由调用方落那第二次库。
+        enrichTasks.add(_enrichQuiet(inserted));
       }
       // 同一文件第二次导入：不重建、不改顺序，但仍然把 id 交回去。
       if (seen.add(id)) idsInCall.add(id);
@@ -148,6 +164,7 @@ class ImportService {
       rejected: partition.rejected.length,
       rejectedNames: [for (final path in partition.rejected) _basename(path)],
       addedIds: idsInCall,
+      enrichment: _batchOf(enrichTasks),
     );
   }
 
@@ -248,6 +265,40 @@ class ImportService {
     if (value.isFinite && value > 0) live.duration = value;
   }
 
+  /// [_enrich] 的「绝不抛」外壳：失败只意味着这次没回填。
+  ///
+  /// 必须存在：批次的完成信号是 `Future.wait` 出来的，一条抛错会把整批的落库
+  /// 收尾一起带走（终审 C1 要的就是那次收尾）。
+  Future<void> _enrichQuiet(Track live) async {
+    try {
+      await _enrich(live);
+    } catch (_) {
+      // 回填是增值项：导入已经成功，这里不许冒泡。
+    }
+  }
+
+  /// 一批回填的完成信号；空批次给 null（调用方据此决定要不要再落一次库）。
+  Future<void>? _batchOf(List<Future<void>> tasks) {
+    if (tasks.isEmpty) return null;
+    return Future.wait(tasks).then((_) {});
+  }
+
+  /// 冷启动还原的自愈回填：把「元数据仍缺失」的既有曲目重新交给同一套补全。
+  ///
+  /// 为什么非要有：C1 修好之前存下的档案里就是「只有文件名、时长 NaN、无封面」，
+  /// 只改导入路径救不了已经躺在文件仓里的旧记录；原版靠浏览器每次重读标签，
+  /// 没有这个坑，所以必须在 Dart 端补这一遍。返回本批的完成信号（没有要补的
+  /// 就返回 null），调用方在它完成后落一次库、刷一次界面。
+  ///
+  /// 与 [importPaths] 一样不挡首帧：曲目早就在列表里、也早就可播。
+  Future<void>? rehydrateIncomplete() {
+    final targets = [
+      for (final track in playlist.tracks)
+        if (metadataIncomplete(track)) track,
+    ];
+    return _batchOf([for (final track in targets) _enrichQuiet(track)]);
+  }
+
   /// 文件名 → 曲目。歌手与曲名按原版规则拆（左侧歌手、右侧曲名），
   /// 拆不出就整串当曲名；时长未知（NaN），等探测回填。
   ///
@@ -268,33 +319,9 @@ class ImportService {
     );
   }
 
-  /// 来源字符串 → 展示用文件名（含扩展名）。
-  ///
-  /// - 普通文件路径：取最后一段，Windows 反斜杠与 POSIX 斜杠都认；
-  /// - URI 形态（`content://…`）：解析后取最后一个路径段、百分号解码，再取
-  ///   解码结果的 basename —— 解码后可能自带分隔符
-  ///   （`primary%3AMusic%2Fa.flac` → `primary:Music/a.flac` → `a.flac`）；
-  ///   解码成空串或解析失败就退回按路径切：名字难看可以忍，导入不许抛。
+  /// 来源字符串 → 展示用文件名。测试用的入口，规则见 [displayNameForSource]。
   @visibleForTesting
-  String displayNameFor(String source) {
-    if (!_uriSourcePattern.hasMatch(source)) return _basename(source);
-    final String decoded;
-    try {
-      final path = Uri.parse(source).path;
-      final cut = path.lastIndexOf('/');
-      // 用未解码的 path 自己切最后一整段，保证只解码一次：
-      // pathSegments 已经解过码，再解一次会把名字里的 `%` 文本吃掉。
-      final raw = cut < 0 ? path : path.substring(cut + 1);
-      decoded = Uri.decodeComponent(raw);
-    } on FormatException {
-      return _basename(source);
-    } on ArgumentError {
-      return _basename(source);
-    }
-    final name = _basename(decoded);
-    if (name.isNotEmpty) return name;
-    return decoded.isNotEmpty ? decoded : _basename(source);
-  }
+  String displayNameFor(String source) => displayNameForSource(source);
 
   /// 头部预读：一次开文件把判格式要用的字节读进来。
   ///
@@ -339,6 +366,61 @@ class ImportService {
 String localIdFor(String source) {
   final digest = crypto.sha1.convert(utf8.encode(source)).toString();
   return 'local:${digest.substring(0, 16)}';
+}
+
+/// 来源字符串 → 展示用文件名（含扩展名）。
+///
+/// - 普通文件路径：取最后一段，Windows 反斜杠与 POSIX 斜杠都认；
+/// - URI 形态（`content://…`）：解析后取最后一个路径段、百分号解码，再取
+///   解码结果的 basename —— 解码后可能自带分隔符
+///   （`primary%3AMusic%2Fa.flac` → `primary:Music/a.flac` → `a.flac`）；
+///   解码成空串或解析失败就退回按路径切：名字难看可以忍，导入不许抛。
+///
+/// 顶层函数（而不是 [ImportService] 的私有方法）：还原自愈的判定
+/// [metadataIncomplete] 也要按同一套规则算「文件名拆出来的猜测值」，
+/// 两处必须一模一样，否则「看起来还是文件名」会判歪。
+String displayNameForSource(String source) {
+  if (!_uriSourcePattern.hasMatch(source)) return _basename(source);
+  final String decoded;
+  try {
+    final path = Uri.parse(source).path;
+    final cut = path.lastIndexOf('/');
+    // 用未解码的 path 自己切最后一整段，保证只解码一次：
+    // pathSegments 已经解过码，再解一次会把名字里的 `%` 文本吃掉。
+    final raw = cut < 0 ? path : path.substring(cut + 1);
+    decoded = Uri.decodeComponent(raw);
+  } on FormatException {
+    return _basename(source);
+  } on ArgumentError {
+    return _basename(source);
+  }
+  final name = _basename(decoded);
+  if (name.isNotEmpty) return name;
+  return decoded.isNotEmpty ? decoded : _basename(source);
+}
+
+/// 这条记录的元数据还缺不缺（[ImportService.rehydrateIncomplete] 的判据）。
+///
+/// 三种情况任一即算缺：时长未知（NaN）、还没有真封面、标题或歌手仍停在
+/// 「文件名拆出来的猜测值」上。第三种是 C1 那次事故的直接特征 —— 回填没落库，
+/// 重启读回来的就是纯文件名拆分值。
+///
+/// 只认本地文件：SAF / 远程来源在 M1 读不了字节，判成「缺」也只会白跑一遍。
+bool metadataIncomplete(Track track) {
+  if (!track.isLocal) return false;
+  if (!track.hasDuration) return true;
+  if (!track.hasRealCover) return true;
+  return _stillFileNameGuess(track);
+}
+
+/// 标题 / 歌手是否还是文件名拆出来的那份猜测。
+bool _stillFileNameGuess(Track track) {
+  final guess = splitArtistTitle(
+    _stripExtension(displayNameForSource(track.src)),
+  );
+  if (guess.title.isEmpty) return false;
+  if (track.title == guess.title) return true;
+  return guess.artist.isNotEmpty && track.artist == guess.artist;
 }
 
 /// 取路径最后一段（不依赖 `package:path`：这里只需要切分隔符）。

@@ -244,4 +244,42 @@ void main() {
     expect(driver.calls, contains('pause'));
     expect(driver.calls, contains('stop'));
   });
+
+  test('播放推进就刷「最近播放」；删掉已听过的歌，失效标记跟着变（C2）', () async {
+    final driver = FakeAudioDriver();
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: driver,
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+    addTearDown(bootstrap.library.dispose);
+    addTearDown(bootstrap.recent.dispose);
+    addTearDown(bootstrap.toasts.dispose);
+
+    var recentNotifications = 0;
+    bootstrap.recent.addListener(() => recentNotifications++);
+
+    await bootstrap.player.playTrack('a');
+    await pumpEventQueue();
+    // 真出声（位置推过 0）才记账：记账之后界面必须立刻看到（原版即画即变）
+    driver.emitPosition(4);
+    await pumpEventQueue();
+
+    expect(bootstrap.recent.entries.map((e) => e.id), contains('a'));
+    expect(
+      recentNotifications,
+      greaterThan(0),
+      reason: 'record 之后要通知 RecentState 的订阅者',
+    );
+    expect(bootstrap.recent.entries.single.inPlaylist, isTrue);
+
+    await bootstrap.library.removeTrack('a');
+    await pumpEventQueue();
+
+    // 列表变了：「已失效」标记跟着列表走，不该等下一次冷启动才校正
+    expect(bootstrap.recent.entries.single.id, 'a');
+    expect(bootstrap.recent.entries.single.inPlaylist, isFalse);
+  });
 }

@@ -101,16 +101,16 @@ Future<AppBootstrap> buildBootstrap({
     covers: const CoverImageWriter(),
     coverDirectory: '$dataDirectory/covers',
   );
+  final recent = RecentState(recentStore);
   final library = LibraryState(
     prefs: prefs,
     repo: repository,
     importer: importer,
     toasts: toasts,
     // 还原 / 导入 / 删除 / 清空 / 换曲都不经过播放编排，收尾交给装配层
-    onPlaylistChanged: _playlistChangeHandler(transport),
+    onPlaylistChanged: _playlistChangeHandler(transport, recent),
   );
   final player = PlayerState(prefs: prefs, transport: transport);
-  final recent = RecentState(recentStore);
 
   // 先把音量 / 静音 / 模式读回来，再还原曲库：存档里的模式是权威值，
   // 顺序反过来会被 prefs 里的旧值覆盖。
@@ -170,21 +170,28 @@ Future<bool> _queryNotificationPermission(
   }
 }
 
-/// 列表改动后的收尾：补推视图，并把两种「内核里还挂着已删曲目」的情况
-/// 翻译成播放层动作。
+/// 列表改动后的收尾：校正「最近播放」的失效标记，补推视图，并把两种
+/// 「内核里还挂着已删曲目」的情况翻译成播放层动作。
 ///
 /// [LibraryState] 只负责在改动后喊一声（[removedId] 是刚被删掉的 id）；做
 /// 什么是装配层的事 —— 状态层不认识 [TransportController]。列表本身由两边
 /// 共享（同一个 [Playlist] 实例），所以这里读 `transport.playlist` 就是最新
-/// 列表。两档对应原版 `player.tsx` 的 `removeTrack` / `clearList`：
+/// 列表。三档对应原版 `player.tsx` 的 `removeTrack` / `clearList`：
+///   - 每次改动都按当前 id 集合校正「已失效」标记：只在启动跑一次的话，
+///     删掉一首听过的歌之后面板仍显示它「在列表里」，点下去才提示（C2）；
 ///   - 删掉的正是内核里加载的那首：接续曲目接手播放（原版 `goTo` + autoplay）；
 ///   - 列表空了（清空或删空）：停播并卸载，否则通知栏会留一条指向不存在
 ///     文件的幽灵条目（原版 `player.stop()`）。
 void Function({String? removedId}) _playlistChangeHandler(
   TransportController transport,
+  RecentState recent,
 ) {
   return ({String? removedId}) {
     final playlist = transport.playlist;
+    // 校正失效标记：store 的变化回调会把重绘喊到界面那边，这里不用等它。
+    unawaited(
+      recent.refresh(playlist.tracks.map((track) => track.id).toSet()),
+    );
     if (removedId != null &&
         removedId == transport.player.track?.id &&
         playlist.tracks.isNotEmpty) {

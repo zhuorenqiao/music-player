@@ -136,6 +136,10 @@ class LibraryState extends ChangeNotifier {
   ///
   /// [restoring] 覆盖整个异步加载（首帧就画骨架），结束无论成败都置回 false。
   /// 脏存档绝不外抛：仓储自己会退回空快照，这里再兜一层，启动流程不许因此中断。
+  ///
+  /// 还原末尾还要补一遍**自愈回填**（终审 C1）：早于回填落库修复存下的档案里
+  /// 就是「只有文件名、时长 NaN、无封面」，不补这一刀，用户升级后看到的还是
+  /// 空标题无封面 —— 原版靠浏览器每次重读标签，没有这个坑，只能在这里补。
   Future<void> restore() async {
     _restoring = true;
     notifyListeners();
@@ -155,6 +159,7 @@ class LibraryState extends ChangeNotifier {
         ..setMode(snap.mode);
       final savedId = snap.currentId;
       if (savedId != null) playlist.setCurrentById(savedId);
+      _flushAfterEnrichment(importer.rehydrateIncomplete());
     } catch (_) {
       // 理论上到不了这里（仓储是总函数），留作最后一道闸：启动不许炸
       playlist.clear();
@@ -164,7 +169,7 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
-  /// 导入一批文件；有新入列就落库并提示。
+  /// 导入一批文件；有新入列就落库并提示，回填批次收尾时再落一次。
   Future<int> importPaths(List<String> paths) async {
     final result = await importer.importPaths(paths);
     if (result.added > 0) {
@@ -172,6 +177,8 @@ class LibraryState extends ChangeNotifier {
       await persist();
       _changed();
     }
+    // 回填没补上任何东西（result.added == 0 / 全是重复导入）时 null，不多落库。
+    _flushAfterEnrichment(result.enrichment);
     return result.added;
   }
 
@@ -183,6 +190,7 @@ class LibraryState extends ChangeNotifier {
       await persist();
       _changed();
     }
+    _flushAfterEnrichment(result.enrichment);
     return result.added;
   }
 
@@ -245,6 +253,36 @@ class LibraryState extends ChangeNotifier {
   void _changed({String? removedId}) {
     onPlaylistChanged?.call(removedId: removedId);
     notifyListeners();
+  }
+
+  /// 等一批后台回填收尾用的队列（同一时间只有一个在落库）。
+  Future<void> _enrichmentQueue = Future<void>.value();
+
+  /// 一批回填的完成信号（含它那一次落库）；空闲时立即完成。
+  ///
+  /// 界面不等它 —— 首帧体验那条硬约束在这儿同样成立。但「加完歌马上退出」的
+  /// 收尾、以及测试要的确定性（同一个文件仓被两个实例共用时，不让后台那次
+  /// 落库踩在别人的写入之后）都该 await 它。
+  Future<void> get enrichmentSettled => _enrichmentQueue;
+
+  /// 回填批次完成后的第二次收尾：**再落一次库、再刷一次界面**（终审 C1）。
+  ///
+  /// 为什么是两次落库：第一次保证「歌加了」这件事立刻落盘（应用马上被杀掉也不丢），
+  /// 第二次保证「标签 / 封面 / 时长也补上了」落盘。回填本身改的是内存里的活对象，
+  /// 少了这一下，文件仓里存的永远是只有文件名的记录，重启就永久降级。
+  ///
+  /// 一个批次只落一次（几百首歌不能写几百遍），也**不挡导入返回**：这条链是
+  /// 后台跑的，调用方 await `importPaths` 时只等到第一次落库。多条批次排队串行，
+  /// 避免两次 persist 交错写文件仓。
+  void _flushAfterEnrichment(Future<void>? enrichment) {
+    if (enrichment == null) return;
+    _enrichmentQueue = _enrichmentQueue.then((_) async {
+      await enrichment;
+      await persist();
+      _changed();
+    }).catchError((Object _) {
+      // 收尾失败只当这次没落上：下一批照样继续，绝不把异常冒到界面层。
+    });
   }
 
   /// 无 IO 的测试构造（T28 的 PanelHarness 用）：只读列表，不落盘。
