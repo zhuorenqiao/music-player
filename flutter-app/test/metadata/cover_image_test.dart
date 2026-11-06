@@ -9,6 +9,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/metadata/cover_image.dart';
@@ -18,6 +19,48 @@ final Uint8List onePixelPng = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/'
   'iZk9HQAAAABJRU5ErkJggg==',
 );
+
+/// 源图尺寸：长边 1200 超出 600 一倍，等比缩放后正好是 600×400。
+const int sourceWidth = 1200;
+const int sourceHeight = 800;
+
+/// 用引擎现画一张 [sourceWidth]×[sourceHeight] 的 PNG（仓库里不放二进制夹具）。
+///
+/// 刻意画成非均匀：整张铺蓝，左上四分之一再盖纯红。这样「通道顺序被打乱」
+/// （红蓝互换）或「输出被刷成一色 / 全黑」都会让下面按像素的断言失败 ——
+/// 纯色图或 1×1 图做不到这件事。
+Future<Uint8List> drawSourcePng() async {
+  final recorder = ui.PictureRecorder();
+  final canvas = ui.Canvas(recorder);
+  canvas.drawRect(
+    ui.Rect.fromLTWH(0, 0, sourceWidth.toDouble(), sourceHeight.toDouble()),
+    ui.Paint()..color = const ui.Color(0xFF0000FF),
+  );
+  canvas.drawRect(
+    ui.Rect.fromLTWH(
+      0,
+      0,
+      sourceWidth / 2,
+      sourceHeight / 2,
+    ),
+    ui.Paint()..color = const ui.Color(0xFFFF0000),
+  );
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(sourceWidth, sourceHeight);
+  try {
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    return data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  } finally {
+    image.dispose();
+    picture.dispose();
+  }
+}
+
+/// 取 rawRgba 缓冲里 (x, y) 处的 (r, g, b, a)。
+List<int> pixelAt(Uint8List rgba, int imageWidth, int x, int y) {
+  final offset = (y * imageWidth + x) * 4;
+  return rgba.sublist(offset, offset + 4);
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -47,6 +90,57 @@ void main() {
     // 文件名沿用原版的 id.jpg —— 内容其实是 PNG（裁定的格式约定）。
     expect(file.path, endsWith('track-1.jpg'));
     expect(file.readAsBytesSync().sublist(0, 4), [0x89, 0x50, 0x4e, 0x47]);
+  });
+
+  test('1200×800 原图按长边 ≤600 缩到 600×400，像素颜色不错乱', () async {
+    final source = await drawSourcePng();
+    const writer = CoverImageWriter();
+    final path = await writer.write(
+      source,
+      'image/png',
+      directory: root.path,
+      id: 'big',
+    );
+
+    expect(path, isNotNull);
+    // 读回落盘文件重新解码：断言的是真正写进磁盘的那份字节，不是内存里的中间态。
+    final written = await File(path!).readAsBytes();
+    final codec = await ui.instantiateImageCodec(written);
+    final frame = await codec.getNextFrame();
+    try {
+      expect(CoverImageWriter.maxEdge, 600);
+      // 长边规则：max(宽, 高) 收到 600，短边按 1200:800 = 3:2 等比得 400。
+      expect(frame.image.width, 600);
+      expect(frame.image.height, 400);
+
+      final raw = await frame.image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+      final rgba = raw!.buffer.asUint8List(raw.offsetInBytes, raw.lengthInBytes);
+      // 左上角来自画的红块：R 高、G/B 低。红蓝通道互换（B 高 R 低）、
+      // 输出全黑或整张被刷成一色都会在这里挂掉。
+      final topLeft = pixelAt(rgba, frame.image.width, 0, 0);
+      expect(topLeft[0], greaterThan(200), reason: '左上角应为红：R 分量 $topLeft');
+      expect(topLeft[1], lessThan(60), reason: '左上角应为红：G 分量 $topLeft');
+      expect(topLeft[2], lessThan(60), reason: '左上角应为红：B 分量 $topLeft');
+      expect(topLeft[3], 255, reason: '应保持不透明：A 分量 $topLeft');
+      // 右下角仍是蓝块：确认缩放没有把整张图裁成左上角那一块。
+      final bottomRight = pixelAt(
+        rgba,
+        frame.image.width,
+        frame.image.width - 1,
+        frame.image.height - 1,
+      );
+      expect(
+        bottomRight[2],
+        greaterThan(200),
+        reason: '右下角应为蓝：$bottomRight',
+      );
+      expect(bottomRight[0], lessThan(60), reason: '右下角应为蓝：$bottomRight');
+    } finally {
+      frame.image.dispose();
+      codec.dispose();
+    }
   });
 
   test('不可解码的字节返回 null，不抛也不落盘', () async {
