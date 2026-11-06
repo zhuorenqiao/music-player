@@ -222,7 +222,14 @@ class RecentStore implements RecentRecorder {
 /// `M月D日`，跨年再带 `YYYY年`。未来时间（时钟回拨）按「刚刚」兜底，
 /// 不出现负数。
 ///
-/// [localeDate] 只用于测试注入时区：默认按本地时区把毫秒转成日历日。
+/// 「昨天」按**日历日**判（终审 minor 6）：与「昨天」= 现在往前推 24 小时
+/// 那**一天**同一天（recent-store.js:158-167 的 `sameDay(date, yesterday)`）。
+/// 从前这里写成「经过 24~48 小时」，于是 10 日 22:00 听的一首到 12 日凌晨
+/// 还挂着「昨天」—— 那时它在日历上已经是前天了。
+/// 顺序也照原版：**不足 24 小时先走「N 小时前」**，日历日判定只在跨过一天
+/// 之后才参与。
+///
+/// [localeDate] 用于测试注入时区：默认按本地时区把毫秒转成日历日。
 String formatRelativeTime(
   int timestamp, {
   int? now,
@@ -239,15 +246,20 @@ String formatRelativeTime(
   if (diff < minute) return '刚刚';
   if (diff < hour) return '${diff ~/ minute} 分钟前';
   if (diff < day) return '${diff ~/ hour} 小时前';
-  if (diff < 2 * day) return '昨天';
-  if (diff < 7 * day) return '${diff ~/ day} 天前';
 
   final toDate = localeDate ?? _localDate;
   final date = toDate(timestamp);
+  if (_sameCalendarDay(date, toDate(current - day))) return '昨天';
+  if (diff < 7 * day) return '${diff ~/ day} 天前';
+
   final monthDay = '${date.month}月${date.day}日';
   return date.year == toDate(current).year
       ? monthDay
       : '${date.year}年$monthDay';
 }
+
+/// 两个时间点是不是同一个日历日（原版的 `sameDay`，按本地时区的年月日比）。
+bool _sameCalendarDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
 
 DateTime _localDate(int millis) => DateTime.fromMillisecondsSinceEpoch(millis);

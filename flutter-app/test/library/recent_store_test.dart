@@ -150,6 +150,42 @@ void main() {
       expect(formatRelativeTime(0, now: 2 * day), '2 天前');
     });
 
+    /// 终审 minor 6 的缺陷复现（改前红）：从前这里按「经过 24~48 小时」算昨天，
+    /// 原版按**日历日**算（recent-store.js:158-167：`sameDay(new Date(timestamp),
+    /// new Date(now - day))`）。差别出现在跨过两个日历日但只过了 24~48 小时的窗口：
+    /// 3 月 10 日 22:00 听的一首，到 3 月 12 日凌晨 1 点已经隔了一整个日历日，
+    /// 原版说「1 天前」，我们却说「昨天」。
+    test('「昨天」按日历日判定，不是按经过的小时数', () {
+      final marTen = DateTime.parse('2026-03-10T22:00:00').millisecondsSinceEpoch;
+
+      // 经过 27 小时，但日历上已经是隔了一天 → 不是昨天
+      final twelveOhOne = DateTime.parse('2026-03-12T01:00:00').millisecondsSinceEpoch;
+      expect(
+        formatRelativeTime(marTen, now: twelveOhOne),
+        '1 天前',
+        reason: '24~48 小时这个窗口里还要看日历日：条目属于「前天」就不是「昨天」',
+      );
+
+      // 同一批条目，第二天晚上看就是昨天（日历日差 1）
+      final elevenOhTwentyThree =
+          DateTime.parse('2026-03-11T23:00:00').millisecondsSinceEpoch;
+      expect(formatRelativeTime(marTen, now: elevenOhTwentyThree), '昨天');
+
+      // 满 48 小时（还是隔了一天）→ 2 天前
+      final twelveOhTwentyThree =
+          DateTime.parse('2026-03-12T22:00:00').millisecondsSinceEpoch;
+      expect(formatRelativeTime(marTen, now: twelveOhTwentyThree), '2 天前');
+    });
+
+    /// 原版把「不足一天」短路在日历日判定之前（recent-store.js:154-156），
+    /// 所以前一天深夜的条目在次日凌晨仍然报「N 小时前」而不是「昨天」。
+    /// 这条用例把顺序钉住，免得将来「顺手」把它改成日历日优先。
+    test('不足 24 小时一律走「小时前」，与原版同一顺序', () {
+      final marTenNight = DateTime.parse('2026-03-10T22:00:00').millisecondsSinceEpoch;
+      final marElevenOneAm = DateTime.parse('2026-03-11T01:00:00').millisecondsSinceEpoch;
+      expect(formatRelativeTime(marTenNight, now: marElevenOneAm), '3 小时前');
+    });
+
     test('一周以上显示日期，跨年带年份', () {
       expect(
         formatRelativeTime(
