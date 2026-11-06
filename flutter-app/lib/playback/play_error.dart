@@ -50,23 +50,26 @@ String extensionOf(String path) {
 }
 
 /// 明确指向「文件不存在 / 路径打不开」的文本，归到「格式不支持或不存在」。
+/// 原版 `MEDIA_ERR_SRC_NOT_SUPPORTED` 同时覆盖「格式不支持」与「文件不存在」，
+/// mpv 的 `Failed to open <path>` / `Cannot open <path>` 因此归这一档：文件被
+/// 移走或删掉时不能报「文件可能已损坏」，那是对用户数据的错误断言。
 const List<String> _unsupportedMarkers = [
   'no such file',
   'does not exist',
   "doesn't exist",
   'not found',
+  'failed to open',
   'cannot open',
 ];
 
 /// 媒体本身坏了 / 解不开，归到解码失败。
-/// mpv 的 `Failed to open file` 也是这一档（文件在、但打不开解不出）。
 const List<String> _decodeMarkers = [
   'invalid data',
   'decode',
   'corrupt',
   'unsupported format',
   'unsupported codec',
-  'failed to open',
+  'failed to recognize file format',
   'malformed',
   'truncated',
 ];

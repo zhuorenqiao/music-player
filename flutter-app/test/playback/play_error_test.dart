@@ -33,10 +33,14 @@ void main() {
   test('分类优先级：不支持 > 解码 > 中断', () {
     expect(classifyFailure(fileName: 'a.txt'), PlayErrorKind.unsupported);
     expect(classifyFailure(fileName: 'a.flac', notFound: true), PlayErrorKind.unsupported);
-    expect(classifyFailure(fileName: 'a.flac', rawMessage: 'Failed to open file'),
+    expect(classifyFailure(fileName: 'a.flac', rawMessage: 'Invalid data found when processing input'),
+        PlayErrorKind.decode);
+    expect(classifyFailure(fileName: 'a.flac', rawMessage: 'Failed to recognize file format'),
         PlayErrorKind.decode);
     expect(classifyFailure(fileName: 'a.flac', rawMessage: 'no such file or directory'),
         PlayErrorKind.unsupported);
+    // mpv 的 `Failed to open <path>`：文件被移走 / 删掉，不能谎称「文件可能已损坏」。
+    expect(classifyFailure(rawMessage: 'Failed to open file'), PlayErrorKind.unsupported);
     expect(classifyFailure(fileName: 'a.flac', rawMessage: 'stream interrupted'),
         PlayErrorKind.aborted);
     expect(classifyFailure(fileName: 'a.flac'), PlayErrorKind.unknown);
