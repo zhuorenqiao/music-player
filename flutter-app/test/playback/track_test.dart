@@ -252,4 +252,17 @@ void main() {
       expect(t.handle.uri, uri);
     });
   });
+
+  group('破损角标', () {
+    test('broken 是会话态：copy 带走，但不进 toJson', () {
+      final t = normalizeTrack({'id': '1', 'src': '/a.flac', 'title': 'A'})!;
+      expect(t.broken, isFalse);
+
+      t.broken = true;
+      expect(t.copy().broken, isTrue);
+      expect(t.toJson().containsKey('broken'), isFalse);
+      // 存档往返（toJson -> normalizeTrack）不会把角标带回来
+      expect(Track.fromJson(t.toJson())!.broken, isFalse);
+    });
+  });
 }

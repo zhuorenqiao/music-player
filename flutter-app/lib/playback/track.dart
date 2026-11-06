@@ -100,6 +100,12 @@ class Track {
   bool restored;
   TrackHandle handle;
 
+  /// 本次会话里加载失败过；列表项据此显示「损坏」角标。
+  ///
+  /// 与原版的 `failedIds`（player.tsx:167 `useState<string[]>`）一致，是会话态：
+  /// 不进 [toJson]，重开应用就清空，也不写进存档。
+  bool broken = false;
+
   bool get hasDuration => duration.isFinite && duration > 0;
 
   /// 已有真封面 == cover 非空。生成卡不写这里（spec §12）。
@@ -119,7 +125,7 @@ class Track {
     lyricsSource: lyricsSource,
     restored: restored,
     handle: handle,
-  );
+  )..broken = broken;
 
   Map<String, Object?> toJson() => {
     'id': id,
