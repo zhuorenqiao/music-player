@@ -229,6 +229,8 @@ Windows 侧接 System Media Transport Controls：元数据与播放状态推给 
 
 「数据对了不等于界面变了」这条历史教训在 Dart 侧的防法：所有回填必须以列表里的活对象为目标（按 id 找回再改），改完显式 `notifyListeners()`，并在 widget 测试里断言「回填后 DOM（widget tree）里的文本确实变了」，而不只断言 repository 里有值。
 
+冷启动还原时「文件仓 vs prefs」这对现场的取舍（终审 I4 已裁定，与 `state/library_state.dart` 的 `restore()` / `_restoreCursor()` 注释同一条规则）：列表**顺序**一律以文件仓为准，prefs 里那份 `order` 再陈旧也参与不了重建；**光标**在「现场自洽」时以 prefs 的 `currentId` 为准 —— 播放推进只经 `PlayerState.flushPersist()` 按 debounce 写 prefs、不重写整份档案，所以自洽的现场里 prefs 才是更新的陈述，两份 `order` 逐位一致就是「这份现场没跨代过期」的闸门。两者矛盾（或 prefs 缺 `order`）时整条 prefs 痕迹按陈旧处理，退回文件仓快照的 `currentId`；两边都指不到列表内的曲目就保持**无光标**（`clearCurrent()`，不让默认的队首冒充存档光标），随后 `_syncPrefsTrace()` 把 prefs 的 `currentId` `remove` 掉，绝不留「prefs 指一首、界面指另一首」。音量与静音只由 prefs 的 `volume` / `muted` 两个键承载（文件仓快照里那两个字段已删，见 §6.3），文件仓不可用或被重建都不会把它们悄悄清回默认值。
+
 ## 9. 外观系统
 
 两个维度正交：`ThemeMode`（`system` / `light` / `dark`）× `ThemeColor`（`mint` / `pink` / `blue`），解析成 `ThemeSpec`（`ResolvedMode` + accent）。`themeKey = "$resolvedMode-$resolvedAccent"`，波形这类「变了就重画」的地方以它为依赖。
