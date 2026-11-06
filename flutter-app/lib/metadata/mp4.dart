@@ -16,8 +16,8 @@ import 'text_decode.dart';
 /// 与 JS 的差异（见 task-9-report.md 的偏差表）：
 /// * 不切「头部 64KB / 尾部窗口」两次尝试：`ByteSource` 本身就支持任意偏移读取，
 ///   一次遍历整个文件即可（原版的两次尝试只是为了绕过 `file.slice` 窗口）；
-/// * `covr` 的 data atom flags 参与判型：13 = JPEG、14 = PNG，其余按魔数嗅探
-///   （原版完全忽略 flags，一律嗅探，嗅探不出就兜底 `image/jpeg`）；
+/// * `covr` 的 data atom flags 参与判型：13 = JPEG、14 = PNG，其余按魔数嗅探；
+///   嗅探不出两侧同样兜底 `image/jpeg`（原版完全忽略 flags，一律嗅探）；
 /// * `©day`（原版映射 `year`）不解析 —— `Id3Tag` 没有该字段（task-7 裁定）。
 
 /// data atom 的 type flags 里 13 = JPEG。
@@ -135,9 +135,10 @@ void _applyItem(Id3Tag tag, List<int> name, List<int> content) {
 
 /// 读条目里的第一个 `data` 子 box，返回（载荷, type flags）。
 ///
-/// 布局：box 头(8) + version/flags(4) + locale(4) + 载荷。flags 取低 24 位
-/// （高 8 位是 version，真实文件里恒为 0）。box 越界或不是 `data` 一律 null，
-/// 不做任何强转 —— 上游没有兜底，这里必须容错。
+/// 布局：box 头(8) + version/flags(4) + locale(4) + 载荷。4 字节里**首字节是
+/// version**，后 3 字节才是 flags —— 取低 24 位必须从 `+9` 起（从 `+8` 起会把
+/// version 当成 flags 最高位，13 / 14 就永远匹配不上）。box 越界或不是 `data`
+/// 一律 null，不做任何强转 —— 上游没有兜底，这里必须容错。
 ({List<int> bytes, int flags})? _readDataAtom(List<int> content) {
   var pos = 0;
   while (pos + 8 <= content.length) {
@@ -146,9 +147,9 @@ void _applyItem(Id3Tag tag, List<int> name, List<int> content) {
     if (_nameAt(content, pos + 4, 'data')) {
       if (size < 16) return null; // 连 version/flags + locale 都不够
       final flags =
-          (content[pos + 8] << 16) |
-          (content[pos + 9] << 8) |
-          content[pos + 10];
+          (content[pos + 9] << 16) |
+          (content[pos + 10] << 8) |
+          content[pos + 11];
       return (bytes: content.sublist(pos + 16, pos + size), flags: flags);
     }
     pos += size;
@@ -158,19 +159,26 @@ void _applyItem(Id3Tag tag, List<int> name, List<int> content) {
 
 /// 封面：flags 13 = JPEG、14 = PNG，其余按魔数嗅探。
 ///
-/// 嗅探不出就不设封面（原版会兜底成 `image/jpeg` 硬塞一个 blob；本移植与
-/// id3 / vorbis 的处理一致：认不出就丢，免得把非图片载荷当封面）。
+/// flags 13 / 14 **优先于**魔数（原版完全忽略 flags、一律嗅探，所以同一份
+/// 「flags 13 + PNG 载荷」在两边会得到不同的 mime —— 见测试里的夹具对表）。
+/// 嗅探不出来时按原版兜底 `image/jpeg` 并保留字节（`audio-tags.js:588` 的
+/// `sniffImageMime(dataBox) ?? 'image/jpeg'`）：宁可用错 mime，也不丢封面。
 void _applyCover(Id3Tag tag, List<int> payload, int flags) {
   if (payload.isEmpty || payload.length > ByteSource.defaultMaxBytes) return;
   final mime = switch (flags) {
     _jpegFlag => 'image/jpeg',
     _pngFlag => 'image/png',
-    _ => sniffImageMime(payload),
+    _ => _sniffOrJpeg(payload),
   };
-  if (mime.isEmpty) return;
   // 复制一份：载荷只是 entry 的切片，别把整块 ilst 挂在封面上。
   tag.picture = Uint8List.fromList(payload);
   tag.pictureMime = mime;
+}
+
+/// 魔数嗅探；认不出按原版回退 `image/jpeg`（Dart 侧认不出是空串）。
+String _sniffOrJpeg(List<int> payload) {
+  final sniffed = sniffImageMime(payload);
+  return sniffed.isEmpty ? 'image/jpeg' : sniffed;
 }
 
 /// 条目名 → 字段名；未收录的名字返回 null（包括 `©day`）。

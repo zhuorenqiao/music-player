@@ -35,6 +35,19 @@ void main() {
     expect(tag.album, '魔杰座');
     expect(tag.pictureMime, 'image/png'); // JS 的 picture.type
     expect(tag.picture, pngBody());
+    // 夹具对表：JS 夹具是 dataAtom(PNG, 13)，原版忽略 flags、嗅探出 image/png；
+    // 本移植 flags 优先，同一份字节解出 image/jpeg（唯一与 JS 期望不同的字段）。
+    final jsFixture = (await parseMp4Meta(
+      ByteSource.fromBytes(
+        mp4File(
+          withMoov: true,
+          atoms: [
+            mp4Box('covr', [dataAtom(pngBody(), flags: 13)]),
+          ],
+        ),
+      ),
+    ))!;
+    expect(jsFixture.pictureMime, 'image/jpeg');
   });
 
   test('ftyp 有 moov 无：返回 null，不抛', () async {
@@ -55,7 +68,7 @@ void main() {
     expect(tag.picture, pngBody());
   });
 
-  test('covr：载荷不是图片时丢弃封面，文本字段照常返回', () async {
+  test('covr：载荷不是图片时按原版兜底 image/jpeg，文本字段照常返回', () async {
     final file = mp4File(
       withMoov: true,
       atoms: [
@@ -65,8 +78,10 @@ void main() {
     );
     final tag = (await parseMp4Meta(ByteSource.fromBytes(file)))!;
     expect(tag.title, '稻香');
-    expect(tag.picture, isNull);
-    expect(tag.pictureMime, '');
+    // 原版 sniffImageMime(...) ?? 'image/jpeg'：认不出也保留字节，不丢封面。
+    expect(tag.picture, isNotNull);
+    expect(tag.picture, utf8.encode('not an image'));
+    expect(tag.pictureMime, 'image/jpeg');
   });
 
   test('aART 落 albumArtist；©day（原版 year）不解析也不抛', () async {
