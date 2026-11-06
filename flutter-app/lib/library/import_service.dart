@@ -23,6 +23,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../metadata/audio_tags.dart';
 import '../metadata/byte_reader.dart';
@@ -49,7 +50,7 @@ class ImportResult {
   final int rejected;
 
   /// 被挡掉的文件名（含扩展名，按输入顺序；同一文件出现几次就记几次。
-  /// 提示文案另按名字去重，见 [ImportService.importPaths]）。
+  /// 提示文案另按名字去重并封顶，见 [ImportService.importPaths]）。
   final List<String> rejectedNames;
 
   /// 本次请求涉及的曲目 id，顺序即入列顺序。
@@ -63,6 +64,20 @@ class ImportResult {
 /// 头部预读窗口：判容器格式要用的字节（与 [ByteSource.headProbeBytes] 同值，
 /// 一次开文件读进来，之后的小读取都在内存里命中）。
 const int _headProbeBytes = 64 * 1024;
+
+/// 逐条点名的上限：超过这个数的拒绝一律汇总成一句。
+///
+/// 原版对拒绝只发一句汇总（`skipped <n> unsupported files`）；这里保留点名
+/// 更好定位，但必须有上限 —— 拖进一个 300 个 `.lrc` 的文件夹时，逐条弹窗
+/// 会把界面刷屏。规则：前 [_maxNamedRejections] 个名字逐条提示，其余合成
+/// 一句汇总（error 级），一次导入的提示总数因此恒定 ≤ 3。
+const int _maxNamedRejections = 2;
+
+/// 已是完整 URI（带 scheme 与权限段）的来源，如 Android SAF 的 `content://`。
+///
+/// 与 `track_handle.dart` 的判定同规则，但那边是私有常量，这里单独留一份：
+/// 两处的用途不同（拼 file URI vs. 取展示名），不必为此互相暴露。
+final RegExp _uriSourcePattern = RegExp(r'^[A-Za-z][A-Za-z0-9+.\-]*://');
 
 /// 导入服务：把路径 / 目录变成列表里的曲目，再在后台补标签、封面与时长。
 class ImportService {
@@ -96,18 +111,13 @@ class ImportService {
   /// 导入一批路径。
   ///
   /// 空输入直接返回零结果、不发提示（拖了个空文件夹不该弹「已跳过 0 个」）。
-  /// 白名单外的一律拒绝**并点名**，其余立刻入列；标签 / 时长在后台补。
+  /// 白名单外的一律拒绝**并点名**（有上限，见 [_maxNamedRejections]），
+  /// 其余立刻入列；标签 / 时长在后台补。
   /// 同一个文件重复导入不会变成两条记录：已在列表里的只交回 id，不重建。
   Future<ImportResult> importPaths(List<String> paths) async {
     if (paths.isEmpty) return const ImportResult();
     final partition = partitionByExtension(paths);
-    final announced = <String>{};
-    for (final path in partition.rejected) {
-      final name = _basename(path);
-      // 同一批里重名的只提示一次：一次拖进 20 个同名非音频文件不该刷 20 条横幅。
-      if (!announced.add(name)) continue;
-      toasts.show('不支持的文件格式，已跳过：$name', key: 'skip-$name');
-    }
+    _announceRejections(partition.rejected);
 
     // idsInCall：本次涉及的 id（含本来就在列表里的），按首次出现顺序去重。
     // newIds：真正新入列的，决定 added、后台回填与落库钩子。
@@ -139,6 +149,30 @@ class ImportService {
       rejectedNames: [for (final path in partition.rejected) _basename(path)],
       addedIds: idsInCall,
     );
+  }
+
+  /// 拒绝提示：按名字去重、逐条点名，但总数封顶。
+  ///
+  /// 前 [_maxNamedRejections] 个名字各发一条横幅；剩下的（按去重后的名字数）
+  /// 合成一条 error 级汇总句。于是无论拖进来多少文件，一次导入最多 3 条提示，
+  /// 既不像原版只给一个数字（对不上是哪个文件），也不会 300 条把界面糊死。
+  void _announceRejections(List<String> rejected) {
+    final names = <String>[];
+    final announced = <String>{};
+    for (final path in rejected) {
+      final name = _basename(path);
+      // 同一批里重名的只提示一次：一次拖进 20 个同名非音频文件不该刷 20 条横幅。
+      if (announced.add(name)) names.add(name);
+    }
+
+    final named = names.length < _maxNamedRejections
+        ? names
+        : names.sublist(0, _maxNamedRejections);
+    for (final name in named) {
+      toasts.show('不支持的文件格式，已跳过：$name', key: 'skip-$name');
+    }
+    final rest = names.length - named.length;
+    if (rest > 0) toasts.error('另有 $rest 个文件不支持，已跳过');
   }
 
   /// 扫一个目录再导入。
@@ -216,18 +250,50 @@ class ImportService {
 
   /// 文件名 → 曲目。歌手与曲名按原版规则拆（左侧歌手、右侧曲名），
   /// 拆不出就整串当曲名；时长未知（NaN），等探测回填。
+  ///
+  /// 名字一律走 [displayNameFor]：SAF 给的 `content://` 串里文件名是百分号
+  /// 编码的路径段，直接切分隔符会把 `primary%3AMusic%2Fa` 当成标题。句柄本身
+  /// 仍是 [FilePathHandle]（M1 不读 SAF 内容，T22 再接平台通道）。
   Track _buildTrack(String path, String id) {
-    final handle = FilePathHandle(path);
-    final split = splitArtistTitle(_stripExtension(handle.displayName));
+    final displayName = displayNameFor(path);
+    final split = splitArtistTitle(_stripExtension(displayName));
     return Track(
       id: id,
       src: path,
-      title: split.title.isEmpty ? handle.displayName : split.title,
+      title: split.title.isEmpty ? displayName : split.title,
       artist: split.artist,
       duration: double.nan,
       isLocal: true,
-      handle: handle,
+      handle: FilePathHandle(path),
     );
+  }
+
+  /// 来源字符串 → 展示用文件名（含扩展名）。
+  ///
+  /// - 普通文件路径：取最后一段，Windows 反斜杠与 POSIX 斜杠都认；
+  /// - URI 形态（`content://…`）：解析后取最后一个路径段、百分号解码，再取
+  ///   解码结果的 basename —— 解码后可能自带分隔符
+  ///   （`primary%3AMusic%2Fa.flac` → `primary:Music/a.flac` → `a.flac`）；
+  ///   解码成空串或解析失败就退回按路径切：名字难看可以忍，导入不许抛。
+  @visibleForTesting
+  String displayNameFor(String source) {
+    if (!_uriSourcePattern.hasMatch(source)) return _basename(source);
+    final String decoded;
+    try {
+      final path = Uri.parse(source).path;
+      final cut = path.lastIndexOf('/');
+      // 用未解码的 path 自己切最后一整段，保证只解码一次：
+      // pathSegments 已经解过码，再解一次会把名字里的 `%` 文本吃掉。
+      final raw = cut < 0 ? path : path.substring(cut + 1);
+      decoded = Uri.decodeComponent(raw);
+    } on FormatException {
+      return _basename(source);
+    } on ArgumentError {
+      return _basename(source);
+    }
+    final name = _basename(decoded);
+    if (name.isNotEmpty) return name;
+    return decoded.isNotEmpty ? decoded : _basename(source);
   }
 
   /// 头部预读：一次开文件把判格式要用的字节读进来。

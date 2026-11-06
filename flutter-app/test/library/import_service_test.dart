@@ -22,6 +22,9 @@ import '../metadata/tag_fixtures.dart';
 class RecordingToasts implements ToastSink {
   final List<String> messages = [];
 
+  /// 经 [error] 发出的那几条（拒绝汇总句要求是 error 级）。
+  final List<String> errors = [];
+
   @override
   void show(String message, {String key = '', int durationMs = 3200}) =>
       messages.add(message);
@@ -30,7 +33,10 @@ class RecordingToasts implements ToastSink {
   void info(String message) => show(message);
 
   @override
-  void error(String message) => show(message);
+  void error(String message) {
+    errors.add(message);
+    show(message);
+  }
 }
 
 /// 真实的 1×1 不透明 PNG（与 cover_image_test 同一常量）：内嵌封面的最小样本。
@@ -88,7 +94,43 @@ void main() {
     ...mpegFrame(),
   ];
 
-  test('非白名单文件被拒绝并点名，同名只提示一次', () async {
+  test('非白名单文件点名两个后汇总，一次导入最多三条提示', () async {
+    final playlist = Playlist(tracks: const []);
+    final toasts = RecordingToasts();
+    final service = ImportService(playlist: playlist, toasts: toasts);
+
+    final result = await service.importPaths([
+      '/m/a.flac',
+      '/m/b.txt',
+      '/m/c.lrc',
+      '/m/d.log',
+      '/m/e.json',
+      '/m/f.yaml',
+    ]);
+
+    expect(result.added, 1);
+    expect(result.rejected, 5);
+    // rejectedNames 照旧逐条记录（不去重），只有提示文案受上限约束
+    expect(result.rejectedNames, [
+      'b.txt',
+      'c.lrc',
+      'd.log',
+      'e.json',
+      'f.yaml',
+    ]);
+    expect(playlist.size, 1);
+    // 前两个名字逐条点名，其余合成一句；一次导入恒定 ≤ 3 条横幅
+    // （300 个 .lrc 也不会把界面刷屏）
+    expect(toasts.messages, [
+      '不支持的文件格式，已跳过：b.txt',
+      '不支持的文件格式，已跳过：c.lrc',
+      '另有 3 个文件不支持，已跳过',
+    ]);
+    // 汇总句是 error 级；前两条仍是普通横幅
+    expect(toasts.errors, ['另有 3 个文件不支持，已跳过']);
+  });
+
+  test('同名拒绝只提示一次，没超过上限就不汇总', () async {
     final playlist = Playlist(tracks: const []);
     final toasts = RecordingToasts();
     final service = ImportService(playlist: playlist, toasts: toasts);
@@ -104,8 +146,10 @@ void main() {
     expect(result.rejected, 3);
     expect(result.rejectedNames, ['b.txt', 'c.lrc', 'b.txt']);
     expect(playlist.size, 1);
-    // 提示里给的是文件名而不是整条路径，且同一个名字只提示一次
+    // 提示里给的是文件名而不是整条路径，且同一个名字只提示一次；
+    // 去重后只有两个名字，够得上「逐条点名」，不该再补汇总句
     expect(toasts.messages, ['不支持的文件格式，已跳过：b.txt', '不支持的文件格式，已跳过：c.lrc']);
+    expect(toasts.errors, isEmpty);
   });
 
   test('同一文件重复导入得到同一 id，且不重复入列', () async {
@@ -179,6 +223,47 @@ void main() {
     expect(track.isLocal, isTrue);
     expect(track.hasDuration, isFalse);
     expect(track.handle.displayName, '陈奕迅 - 十年.flac');
+  });
+
+  test('普通文件路径的显示名仍是 basename，按反斜杠拆分不回归', () async {
+    final playlist = Playlist(tracks: const []);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+    );
+    const source = r'C:\m\陈奕迅 - 十年.flac';
+
+    expect(service.displayNameFor(source), '陈奕迅 - 十年.flac');
+
+    await service.importPaths([source]);
+
+    final track = playlist.tracks.single;
+    expect(track.title, '十年');
+    expect(track.artist, '陈奕迅');
+  });
+
+  test('SAF 来源的显示名按解码后的真实文件名取，标题不带 %3A 垃圾', () async {
+    final playlist = Playlist(tracks: const []);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+    );
+    const source =
+        'content://com.android.externalstorage.documents/document/'
+        'primary%3AMusic%2Fa.flac';
+
+    // 直接切分隔符只会得到 `primary%3AMusic%2Fa`；这里要的是 `a.flac`
+    expect(service.displayNameFor(source), 'a.flac');
+
+    await service.importPaths([source]);
+
+    // 入列照旧（能播由播放错误那条路判定），只是标题必须来自 a.flac
+    final track = playlist.tracks.single;
+    expect(track.title, 'a');
+    expect(track.title, isNot(contains('%3A')));
+    // M1 不读 SAF 内容：没有标签也没有时长，但不许抛错
+    expect(track.hasDuration, isFalse);
+    expect(track.duration.isNaN, isTrue);
   });
 
   test('两侧都有的写法「歌名 - 歌手」先按原版规则猜，等标签纠正', () async {
