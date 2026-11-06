@@ -5,10 +5,13 @@
 // 界面层不 new 任何业务对象：`main()` 把 [AppBootstrap] 建好注入，这里只负责
 // 注册给 provider 并挂上骨架页。provider 放在 `MaterialApp` **外面**（与原版
 // Context 的位置一致），后续任何页面 / 弹层都能 `context.watch` 到同一份实例。
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'core/app_prefs.dart';
+import 'core/shortcuts.dart';
 import 'library/import_service.dart';
 import 'library/library_repository.dart';
 import 'library/recent_store.dart';
@@ -105,7 +108,28 @@ class LightMusicApp extends StatelessWidget {
         builder: (context, child) => Stack(
           children: [?child, const ToastsHost()],
         ),
-        home: const HomePage(),
+        // 桌面快捷键（T30）：包在 HomePage 外面、路由里面 —— 弹层与对话框自带
+        // 焦点域，按键不会从它们背后漏到播放器上（与原版「弹层开着时只认 Esc」
+        // 同一效果）。提示条宿主在 Stack 的另一支上，语义 liveRegion 不受影响。
+        home: withAppShortcuts(
+          playerCallback: (name, [arg]) {
+            final player = bootstrap.player;
+            switch (name) {
+              case 'togglePlay':
+                unawaited(player.togglePlay());
+              case 'seekBy':
+                unawaited(player.seekBy(arg! as double));
+              case 'volumeBy':
+                // 与原版同一句：Math.min/max 夹在 0~1，步长由快捷键层给
+                unawaited(
+                  player.setVolume((player.volume + (arg! as double)).clamp(0.0, 1.0)),
+                );
+              case 'toggleMute':
+                unawaited(player.toggleMute());
+            }
+          },
+          child: const HomePage(),
+        ),
       ),
     );
   }

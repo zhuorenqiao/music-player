@@ -314,6 +314,65 @@ void main() {
     }
   });
 
+  testWidgets('减少动态效果时加载转圈不走动画，也不留常驻 ticker', (tester) async {
+    // 视口设窄一点：桌面档的控制行还要放音量，420 那档只有一排按钮，转圈看得见
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 320);
+
+    Future<void> pumpLoading(bool reduceMotion) => tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme().copyWith(
+          extensions: const [AppTokensData(tokens: AppTokens.dark)],
+        ),
+        home: MediaQuery(
+          data: MediaQueryData.fromView(tester.view)
+              .copyWith(disableAnimations: reduceMotion),
+          child: const Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: SizedBox(
+                width: 420,
+                child: TransportBar.preview(
+                  playing: false,
+                  loading: true,
+                  modeLabel: '列表循环',
+                  positionSeconds: 0,
+                  totalSeconds: 100,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // 常态：不确定态的转圈（value 为 null）+ 一个一直在跑的 ticker
+    await pumpLoading(false);
+    await tester.pump();
+    expect(
+      tester.widget<CircularProgressIndicator>(
+        find.byType(CircularProgressIndicator),
+      ).value,
+      isNull,
+    );
+    expect(tester.binding.transientCallbackCount, greaterThan(0));
+
+    // 减少动态效果：换成静止的 1/4 弧（给了 value 就不起 AnimationController），
+    // 并且一帧都没有排下去 —— 装饰动画全部关掉，读屏与省电都受益。
+    await pumpLoading(true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      tester.widget<CircularProgressIndicator>(
+        find.byType(CircularProgressIndicator),
+      ).value,
+      isNotNull,
+    );
+    expect(tester.binding.transientCallbackCount, 0);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('窄屏列表按钮打开与侧栏同一个面板弹层', (tester) async {
     final harness = PanelHarness(titles: <String>['十年']);
     addTearDown(harness.dispose);

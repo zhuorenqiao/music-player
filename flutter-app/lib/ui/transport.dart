@@ -43,6 +43,11 @@ const double _barVerticalGap = 12;
 /// 播放键图标 / 转圈的直径：`.controls > .btn--play .icon { width: 18px }`。
 const double _playIconSize = 18;
 
+/// 减少动态效果时转圈停在的位置（0~1 的弧长比例）。
+///
+/// 取 1/4：与动画里任意一帧同一形状，只是不再转。
+const double _staticSpinnerValue = 0.25;
+
 class TransportBar extends StatelessWidget {
   /// 真入口：读 [PlayerState] 的 `view` 与 `position`。
   const TransportBar({super.key})
@@ -259,7 +264,11 @@ class _ControlsRow extends StatelessWidget {
       icon: Icons.skip_next,
       onTap: onNext,
     );
-    // 加载中只留转圈（原版 `.btn--play.is-loading` 把图标位空出来给 spinner）
+    // 加载中只留转圈（原版 `.btn--play.is-loading` 把图标位空出来给 spinner）。
+    // 减少动态效果时换成静止的 1/4 弧：`CircularProgressIndicator` 只在 value 为
+    // null 时才起 AnimationController，给了值就是同一形状的一帧定格 —— 不留常驻
+    // ticker，也不占帧预算（README 的 `prefers-reduced-motion` 那一节要求的就是这个）。
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final play = _TransportButton(
       id: 'btn-play',
       label: playing ? '暂停' : '播放',
@@ -269,6 +278,7 @@ class _ControlsRow extends StatelessWidget {
           ? SizedBox.square(
               dimension: _playIconSize,
               child: CircularProgressIndicator(
+                value: reduceMotion ? _staticSpinnerValue : null,
                 strokeWidth: 2,
                 color: tokens.accent,
                 backgroundColor: tokens.accentSoft,
