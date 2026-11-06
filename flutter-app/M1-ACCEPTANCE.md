@@ -20,20 +20,21 @@
 ### A1 四条闸口的真实尾巴（终审修复波收尾重新采集）
 
 工作目录 `flutter-app/`，Flutter 3.47.9 / Dart 3.13.7，
-分支 `feat/flutter-m1-core-playback`，采集时间 2026-11-07，代码状态到本文件
-所在的那条 docs 提交（其前一条是 `45badbe`，即终审修复波最后一笔代码改动）。
+分支 `feat/flutter-m1-core-playback`，采集时间 2026-11-07，代码状态就是本文件
+所在的那条 docs 提交（最后一笔代码改动是它前面的 `45badbe`；这一批数字取收尾
+复跑那一轮，提交前在 `45badbe` 上跑的那一轮除耗时外完全一致）。
 
 `flutter analyze --no-fatal-infos`：
 
 ```text
 Analyzing flutter-app...
-No issues found! (ran in 8.8s)
+No issues found! (ran in 10.0s)
 ```
 
 `flutter test`：
 
 ```text
-00:34 +380: All tests passed!
+00:38 +380: All tests passed!
 ```
 
 测试数轨迹：T30 收口 324 → 第 1 段末（C1/C2 + I1–I5）361 → 本波收尾
@@ -47,15 +48,15 @@ No issues found! (ran in 8.8s)
 ```text
 Building Windows application...
 Nuget.exe not found, trying to download or use cached version.
-Building Windows application...                                   108.2s
+Building Windows application...                                    86.8s
 √ Built build\windows\x64\runner\Release\light_music.exe
 ```
 
 产物实测：`light_music.exe` 92,160 字节（启动器本身没重编，时间戳不变属正常）、
 `data/app.so` 7,095,176 字节（跟着构建更新）、整个 `Release/` 目录 44 MB。
 
-`flutter build apk --debug`：**本波这一条没过**（两次重跑各卡在一步，原文照抄）。
-第一次（SDK 平台没装全）：
+`flutter build apk --debug`：**本波这一条没过**（一共跑了三次，第一次卡在 SDK 平台、
+第二与第三次卡在 AAR metadata，原文照抄）。第一次：
 
 ```text
 Warning: The plugin permission_handler_android requires Android SDK version 37 or higher.
@@ -69,7 +70,8 @@ Gradle task assembleDebug failed with exit code 1
 ```
 
 工具链当场接受许可证并装了 `platforms/android-37.0`，第二条命令重跑后走过那一步，
-落在 AAR metadata 检查：
+落在 AAR metadata 检查（收尾复跑的第三次同样如此，`BUILD FAILED in 34s`，
+`build/app/outputs/flutter-apk/` 里没有任何产物）：
 
 ```text
 Your project is configured to compile against Android SDK 36, but the following plugin(s) require to be compiled against a higher Android SDK version:
@@ -288,7 +290,7 @@ Windows 侧先跑 `flutter run -d windows`（或直接用 A1 构建出来的 Rel
 
 | 项 | 状态 |
 | --- | --- |
-| A（自动化闸口） | analyze 无问题（8.8s）/ `flutter test` **380 全绿** / `build windows` 成功（app.so 7,095,176 B）；**`build apk --debug` 本波是红的**：`permission_handler_android` 14.1.1 要 compileSdk 37，而 AGP 9.1.0 上限 36（原文与归因见 A1 末），本波未碰依赖与构建配置，留待裁定 |
+| A（自动化闸口） | analyze 无问题（10.0s）/ `flutter test` **380 全绿** / `build windows` 成功（app.so 7,095,176 B）；**`build apk --debug` 本波是红的**：`permission_handler_android` 14.1.1 要 compileSdk 37，而 AGP 9.1.0 上限 36（原文与归因见 A1 末），本波未碰依赖与构建配置，留待裁定 |
 | B1–B7（Windows 真人段） | 待真人跑 |
 | B8（Android 段） | pending-device：无设备，一条未跑；且当前没有可用的 debug apk（同上） |
 | B9（读屏与系统减动效） | 待真人跑 |
