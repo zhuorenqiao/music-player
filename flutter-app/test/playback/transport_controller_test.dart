@@ -182,6 +182,52 @@ void main() {
       expect(c.current!.id, '1');
       expect(driver.calls, contains('open:/1.flac'));
     });
+
+    test('曲目播完自动开到下一首（列表模式）', () async {
+      final driver = FakeAudioDriver();
+      final c = build(
+        playlist: Playlist.fromTracks([t('1'), t('2')]),
+        driver: driver,
+      );
+
+      await c.playTrack('1');
+      await settle();
+      driver.calls.clear();
+
+      // 原版 `ended` -> playNext({auto: true})（player.tsx:441）
+      driver.emitCompleted();
+      await settle();
+
+      expect(c.current!.id, '2');
+      expect(c.view.value.current!.id, '2');
+      expect(driver.calls, contains('open:/2.flac'));
+    });
+
+    test('曲目播完在单曲循环下原地重播，不前进', () async {
+      final driver = FakeAudioDriver();
+      final c = build(
+        playlist: Playlist.fromTracks(
+          [t('1'), t('2')],
+          mode: PlayMode.one,
+          currentIndex: 0,
+        ),
+        driver: driver,
+      );
+
+      await c.playTrack('1');
+      await settle();
+      driver.calls.clear();
+
+      driver.emitCompleted();
+      await settle();
+
+      // next(auto: true) 在单曲循环下返回当前索引：重开同一首，而不是第 2 首
+      expect(c.current!.id, '1');
+      expect(
+        driver.calls.where((call) => call.startsWith('open:')).toList(),
+        ['open:/1.flac'],
+      );
+    });
   });
 
   group('上一首的三秒规则', () {
@@ -365,6 +411,29 @@ void main() {
       // 恢复可播后熔断也解开
       expect(c.circuitOpen, isFalse);
     });
+
+    test('熔断后曲目播完不再自动续播', () async {
+      final clock = FakeClock();
+      final driver = FakeAudioDriver()..alwaysFail = true;
+      final c = buildWithClock(
+        playlist: Playlist.fromTracks([t('1'), t('2')]),
+        driver: driver,
+        clock: clock,
+      );
+
+      await c.playTrack('1');
+      await settle();
+      clock.flush();
+      await settle();
+      expect(c.circuitOpen, isTrue);
+      driver.calls.clear();
+
+      driver.emitCompleted();
+      await settle();
+
+      expect(c.circuitOpen, isTrue);
+      expect(driver.calls.where((call) => call.startsWith('open:')), isEmpty);
+    });
   });
 
   group('最近播放', () {
@@ -461,6 +530,8 @@ void main() {
       driver.emitPosition(7);
       await settle();
       expect(c.position.value, 7);
+      // progress 的 bufferedEnd 要真的落到 notifier 上，不能停在换曲时的 0
+      expect(c.buffered.value, 42);
       expect(c.duration.value, 100);
     });
   });

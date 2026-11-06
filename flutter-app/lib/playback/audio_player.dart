@@ -43,6 +43,22 @@ class StateChangedEvent extends PlayerEvent {
   final bool playing;
 }
 
+/// 曲目自然播完（原版 `ended`，player.js:466-469）。
+///
+/// 必须与 [StateChangedEvent] 分开：原版 `ended` 先补一条 `statechange(false)`
+/// 再发 `ended`，装配层只有靠后者才能区分「暂停」与「播完」
+/// （player.tsx:441 的 `playNext({ auto: true })` 只认这一条）。
+class CompletedEvent extends PlayerEvent {
+  const CompletedEvent();
+}
+
+/// 已缓冲进度，对译原版 `progress` 事件的 `bufferedEnd`（player.tsx:433-435）。
+/// [end] 是已缓冲到的秒数；内核还没报过时可为 null。
+class BufferedEvent extends PlayerEvent {
+  const BufferedEvent(this.end);
+  final double? end;
+}
+
 class VolumeEvent extends PlayerEvent {
   const VolumeEvent(this.volume, this.muted);
   final double volume;
@@ -97,8 +113,7 @@ class AudioPlayer {
     _subs.add(_driver.errorStream.listen(_onDriverError));
     _subs.add(_driver.canplayStream.listen((_) => _onCanplay()));
     _subs.add(_driver.completedStream.listen((_) => _onCompleted()));
-    // bufferedStream 只经 getter 读，不派生事件：原版 progress 事件没有
-    // 对应的业务事件，UI 需要时直接读 buffered 快照。
+    _subs.add(_driver.bufferedStream.listen(_onBuffered));
   }
 
   final AudioDriver _driver;
@@ -279,6 +294,10 @@ class AudioPlayer {
     _emit(TimeUpdateEvent(value, _driver.durationOrNull));
   }
 
+  void _onBuffered(double? end) {
+    _emit(BufferedEvent(end));
+  }
+
   void _onDuration(double? value) {
     final pending = _pendingSeek;
     if (pending != null && value != null && value > 0) {
@@ -308,7 +327,9 @@ class AudioPlayer {
 
   void _onCompleted() {
     _setLoading(false);
+    // 次序对齐原版：先 statechange(false) 再 ended（player.js:466-469）。
     _emit(StateChangedEvent(false));
+    _emit(const CompletedEvent());
   }
 
   void _onDriverError(DriverError error) {

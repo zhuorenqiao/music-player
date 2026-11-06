@@ -2,7 +2,8 @@
 //
 // 播放编排：对译 src/state/player.tsx 的「播放编排」（254-347）与
 // 「播放器事件」（403-479）两段。职责边界：
-//   - 曲目切换的入口只有 [playTrack]，上下曲 / 自动跳 / 损坏跳都汇到它；
+//   - 曲目切换的入口只有 [playTrack]，上下曲 / 自动跳 / 损坏跳 / 曲末续播都汇到它；
+//   - 曲末自动续播：`CompletedEvent` -> `next(auto: true)`（player.tsx:441），熔断后停手；
 //   - 上一首的三秒规则（constants.ts:46 PREV_RESTART_AFTER）；
 //   - 加载失败 -> 打角标 + 1400ms 后自动跳，连续失败到列表长度就熔断；
 //   - 失败计数只在 canplay 清零（player.tsx:412 的清零点），位置 / 播放态不许洗它；
@@ -336,6 +337,14 @@ class TransportController {
       case StateChangedEvent():
         // statechange(true) 不清零失败计数：它之后仍可能立刻崩。
         _publish();
+      case BufferedEvent(:final end):
+        // 缓冲条只走独立 notifier，与 timeupdate 一样绝不 _publish()。
+        _buffered.value = end;
+      case CompletedEvent():
+        // 原版 `ended` -> playNext({auto: true})（player.tsx:441）。熔断时停手，
+        // 与损坏跳转同一条件；单曲循环由 Playlist.nextIndex(auto) 决定原地重播。
+        if (circuitOpen) return;
+        unawaited(next(auto: true));
       case VolumeEvent():
         _publish();
       case ErrorEvent(:final message):
