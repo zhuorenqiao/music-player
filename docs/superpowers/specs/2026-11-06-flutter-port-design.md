@@ -229,7 +229,17 @@ Windows 侧接 System Media Transport Controls：元数据与播放状态推给 
 
 「数据对了不等于界面变了」这条历史教训在 Dart 侧的防法：所有回填必须以列表里的活对象为目标（按 id 找回再改），改完显式 `notifyListeners()`，并在 widget 测试里断言「回填后 DOM（widget tree）里的文本确实变了」，而不只断言 repository 里有值。
 
-冷启动还原时「文件仓 vs prefs」这对现场的取舍（终审 I4 已裁定，与 `state/library_state.dart` 的 `restore()` / `_restoreCursor()` 注释同一条规则）：列表**顺序**一律以文件仓为准，prefs 里那份 `order` 再陈旧也参与不了重建；**光标**在「现场自洽」时以 prefs 的 `currentId` 为准 —— 播放推进只经 `PlayerState.flushPersist()` 按 debounce 写 prefs、不重写整份档案，所以自洽的现场里 prefs 才是更新的陈述，两份 `order` 逐位一致就是「这份现场没跨代过期」的闸门。两者矛盾（或 prefs 缺 `order`）时整条 prefs 痕迹按陈旧处理，退回文件仓快照的 `currentId`；两边都指不到列表内的曲目就保持**无光标**（`clearCurrent()`，不让默认的队首冒充存档光标），随后 `_syncPrefsTrace()` 把 prefs 的 `currentId` `remove` 掉，绝不留「prefs 指一首、界面指另一首」。音量与静音只由 prefs 的 `volume` / `muted` 两个键承载（文件仓快照里那两个字段已删，见 §6.3），文件仓不可用或被重建都不会把它们悄悄清回默认值。
+冷启动还原时「文件仓 vs prefs」这对现场的取舍（框架是终审 I4 定的，内容经第 2 轮 R1/R2/R4/R6/R8 修订；与 `state/library_state.dart` 的 `restore()` / `_restoreCursor()` / `_restoreMode()` 注释同一条规则，两边不许各写一份）。
+
+**顺序**：权威一律是文件仓 —— prefs 里那份 `order` 再陈旧也参与不了列表重建，还原末尾由 `_syncPrefsTrace()` 把它纠正成现场的真实顺序。**档案损坏**（回退过 `.bak`，或两份都读不出来、仓储退回空快照）时还原流程**只读痕迹、不写痕迹**（终审 R8）：那份快照本身关于「用户停过哪一首」什么也没说，按它写下去就是把 prefs 里最后一条可读记录覆盖成空数组，只有真正拿到过一次健康档案才允许改写现场。
+
+**光标**：现场自洽（prefs 的 `order` 与文件仓顺序逐位一致，这是「这份现场没跨代过期」的闸门）时以 prefs 的 `currentId` 为准 —— 播放推进只经 `PlayerState.schedulePersist()` 按 400ms 防抖写 prefs、不重写整份档案，所以自洽的现场里 prefs 才是更新的陈述。同一前提下 `currentId` **键缺失**是一句**否定断言**（用户按过停止，或当前曲目被删空过，两条路径都把键如实清掉了；终审 R2），候选集即为空，绝不回落到 `snap.currentId` —— 那正是停止之前那次 `persist()` 写下的值，回落它就是复活用户明明停掉的那一首。两份 `order` 矛盾（或 prefs 缺 `order`）时整条 prefs 痕迹按过期处理，这时才轮到文件仓快照的 `currentId` 打头。**两边都给不出有效 id 时：非空列表落到第一首**，保持暂停、绝不自动播；只有空列表才是空舞台。原版 `src/state/player.tsx:556` 写的是 `storedId && indexOfId(storedId) >= 0 ? indexOfId(storedId) : 0` —— 任何一次非空启动都落得到一个光标，第 1 轮在此处调 `clearCurrent()`（「没有有效 id 就没有光标」）是移植自创、已被代码与原版共同推翻。光标落定后 `_syncPrefsTrace()` 把 prefs 的 `currentId` 跟着**补写一致**（原版 `src/state/player.tsx:243-249` 的 `persist()` 每次都以 `playlist.current` 重写这两个键，空才 `Storage.remove`），不留「界面指第一首、存档指幽灵」两份真相。落盘时机：**停止播放那一条腿走 `flushPersist()` 同步落盘**（装配层把 `TransportController.onStopped` 接到它，且 `stopPlayback()` `await` 到落完才返回，终审 R2 的残留），因为防抖窗口对播放推进是省写盘的优化、对停止却是一段真实丢数据的空档（「停止 → 立刻杀进程」等于没停过）；播放推进仍保持 400ms 防抖不变。
+
+**模式**：与光标同源同权（终审 R6）—— prefs 写过 `mode` 就以它为准（`PlayerState.cycleMode` 只写 prefs 这一处，档案里那份要等下一次 `persist()` 才跟上），没写过才回落 `snap.mode`；`clearPlaylist()` 只作废 `order` 与 `currentId` 两个键，**不动模式**（原版清列表不改模式）。
+
+**音量与静音**只由 prefs 的 `volume` / `muted` 两个键承载（文件仓快照里那两个字段已删，见 §6.3），文件仓不可用或被重建都不会把它们悄悄清回默认值；`setVolume` **两个分支都清 muted**（对齐 `src/lib/player.js:322`：else 分支同样写 `muted = false`，只有 `v > 0` 那支额外记 `lastVolume`），所以「静音中拖到 0」留下的是 `volume=0、muted=false` 而不是解不掉的静音。
+
+冷启动还有一次**自愈回填**（终审 C1 引入，第 2 轮 R1 换成落盘判据）：谓词是 `Track.metadataProbed` **未置位**且**字段仍缺**（时长未知，或标题/歌手还停在文件名猜出来的值上）才补跑 —— 标记负责「只治一次」（批次结束时无论补上什么、探没探出、甚至整个文件读不到都置位，随那次收尾 `persist()` 落盘，老档案缺字段读回 false），字段负责「没东西可补就别开文件」。从前只按字段猜，「无封面」「标题等于文件名猜值」对用户那批「`歌手 - 歌名` 命名 + 带标签」的真实曲目几乎恒真，于是每次启动把整个曲库重开文件重解析一遍、再整库重写一次档案。SAF 的 `content://` 句柄在 M1 开不了，按句柄类型**跳过时长探针**（终审 R7，不留 3 秒白等），标记照记，否则它会在「探不出 NaN」与旧谓词之间叠成反复重跑。
 
 ## 9. 外观系统
 
