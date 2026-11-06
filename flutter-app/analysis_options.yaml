@@ -1,0 +1,17 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    avoid_print: error
+    unnecessary_this: warning
+  exclude:
+    - build/**
+    - android/**
+    - windows/**
+
+linter:
+  rules:
+    - prefer_final_locals
+    - unawaited_futures
+    - avoid_dynamic_calls
+    - require_trailing_commas
