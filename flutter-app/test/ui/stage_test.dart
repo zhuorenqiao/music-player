@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/core/breakpoints.dart';
 import 'package:light_music/playback/playlist.dart';
+import 'package:light_music/playback/track.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
@@ -224,5 +225,62 @@ void main() {
 
     expect(find.text('未选择曲目'), findsOneWidget);
     expect(find.text('从播放列表选一首开始'), findsOneWidget);
+  });
+
+  /// 终审 minor 3 的缺陷复现（改前红）：这里从前只写 `total: formatTime(track?.duration)`，
+  /// 注释还声称「内核报的 duration 可能比标签值晚到，卡片先按标签值显示」——
+  /// 标签根本没有时长（ID3v1-only、无标签文件）时，内核早就把时长报上来了，
+  /// 卡片仍然一直挂着 `--:--`（ledger T26 那条 deferred minor）。
+  testWidgets('标签没时长时回退内核报的时长；两处都未知才是 --:--', (tester) async {
+    final track = Track(id: '1', src: '/1.flac', title: '无标签曲');
+    expect(track.hasDuration, isFalse);
+    final state = PlayerState.fake(Playlist.fromTracks([track]));
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider<PlayerState>.value(
+        value: state,
+        child: wrap(const Stage()),
+      ),
+    );
+
+    // 两处都不知道：总长给 --:--（当前位置照常是 00:00），不许瞎猜时长
+    expect(find.text('00:00 / --:--'), findsOneWidget);
+
+    // 内核 load 完回报时长（transport.duration 那个 ValueNotifier）
+    state.duration.value = 200;
+    await tester.pump();
+    expect(
+      find.text('00:00 / 03:20'),
+      findsOneWidget,
+      reason: '标签没有时长时要用内核报的，不能再卡在 --:--',
+    );
+
+    // 标签回填出时长之后以标签为准（元数据优先，与 TransportBar 的两级取值同源）。
+    // 回填改的是列表里的活对象，靠 minor 2 的展示快照 + syncView 才会刷到界面。
+    track.duration = 300;
+    state.transport.syncView();
+    await tester.pump();
+    expect(find.text('00:00 / 05:00'), findsOneWidget);
+  });
+
+  testWidgets('时长行只订阅那两片叶子，position 走动不重建整卡', (tester) async {
+    final track = Track(id: '1', src: '/1.flac', title: '有标签曲', duration: 120);
+    final state = PlayerState.fake(Playlist.fromTracks([track]));
+    addTearDown(state.dispose);
+    await tester.pumpWidget(
+      ChangeNotifierProvider<PlayerState>.value(
+        value: state,
+        child: wrap(const Stage()),
+      ),
+    );
+
+    // 标签有时长：内核报的别的值不许盖掉它
+    state.duration.value = 999;
+    await tester.pump();
+    expect(find.text('00:00 / 02:00'), findsOneWidget);
+
+    state.position.value = 30;
+    await tester.pump();
+    expect(find.text('00:30 / 02:00'), findsOneWidget);
   });
 }

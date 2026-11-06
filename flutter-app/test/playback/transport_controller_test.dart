@@ -722,6 +722,72 @@ void main() {
     });
   });
 
+  group('视图身份（终审 minor 2）', () {
+    /// 缺陷复现（改前红）：`TransportView.operator==` 只比 `current?.id`，
+    /// 于是 C1 那条「后台回填原地改活对象」的路径改完标题 / 封面 / 时长之后，
+    /// publish 出来的新视图与旧视图相等，`ValueNotifier` 直接不通知 ——
+    /// 界面（和任何按 TransportView 判等的订阅者）永远停在只有文件名的那一帧。
+    test('同一首歌回填后封面 / 标题变化，视图身份要跟着变并通知订阅者', () async {
+      final driver = FakeAudioDriver();
+      final track = t('1'); // 导入瞬间只有文件名拆出来的标题，没封面没时长
+      final c = build(playlist: Playlist.fromTracks([track]), driver: driver);
+      await c.playTrack('1');
+      await settle();
+
+      var notifications = 0;
+      c.view.addListener(() => notifications++);
+      final before = c.view.value;
+
+      // 后台回填：改的就是列表里那个活对象（C1 走这条路）
+      track
+        ..title = '岁月如歌'
+        ..artist = '陈奕迅'
+        ..album = '七'
+        ..cover = 'C:/covers/1.jpg'
+        ..duration = 213;
+      c.syncView();
+
+      expect(
+        notifications,
+        1,
+        reason: '展示字段变了却不通知，界面就停在旧标签上（与 C1 叠加最明显）',
+      );
+      final after = c.view.value;
+      expect(after.current!.title, '岁月如歌');
+      expect(after, isNot(before), reason: '两份视图必须判为不相等');
+      expect(after.hashCode, isNot(before.hashCode));
+
+      // 再 publish 一次同样的内容：不许当成变化（否则每帧都重建整棵界面）
+      c.syncView();
+      expect(notifications, 1);
+    });
+
+    test('被标损坏的同 id 曲目同样算身份变化', () {
+      final track = t('1');
+      final before = TransportView(current: track);
+      track.broken = true;
+      expect(TransportView(current: track), isNot(before));
+    });
+
+    test('时长未知（NaN）不许参与「永远不相等」：同字段两份视图仍旧相等', () {
+      // NaN != NaN 是浮点语义；直接把 duration 原值塞进相等判断，每次 publish
+      // 都会被判成「变了」，于是进度条每秒重建整棵界面。未知时长归一成 null。
+      final a = Track(id: '1', src: '/1.flac', title: '歌1');
+      final b = Track(id: '1', src: '/1.flac', title: '歌1');
+      expect(a.duration.isNaN, isTrue);
+      expect(TransportView(current: a), TransportView(current: b));
+      expect(
+        TransportView(current: a).hashCode,
+        TransportView(current: b).hashCode,
+      );
+      expect(TransportView(), TransportView(current: null));
+
+      // 补上时长之后与「没时长」必须算变化（回填的就是这一格）
+      a.duration = 100;
+      expect(TransportView(current: a), isNot(TransportView(current: b)));
+    });
+  });
+
   group('生命周期', () {
     test('dispose 取消待跳定时器并停掉播放器', () async {
       final clock = FakeClock();

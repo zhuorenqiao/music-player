@@ -49,6 +49,13 @@ class Stage extends StatelessWidget {
     // 只订阅语义变化（切歌 / 播放 / 损坏…）；position 单独走 ValueListenable
     final player = context.watch<PlayerState>();
     final track = player.view.value.current;
+    // 总时长的两级取值（终审 minor 3，与 `TransportBar._totalOf` 同一思路）：
+    // 标签里有时长就以标签为准（那是权威元数据，内核报的往往晚到），
+    // 标签没有（ID3v1-only / 无标签文件 / 探测失败）就回退内核那个
+    // `transport.duration` 的 ValueNotifier —— 从前这里只读标签，于是这类
+    // 曲目即使内核早就知道多长，卡片也一直挂着 `--:--`（ledger T26）。
+    // 两处都不知道才是 `--:--`。
+    final labeled = track != null && track.hasDuration ? track.duration : null;
     return StagePreview(
       title: track?.title ?? kIdleStageTitle,
       artist: switch (track) {
@@ -57,8 +64,9 @@ class Stage extends StatelessWidget {
         final t => t.artist,
       },
       album: track?.album ?? '',
-      // 总长取曲目元数据：内核报的 duration 可能比标签值晚到，卡片先按标签值显示
-      total: formatTime(track?.duration),
+      total: formatTime(labeled),
+      // 标签有时长时不订阅内核那一路：免得内核报的旧值盖掉权威元数据。
+      totalFromKernel: labeled == null ? player.duration : null,
       position: player.position,
       coverPath: track?.cover ?? '',
       broken: track?.broken ?? false,
@@ -75,6 +83,7 @@ class StagePreview extends StatelessWidget {
     required this.total,
     this.elapsed = kTimeUnknown,
     this.position,
+    this.totalFromKernel,
     this.coverPath = '',
     this.broken = false,
     super.key,
@@ -88,7 +97,13 @@ class StagePreview extends StatelessWidget {
   final String elapsed;
 
   /// 总时长文案，已格式化（未知时 `--:--`）。
+  ///
+  /// 标签里有时长时走这里；没有时由 [totalFromKernel] 现场换算（终审 minor 3）。
   final String total;
+
+  /// 内核报的总时长（秒）；标签没时长时用它，实时值以它为准。
+  /// null = 标签已经有时长（元数据是权威，不被内核的旧读数盖掉）。
+  final ValueListenable<double?>? totalFromKernel;
 
   /// 实时进度（秒）：只有时间行订阅它。
   final ValueListenable<double>? position;
@@ -173,6 +188,7 @@ class StagePreview extends StatelessWidget {
       elapsed: elapsed,
       total: total,
       position: position,
+      totalFromKernel: totalFromKernel,
     );
 
     return Container(
@@ -274,16 +290,24 @@ class _LyricsSlot extends StatelessWidget {
 ///
 /// 有 [position] 时只有这一行的 [Text] 跟着 tick 重建 —— 卡片其余部分
 /// （封面、曲名、歌词位）不参与重绘。
+///
+/// 总时长有两条来源（终审 minor 3）：标签里有时长时 [total] 就是定值、
+/// [totalFromKernel] 为空；标签没有时 [totalFromKernel] 非空，这一行同时订阅
+/// 内核那个 ValueNotifier —— 时长到货时只有这一行 Text 重建，卡片不动。
 class _TimeLine extends StatelessWidget {
   const _TimeLine({
     required this.elapsed,
     required this.total,
     required this.position,
+    this.totalFromKernel,
   });
 
   final String elapsed;
   final String total;
   final ValueListenable<double>? position;
+
+  /// 内核报的总时长；null 表示标签已有时长，不必再订阅内核那一路。
+  final ValueListenable<double?>? totalFromKernel;
 
   @override
   Widget build(BuildContext context) {
@@ -294,17 +318,30 @@ class _TimeLine extends StatelessWidget {
       // 等宽数字：时间跳动时行宽不抖
       fontFeatures: const [FontFeature.tabularFigures()],
     );
-    final source = position;
-    if (source == null) {
-      return Text('$elapsed / $total', textAlign: TextAlign.center, style: style);
+
+    /// 一行文字：总长文案由外层决定（标签定值或内核实时值）。
+    Widget line(String totalText) {
+      final source = position;
+      if (source == null) {
+        return Text('$elapsed / $totalText', textAlign: TextAlign.center, style: style);
+      }
+      return ValueListenableBuilder<double>(
+        valueListenable: source,
+        builder: (context, value, child) => Text(
+          '${formatTime(value)} / $totalText',
+          textAlign: TextAlign.center,
+          style: style,
+        ),
+      );
     }
-    return ValueListenableBuilder<double>(
-      valueListenable: source,
-      builder: (context, value, child) => Text(
-        '${formatTime(value)} / $total',
-        textAlign: TextAlign.center,
-        style: style,
-      ),
+
+    final kernel = totalFromKernel;
+    if (kernel == null) return line(total);
+    return ValueListenableBuilder<double?>(
+      valueListenable: kernel,
+      // 内核报 0 / NaN 都算「还不知道」：不许把 --:-- 换成 00:00 那种假象
+      builder: (context, value, child) =>
+          line(formatTime(value != null && value > 0 ? value : null)),
     );
   }
 }

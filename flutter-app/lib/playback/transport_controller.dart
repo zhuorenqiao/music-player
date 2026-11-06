@@ -70,7 +70,7 @@ class TransportView {
     this.mode = PlayMode.list,
     this.volume = kDefaultVolume,
     this.muted = false,
-  });
+  }) : _display = _displayOf(current);
 
   final bool playing;
   final bool loading;
@@ -84,6 +84,34 @@ class TransportView {
   final double volume;
   final bool muted;
 
+  /// 建好这一刻的**展示快照**（终审 minor 2）。
+  ///
+  /// 为什么不是判等时现取 `[current]` 的字段：`current` 是播放列表里的那个
+  /// **活对象**，回填（C1）就是原地改它 —— 事后读它的字段，两份视图永远读到
+  /// 同一份「最新值」，相等判断就形同虚设（`ValueNotifier` 仍然不发通知）。
+  /// 所以身份必须在构造时抄下来，抄成不可变的值。
+  ///
+  /// 从前这里只比 `current?.id`：同一首歌的 title / artist / cover / album /
+  /// broken 被后台回填改掉之后两份视图仍然相等，靠 TransportView 判等的订阅者
+  /// （舞台、控制条、媒体会话快照）就永远停在「只有文件名」那一帧。
+  ///
+  /// 时长抄的是**归一后的值**：`hasDuration` 为假时一律记 null。直接把
+  /// `track.duration` 放进来会踩 `NaN != NaN` 的浮点语义，那样每次 publish
+  /// 都算「变了」，整棵界面跟着 4Hz 的进度重建（正是本文件开头禁止的事）。
+  final Object? _display;
+
+  static Object? _displayOf(Track? track) => track == null
+      ? null
+      : (
+          track.id,
+          track.title,
+          track.artist,
+          track.album,
+          track.cover,
+          track.hasDuration ? track.duration : null,
+          track.broken,
+        );
+
   @override
   bool operator ==(Object other) =>
       other is TransportView &&
@@ -94,7 +122,7 @@ class TransportView {
       other.mode == mode &&
       other.volume == volume &&
       other.muted == muted &&
-      other.current?.id == current?.id;
+      other._display == _display;
 
   @override
   int get hashCode => Object.hash(
@@ -102,7 +130,7 @@ class TransportView {
     loading,
     circuitOpen,
     blocked,
-    current?.id,
+    _display,
     mode,
     volume,
     muted,
