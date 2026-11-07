@@ -624,6 +624,51 @@ void main() {
     );
   });
 
+  // -- 第 4 轮 I9：这一批什么都没学到，就不许触发收尾那次整库重写 ---------------
+
+  test('回填什么都没学到时不重写档案', () async {
+    // 档案里一条没探测过的曲目，文件这次不在盘上（U 盘没挂 / 被占用），探针也
+    // 明确回「没探出」：这一批什么都没学到。此时再整库写一遍档案就是每次启动
+    // 白写一次盘 —— 第 2 轮 R1 想止住的正是这个开销。
+    final path = '${dir.path}${Platform.pathSeparator}missing.mp3';
+    final stale = Track(
+      id: localIdFor(path),
+      src: path,
+      title: '白玫瑰',
+      artist: '陈奕迅',
+      duration: double.nan,
+      isLocal: true,
+    );
+    await LibraryRepository(directory: dir.path).save(
+      LibrarySnapshot(
+        tracks: [stale],
+        order: [stale.id],
+        mode: PlayMode.list,
+      ),
+    );
+
+    final counting = _CountingRepository(directory: dir.path);
+    final fresh = buildEnrichingState(
+      repo: counting,
+      probe: (p) async => const DurationProbeOutcome(double.nan),
+    );
+    addTearDown(fresh.dispose);
+
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+
+    expect(
+      fresh.tracks.single.metadataProbed,
+      isFalse,
+      reason: '文件没打开、时长也没探到：这一次什么都没学到',
+    );
+    expect(
+      counting.saves,
+      0,
+      reason: '没有新结论就没有要落盘的东西，别每次启动白写一遍整库档案',
+    );
+  });
+
   // -- 终审 I4：prefs 的 currentId / order 必须如实同步 ----------------------
 
   test('落库时 currentId 跟着列表走：换曲写、删空清', () async {
@@ -819,15 +864,21 @@ void main() {
       isNot(ids.last),
       reason: '无论哪条写侧路径，都不许把停掉的那首重新写回现场',
     );
-    // 注意（留给裁定）：`restore()` 自己按 R8 走了「只读不写」，但自愈批次
-    // 收尾那一次 `persist()` 里含 `_syncPrefsTrace()`，仍会按当前列表把两份
-    // 痕迹重写一遍 —— 于是这里读回的是 R4 落定的第一首（而不是「保持不动」）。
-    // 这与 M3 要排除的「复活停过的歌」不冲突，但 R8 那句「损坏的快照不许改写
-    // 现场」目前只覆盖 restore() 这一条腿，覆盖不到回填收尾。
+    // 第 4 轮 I9：这批曲目的文件都不在盘上、探针也没有结论 —— 这一批什么都没
+    // 学到，收尾那次 `persist()` 根本不该发生。于是 prefs 里那份**用户停过之后
+    // 的现场**（陈旧 order + 键缺失）原样留着，不会被回填收尾纠正成现场顺序。
+    // （从前这里写着「留给裁定」：`restore()` 自己按 R8 只读不写，但回填收尾
+    // 那一次 `persist()` 里的 `_syncPrefsTrace()` 没被 gate，照样把两份痕迹重写
+    // 了一遍。第 4 轮 I11 把那条缝一起堵上，见下一条用例。）
     expect(
       await prefs.readJson(StorageKeys.order),
-      ids,
-      reason: '回填收尾把陈旧的那份 order 纠正成现场顺序（persist 的既有规则）',
+      ids.reversed.toList(),
+      reason: '坏档这一轮里 prefs 只读不写：陈旧 order 保持原样、不被纠正',
+    );
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      isNull,
+      reason: '停止那条腿清掉的键不许被任何写侧路径重建',
     );
   });
 }

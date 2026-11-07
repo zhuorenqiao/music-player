@@ -61,6 +61,25 @@ Future<void> waitUntil(bool Function() done, {required String reason}) async {
   }
 }
 
+/// 落盘必失败的封面写入器：磁盘满 / 缓存目录只读这类真实故障的形状。
+///
+/// 真实的 `CoverImageWriter.write` 契约是「永不抛、只返回 null」，但端口对象是
+/// 可替换的：任何一次实现替换 / 平台异常都可能让它抛出来（第 4 轮 I10 要钉住的
+/// 是「封面这一抛不许把已经拿到的标签与时长一起带走」）。
+class _FailingCoverWriter extends CoverImageWriter {
+  const _FailingCoverWriter();
+
+  @override
+  Future<String?> write(
+    Uint8List bytes,
+    String mime, {
+    required String directory,
+    String id = '',
+  }) async {
+    throw const FileSystemException('covers 目录写不进去');
+  }
+}
+
 void main() {
   // 封面用例要引擎的图像编解码（dart:ui），与 cover_image_test 一样先初始化绑定；
   // 其余用例都是普通 test()，走真实异步，不被 FakeAsync 卡住。
@@ -676,6 +695,82 @@ void main() {
       playlist.tracks.any((track) => track.hasDuration),
       isTrue,
       reason: '数已经拿到就照填（能填就填），只是不许记账',
+    );
+  });
+
+  // -- 第 4 轮 I9：探针的成功本身就是一次见证 ---------------------------------
+
+  test('标签读不出但时长探到的曲目也算治过', () async {
+    // Windows 共享冲突那种形状：mpv 打得开（能探到时长），dart:io 打不开
+    // （标签一个字节也读不到）。这条曲目的时长就是真结论 —— 只看 `opened`
+    // 的写法会让它永远不记账：每次启动重开文件、重探一遍，再把整库档案重写一遍。
+    final path = '${root.path}${Platform.pathSeparator}正在被占用的文件.flac';
+    final playlist = Playlist(tracks: const []);
+    playlist.replaceAll([restoredFromArchive(path)]);
+    var probes = 0;
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      durationProbe: (source) async {
+        probes += 1;
+        return const DurationProbeOutcome(187.5);
+      },
+    );
+
+    await service.rehydrateIncomplete();
+
+    final live = playlist.tracks.single;
+    expect(probes, 1);
+    expect(live.duration, 187.5, reason: '探到的时长照填');
+    expect(
+      live.metadataProbed,
+      isTrue,
+      reason: '探到了时长就是一次见证：标签读不出不代表这一次什么都没看见',
+    );
+    expect(metadataIncomplete(live), isFalse);
+    expect(
+      service.rehydrateIncomplete(),
+      isNull,
+      reason: '治过的曲目下次启动不许再重开文件、重探、整库重写',
+    );
+    expect(probes, 1);
+  });
+
+  // -- 第 4 轮 I10：封面落盘失败只影响封面 -------------------------------------
+
+  test('封面落盘失败仍记探测标记', () async {
+    // 磁盘满 / 缓存目录只读：封面写不进去。但索引区已经读完、title/artist/album
+    // 也已经写进活对象、时长探针也好好的 —— 这些是结论。从前封面那一抛会冒到
+    // `_enrichQuiet` 的 catch，把整条结论一起丢掉。
+    final file = writeFile(
+      'a.mp3',
+      withId3([
+        textFrame('TIT2', '白玫瑰'),
+        textFrame('TPE1', '陈奕迅'),
+        apicFrame('image/png', onePixelPng),
+      ]),
+    );
+    final playlist = Playlist(tracks: const []);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      covers: const _FailingCoverWriter(),
+      coverDirectory: '${root.path}${Platform.pathSeparator}covers',
+      durationProbe: (source) async => const DurationProbeOutcome(187.5),
+    );
+
+    final result = await service.importPaths([file.path]);
+    await result.enrichment;
+
+    final live = playlist.tracks.single;
+    expect(live.title, '白玫瑰', reason: '标签已经读到了，不许因为封面没落上就回退');
+    expect(live.artist, '陈奕迅');
+    expect(live.duration, 187.5, reason: '时长也探到了');
+    expect(live.hasRealCover, isFalse, reason: '失败只影响 cover 字段');
+    expect(
+      live.metadataProbed,
+      isTrue,
+      reason: '封面写盘失败不许把已经拿到的结论一起带走',
     );
   });
 

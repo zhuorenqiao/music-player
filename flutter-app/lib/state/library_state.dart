@@ -432,7 +432,7 @@ class LibraryState extends ChangeNotifier {
   /// 落库踩在别人的写入之后）都该 await 它。
   Future<void> get enrichmentSettled => _enrichmentQueue;
 
-  /// 回填批次完成后的第二次收尾：**再落一次库、再刷一次界面**（终审 C1）。
+  /// 一批回填完成后的第二次收尾：**再落一次库、再刷一次界面**（终审 C1）。
   ///
   /// 为什么是两次落库：第一次保证「歌加了」这件事立刻落盘（应用马上被杀掉也不丢），
   /// 第二次保证「标签 / 封面 / 时长也补上了」落盘。回填本身改的是内存里的活对象，
@@ -441,10 +441,15 @@ class LibraryState extends ChangeNotifier {
   /// 一个批次只落一次（几百首歌不能写几百遍），也**不挡导入返回**：这条链是
   /// 后台跑的，调用方 await `importPaths` 时只等到第一次落库。多条批次排队串行，
   /// 避免两次 persist 交错写文件仓。
-  void _flushAfterEnrichment(Future<void>? enrichment) {
+  ///
+  /// 第 4 轮 I9：批次**什么都没学到**（值为 false：文件全打不开、探针全没结论）
+  /// 时直接收工 —— 没有新结论就没有要落盘的东西，再整库重写一遍档案只是每次
+  /// 启动白写一次盘，而 R1 想止住的正是这个开销。
+  void _flushAfterEnrichment(Future<bool>? enrichment) {
     if (enrichment == null) return;
     _enrichmentQueue = _enrichmentQueue.then((_) async {
-      await enrichment;
+      final learned = await enrichment;
+      if (!learned) return;
       await persist();
       _changed();
     }).catchError((Object _) {

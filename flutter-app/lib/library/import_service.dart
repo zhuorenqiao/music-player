@@ -72,7 +72,10 @@ class ImportResult {
   /// 没人再 persist 的话，文件仓里永远存着「只有文件名、时长 NaN、无封面」的记录，
   /// 用户加完歌直接重启就永久丢标签（终审 C1）。一个批次只等这一条 Future，
   /// 落库也只做一次，几百首歌不许写几百遍。
-  final Future<void>? enrichment;
+  ///
+  /// 值 = **这一批有没有学到东西**（任何一条记上了探测标记就为真，第 4 轮 I9）：
+  /// 一条都没学到时调用方不该再整库重写一遍档案 —— 那是每次启动白写一次盘。
+  final Future<bool>? enrichment;
 }
 
 /// 头部预读窗口：判容器格式要用的字节（与 [ByteSource.headProbeBytes] 同值，
@@ -150,7 +153,7 @@ class ImportService {
     final idsInCall = <String>[];
     final seen = <String>{};
     final newIds = <String>[];
-    final enrichTasks = <Future<void>>[];
+    final enrichTasks = <Future<bool>>[];
     for (final path in partition.accepted) {
       final id = localIdFor(path);
       final isNew = playlist.byId(id) == null;
@@ -262,14 +265,35 @@ class ImportService {
         live.hasRealCover) {
       return true;
     }
-    final saved = await writer.write(
+    // 第 4 轮 I10：封面落盘是「增值里的增值」——写不进去只影响 `cover` 字段。
+    // 从前这一句抛出去会冒到 `_enrichQuiet` 的 catch，把**已经拿到的**标签
+    // （上面那三行已经写进活对象）与时长结论一起判成「这次没回填」，标记不记、
+    // 下次启动重来一遍，白读一遍字节。
+    final saved = await _writeCoverQuietly(
+      writer,
       picture,
       tags.pictureMime,
-      directory: directory,
-      id: live.id,
+      directory,
+      live.id,
     );
     if (saved != null) live.cover = saved;
     return true;
+  }
+
+  /// 写封面，任何失败都只意味着「这张图没落上」（返回 null），绝不外抛。
+  Future<String?> _writeCoverQuietly(
+    CoverImageWriter writer,
+    Uint8List picture,
+    String mime,
+    String directory,
+    String id,
+  ) async {
+    try {
+      return await writer.write(picture, mime, directory: directory, id: id);
+    } catch (_) {
+      // 磁盘满 / 目录只读 / 编码器内部异常：都不该带走同一次回填的其余结论。
+      return null;
+    }
   }
 
   /// 入列后的后台补全：标签 → 时长。
@@ -277,9 +301,14 @@ class ImportService {
   /// 标签先跑，是为了让「文件名猜反了」的曲目在探时长之前就拿到正确的词
   /// （与原版 tagging.ts 的顺序一致）。时长只填空缺：已经有时长的不重探。
   ///
-  /// 返回值 = 「这一条可以记探测标记」（第 3 轮 C1）：只有**真的读到过文件字节**
-  /// 而且**时长探针不是被超时掐断的**才许置位。「打开了、也确实没标签没时长」
-  /// 同样算可以记 —— 那是文件给的结论，R1 要的正是结论落一次盘就不再重跑。
+  /// 返回值 = 「这一条可以记探测标记」（第 3 轮 C1，第 4 轮 C8/I9 补齐两处）：
+  ///   1. 时长探针**真的问过**、没被预算掐掉、途中也没被 `close()` 关掉
+  ///      （`DurationProbeOutcome.isConclusive`，C8）；
+  ///   2. 而且这一次**确实有见证**：要么读到了文件字节（`opened`，标签那一路），
+  ///      要么探到了时长（`outcome.isKnown`，I9 —— mpv 打得开而 dart:io 打不开的
+  ///      文件，Windows 共享冲突下就是这个形状）。
+  /// 「打开了、也确实没标签没时长」同样算可以记 —— 那是文件给的结论，R1 要的
+  /// 正是结论落一次盘就不再重跑。
   Future<bool> _enrich(Track live) async {
     // 这一路唯一的失败形状是「文件没打开」（打不开时 hydrate 什么都没读到）。
     final opened = await hydrateMetadata(live);
@@ -302,7 +331,11 @@ class ImportService {
     // 途中被关掉（退出时正在跑自愈回填）是整批被丢弃的尝试 —— 两者记上标记就
     // 等于把这批曲目永久冻在 `--:--`，一点自愈都不剩。
     if (!outcome.isConclusive) return false;
-    return opened;
+    // 第 4 轮 I9：**探到了时长本身就是一次见证**。mpv 打得开而 dart:io 打不开的
+    // 文件（Windows 共享冲突 / 正被另一个进程独占）标签一个字节也读不到，但时长
+    // 是真的；从前只认 `opened`，这类曲目永远不记账 —— 每次启动重开文件、重探
+    // 一遍，再由批次收尾把整库档案重写一遍（`library_state.dart` 的收尾落库）。
+    return opened || outcome.isKnown;
   }
 
   /// [_enrich] 的「绝不抛」外壳：失败只意味着这次没回填。
@@ -326,7 +359,10 @@ class ImportService {
   /// 换来的是「插回硬盘的下次启动就能自愈」，这笔账是划算的。
   ///
   /// 标记随那一次批次收尾 `persist()` 一起落盘。
-  Future<void> _enrichQuiet(Track live) async {
+  ///
+  /// 返回值 = 这一次有没有真的记上标记（第 4 轮 I9）：整批都没记上就说明这一批
+  /// 什么也没学到，调用方据此跳过那次「整库重写档案」的收尾。
+  Future<bool> _enrichQuiet(Track live) async {
     var settled = false;
     try {
       settled = await _enrich(live);
@@ -335,16 +371,22 @@ class ImportService {
       // 抛错也**不记账**（第 3 轮 C1）：什么都没看到，就还是欠着一次重试。
       settled = false;
     }
-    if (!settled) return;
+    if (!settled) return false;
     // 记在**列表里的活对象**上（文件头第 2 条同一个理由：改到克隆副本上
     // 就等于没改，标记落不了盘）。
     (playlist.byId(live.id) ?? live).metadataProbed = true;
+    return true;
   }
 
   /// 一批回填的完成信号；空批次给 null（调用方据此决定要不要再落一次库）。
-  Future<void>? _batchOf(List<Future<void>> tasks) {
+  ///
+  /// 值 = 「这一批有没有学到东西」（任何一条记上了就为真，第 4 轮 I9）：
+  /// 一条都没学到时不该再整库重写一遍档案，那是每次启动白写一次盘。
+  Future<bool>? _batchOf(List<Future<bool>> tasks) {
     if (tasks.isEmpty) return null;
-    return Future.wait(tasks).then((_) {});
+    return Future.wait(tasks).then(
+      (results) => results.any((learned) => learned),
+    );
   }
 
   /// 冷启动还原的自愈回填：把**还没探测过**、且字段确实还缺的既有曲目重新
@@ -359,11 +401,12 @@ class ImportService {
   /// 只用来省掉「没什么可补」的那次开文件。以前只看字段（还把「无封面」当成
   /// 没回填过）的后果是每次启动全库重跑。
   ///
-  /// 返回本批的完成信号（没有要补的就返回 null），调用方在它完成后落一次库、
-  /// 刷一次界面 —— 那一次落库同时把这一批新记上的探测标记带上盘。
+  /// 返回本批的完成信号（没有要补的就返回 null；值是「这一批有没有学到东西」，
+  /// 第 4 轮 I9），调用方在它完成后落一次库、刷一次界面 —— 那一次落库同时把
+  /// 这一批新记上的探测标记带上盘。一条都没学到时调用方不该再整库重写档案。
   ///
   /// 与 [importPaths] 一样不挡首帧：曲目早就在列表里、也早就可播。
-  Future<void>? rehydrateIncomplete() {
+  Future<bool>? rehydrateIncomplete() {
     final targets = [
       for (final track in playlist.tracks)
         if (metadataIncomplete(track)) track,
