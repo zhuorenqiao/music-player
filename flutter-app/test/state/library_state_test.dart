@@ -881,4 +881,72 @@ void main() {
       reason: '停止那条腿清掉的键不许被任何写侧路径重建',
     );
   });
+
+  // -- 第 4 轮 I11：R8 的「坏档只读不写」必须管住回填收尾那一次 persist ---------
+  //
+  // 上一条走的是「这一批什么都没学到 → 连收尾落库都不发生」，所以它证明不了
+  // prefs 的 gate 真的在。这一条让批次**确实学到东西**（真文件 + 真标签 + 探到
+  // 时长）：收尾那次 `persist()` 一定会发生，而它里面的 `_syncPrefsTrace()`
+  // 从前没有 gate —— `.bak` 回退出来的那份陈旧快照会在同一个 launch 里把 prefs
+  // 的 `order` 改写成它自己、把 `currentId` 重建，M3 那句「停过」当场作废。
+  test('损坏档案 + 回填收尾：也不覆盖 prefs 痕迹', () async {
+    final file = taggedFile('陈奕迅 - 十年.mp3', [
+      textFrame('TIT2', '白玫瑰'),
+      textFrame('TPE1', '陈奕迅'),
+    ]);
+    final stale = Track(
+      id: localIdFor(file.path),
+      src: file.path,
+      title: '十年',
+      artist: '陈奕迅',
+      duration: double.nan,
+      isLocal: true,
+    );
+    final repo = LibraryRepository(directory: dir.path);
+    // 写两次让正式文件与 `.bak` 都长成这一份，再把正式文件写坏：
+    // 仓储只能回退 `.bak`，并把这一份快照标成 corrupted。
+    for (var i = 0; i < 2; i++) {
+      await repo.save(
+        LibrarySnapshot(
+          tracks: [stale],
+          order: [stale.id],
+          mode: PlayMode.list,
+        ),
+      );
+    }
+    File('${dir.path}/library.json').writeAsStringSync('{"tracks": [坏数据]}');
+
+    // prefs 里那份现场来自再上一代：一份与这份档案毫无关系的痕迹。
+    const staleId = 'local:stale';
+    await prefs.writeJson(StorageKeys.order, [staleId]);
+    await prefs.writeString(StorageKeys.currentId, staleId);
+
+    final fresh = buildEnrichingState(
+      probe: (path) async => const DurationProbeOutcome(187.5),
+    );
+    addTearDown(fresh.dispose);
+
+    await fresh.restore();
+    expect(fresh.tracks.single.title, '十年', reason: '回退出来的就是 `.bak` 那份');
+    await fresh.enrichmentSettled;
+
+    // 回填确实学到了东西：内存与文件仓都补上了标签
+    expect(fresh.tracks.single.title, '白玫瑰');
+    expect(fresh.tracks.single.duration, 187.5);
+    final healed = await LibraryRepository(directory: dir.path).load();
+    expect(healed.tracks.single.title, '白玫瑰', reason: '文件仓照写 —— 重构档案是好事');
+    expect(healed.tracks.single.duration, 187.5);
+
+    // 但 prefs 那两份痕迹一个字都不许动（R8 的承诺）
+    expect(
+      await prefs.readJson(StorageKeys.order),
+      [staleId],
+      reason: '坏档这一轮只读不写：回填收尾也不许把 order 改写成现场',
+    );
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      staleId,
+      reason: '同一次判定里也不许重建 currentId',
+    );
+  });
 }

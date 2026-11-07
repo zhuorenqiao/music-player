@@ -54,6 +54,14 @@ class LibraryState extends ChangeNotifier {
   bool _restoring = false;
   Timer? _searchDebounce;
 
+  /// 「这一份现场是从坏档案里退回来的吗」（终审 R8，第 4 轮 I11）。
+  ///
+  /// [restore] 按快照的 `corrupted` 置位，[persist] 里那次 [_syncPrefsTrace]
+  /// 受它 gate：坏档这一整轮里 prefs 的 `order` / `currentId` 都只读不写，
+  /// 包括回填收尾那一次 persist（它照常写文件仓）。默认 true —— 没走过还原
+  /// 就落库（首次导入）时档案是健康的。
+  bool _traceWritable = true;
+
   /// 搜索框的文本控制器（T28 面板用）。
   ///
   /// 输入框的即时值就是它自己的内容；[keyword] 被外部改写时（点清空按钮、
@@ -173,10 +181,17 @@ class LibraryState extends ChangeNotifier {
       // 还原流程**只读痕迹、不写痕迹**。那份快照本身什么也没说——按它写下去
       // 就是把 prefs 里最后一条可读记录覆盖成 `[]`，用户连「停过哪一首」这条
       // 线索都没了。只有真正拿到过一次健康档案才允许改写现场。
-      final traceWritable = !snap.corrupted;
+      //
+      // 第 4 轮 I11：这个判定必须记在**实例**上，不能只在 [restore] 里当局部量
+      // 用 —— [persist] 里的 `_syncPrefsTrace()` 是同一条承诺的另一半，回填
+      // 收尾（[_flushAfterEnrichment]）走的就是那道门。从前它没被 gate，于是
+      // `.bak` 回退出来的陈旧快照会在同一个 launch 里把 prefs 的 `order` 改写
+      // 成它自己、把 `currentId` 重建，M3 那句「停过」当场作废。文件仓照写
+      //（把回填结果写回去反而是在修档案），只是不碰 prefs。
+      _traceWritable = !snap.corrupted;
       if (snap.tracks.isEmpty) {
         playlist.clear();
-        if (traceWritable) await _syncPrefsTrace();
+        if (_traceWritable) await _syncPrefsTrace();
         return;
       }
       final byId = {for (final track in snap.tracks) track.id: track};
@@ -192,7 +207,7 @@ class LibraryState extends ChangeNotifier {
       await _restoreCursor(snap);
       // 痕迹要跟真相一致：纠正 prefs 的那份 order，并把 R4 落定的光标补写回去
       //（终审 I4 + R4）。损坏的那一份不动它（R8）。
-      if (traceWritable) await _syncPrefsTrace();
+      if (_traceWritable) await _syncPrefsTrace();
       _flushAfterEnrichment(importer.rehydrateIncomplete());
     } catch (_) {
       // 理论上到不了这里（仓储是总函数），留作最后一道闸：启动不许炸
@@ -381,6 +396,10 @@ class LibraryState extends ChangeNotifier {
   /// 或指向一首已知坏掉的曲目时要把键删掉，只写不删就会在重启后复活一个
   /// 不该再播的 currentId（终审 I4）。光标本身的读回优先级见 [restore]。
   /// 同一条规则在 `PlayerState.flushPersist` 里也有一份，两边必须一致。
+  ///
+  /// 第 4 轮 I11：痕迹那一步受 [_traceWritable] gate —— 坏档这一轮里
+  /// `repo.save()` 照写（把回填结果落回去其实是在修档案），但 prefs 一个字
+  /// 都不许动。回填收尾（[_flushAfterEnrichment]）正是从这道门进来的。
   Future<void> persist() async {
     final ids = playlist.tracks.map((t) => t.id).toList();
     await repo.save(
@@ -391,7 +410,7 @@ class LibraryState extends ChangeNotifier {
         mode: playlist.mode,
       ),
     );
-    await _syncPrefsTrace();
+    if (_traceWritable) await _syncPrefsTrace();
   }
 
   /// prefs 的两份痕迹（`order` + `currentId`）按当前列表对齐。
