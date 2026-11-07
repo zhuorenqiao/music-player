@@ -4673,8 +4673,7 @@ git commit -m "feat(lyrics): 双语状态机与三条生命周期规则"
   // AppBootstrap 新增
   final LyricsState lyrics;
   final BilingualState bilingual;
-  final LyricsPageController lyricsPage;
-  LyricsMatch? get lastLyricsMatch; // 不需要，不要加
+  final LyricsPageController lyricsPage;   // T18 建、T19 用
   ```
   `buildBootstrap` 新增可选注入（测试用，生产不传）：
   ```dart
