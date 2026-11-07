@@ -193,7 +193,7 @@ Android 闸口本轮仍绿，是因为它自 `ae02ce1` 起就没被再碰过。
 
 | 编号 | 缺陷一句话 | 改在哪 | 守它的测试 | commit |
 | --- | --- | --- | --- | --- |
-| C1（Critical） | 回填外壳在 `finally` 里**无条件**记探测标记：文件根本没打开、或时长探针被超时掐断的那两条「什么都没干成」的路也照样记「已探测」；重复导入同一路径是 no-op，谓词此后恒为 false —— 除了改档案格式没有自愈路径，一次暂时的「盘没挂上」被冻结成永久降级 | `lib/library/import_service.dart`（`hydrateMetadata` 回报 `bool`「这次到底有没有打开文件」；`_enrich` 回报「这条可以记账」；`_enrichQuiet` 丢掉无条件 `finally`，抛错同样不记，并写明「永久拔掉的盘每次启动重试一次」是**接受的代价**而不是回到旧写法）、`lib/library/duration_probe.dart`（新增 `DurationProbeOutcome{seconds,timedOut}` 与 `probeOutcome()`：超时从「又一个 NaN」里分出来，`call()` 那条裸秒数照旧）、`lib/main.dart`（装配层改接 `probe.probeOutcome`） | `test/library/import_service_test.dart`「文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来」「时长探针超时的曲目不记探测标记」（用**真** `DurationProbe` + 永不返回的 opener + 5ms 预算，顺带钉住装配接缝接错就编译不过）、「打开了但确实没标签的曲目只治一次」（守 R1 的正向结论别被这次改回去） | `2757696` |
+| C1（Critical） | 回填外壳在 `finally` 里**无条件**记探测标记：文件根本没打开、或时长探针被超时掐断的那两条「什么都没干成」的路也照样记「已探测」；重复导入同一路径是 no-op，谓词此后恒为 false —— 除了改档案格式没有自愈路径，一次暂时的「盘没挂上」被冻结成永久降级 | `lib/library/import_service.dart`（`hydrateMetadata` 回报 `bool`「这次到底有没有打开文件」；`_enrich` 回报「这条可以记账」；`_enrichQuiet` 丢掉无条件 `finally`，抛错同样不记，并写明「永久拔掉的盘每次启动重试一次」是**接受的代价**而不是回到旧写法）、`lib/library/duration_probe.dart`（新增 `DurationProbeOutcome{seconds,timedOut}` 与 `probeOutcome()`：超时从「又一个 NaN」里分出来，`call()` 那条裸秒数照旧；**第 4 轮 C8 把它扩成四态** `probed / timedOut / notAttempted / interrupted`，因为「探针被关掉」当时还没和「探出没时长」分开，见 A8 的 C8 行）、`lib/main.dart`（装配层改接 `probe.probeOutcome`） | `test/library/import_service_test.dart`「文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来」「时长探针超时的曲目不记探测标记」（用**真** `DurationProbe` + 永不返回的 opener + 5ms 预算，顺带钉住装配接缝接错就编译不过）、「打开了但确实没标签的曲目只治一次」（守 R1 的正向结论别被这次改回去） | `2757696` |
 | I1 | SAF 的 `content://` 曲目被记成「已探测」，M2 真接上 SAF 读取之后这批曲目对新能力永久隐形 | `lib/library/import_service.dart`（`metadataIncomplete` 的准入从 `track.isLocal` **换成**能力位 `track.handle.canProbeDuration`：既不进回填队列也不记标记；M2 把能力位翻成真值的那一刻自动回到未探测。`_enrich` 里 R7 那条探针守卫保留，双保险） | `test/library/import_service_test.dart`「content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）」（导入侧断言不记账，谓词侧断言 `rehydrateIncomplete()` 返回 null = 连队列都不进，假探针计数为 0） | `2757696` |
 | I2 | 重试额度用尽只是一句静默 `return`，而横幅上那颗「继续播放」还在 —— 此后每次点击都原样返回，等于一个永远不动的死键，且没有任何解释 | `lib/playback/transport_controller.dart`（`userGesture()` 用尽那一支补全三支：`_clearBlocked()` 撤状态与横幅、`toasts.error(kAutoplayGaveUpMessage)`、`return`；`userGesture` 的注释按新语义改写）、`lib/playback/play_error.dart`（新增第五类文案常量，逐字「仍无法自动恢复播放，请点击播放按钮」）；文案同步进设计文档 §7 的「错误归一」段（`:190`） | `test/playback/transport_controller_test.dart`「重试额度用尽后横幅撤下并明确提示点播放按钮」（永远失败的驱动 → 连点 4 次 → 横幅消失 + 那条 error 级提示 + 第 5 次一次内核都不碰 + 那句只说一次）；**改写**两条既有期望（`blockedMessage` 由 `isNotNull` 改成 `isNull`，重试上限 1+3 那两句不动）：同文件「blocked 状态暴露给界面并可重试，重试最多 3 次」、`test/ui/autoplay_gate_test.dart`「重试仍受上限约束：用完 3 次就不再碰内核」 | `f90c78b` |
 | M1 | `lib/main.dart` 那句注释写「存档里的模式是权威值，顺序反过来会被 prefs 里的旧值覆盖」，与 R6 的实现（prefs 优先）正好相反 | `lib/main.dart`（只改注释：三样都以 prefs 为准，顺序承重的是「restore 末尾那次 `syncView` 发布要读到已还原的值」，不是权威换人） | 注释，无测试；权威本身仍由 `test/state/app_bootstrap_test.dart`「改完模式直接重启：模式不丢」「prefs 没写过模式时才回落档案里的模式」守着 | `2f18353` |
@@ -255,6 +255,51 @@ Running Gradle task 'assembleDebug'...                             13.1s
 
 签核：四条闸口在第 3 轮起点与终点都是绿的 —— `analyze` 无问题 · `test` 403 全绿 ·
 `build windows` 通过 · `build apk --debug` 通过。
+
+### A8 第 4 轮修复波：C8 / I9 / I10 / I11 ↔ 改在哪 ↔ 哪条测试守着 ↔ commit
+
+第 3 轮复核判 fix-before-merge，点名 1 个 Critical + 3 个 Important，全部与「时长探测
+这条缝」有关；第 4 轮复核随后判 **clean**（只剩注释与一处缺测，已在 `676bf98` 补齐）。
+起点 HEAD `676ed2d`，代码三笔 `5698898` / `f101ead` / `2fd5316`，文档 `aed83df`，
+注释与补测 `676bf98`。测试名一律 `grep -F` 从 `test/` 实测存在后才写在这里。
+
+| 编号 | 缺陷一句话 | 改在哪 | 守它的测试 | commit |
+| --- | --- | --- | --- | --- |
+| C8（Critical） | 探针「已关闭 / 根本没探」返回的是裸 `NaN` 且不带 `timedOut`，与「探了一趟、结论是这文件没有时长」完全同形。退出应用时正在排队的那批自愈回填因此被整批记成「已探测」，`--:--` 永久冻结 —— 第 2 轮 C1 的冻结换个门回来（Android 按返回键退出恰好撞上首次冷启动自愈就能踩到） | `lib/library/duration_probe.dart`（`DurationProbeOutcome` 改**四态**：`probed / timedOut / notAttempted / interrupted` + `isConclusive`；入列前 `_closed` 直接 `notAttempted`，`_probeOne` 在 await **之后**再查一次 `_closed` → `interrupted`（秒数照交、不作数））、`lib/library/import_service.dart`（先填 `duration`，只在 `isConclusive` 时许可记账）、`lib/playback/media_kit_driver.dart`（`_disposed` / 不可探来源 / 原生库起不来三支改抛 `DurationProbeSkipped`，NaN 只剩一个含义） | `test/library/import_service_test.dart`「探针关掉后没跑到的曲目不记探测标记」；`test/library/duration_probe_test.dart`「关闭之后入队的探测是『没探成』，不是『这文件没有时长』」「探测途中被 close：秒数照交，但这份答案不作数」「opener 说『这一趟我根本没探』：归成没探成，不是没有时长」 | `5698898` |
+| I9 | 探针探到了时长也不算见证（只认 `opened`），于是 mpv 打得开、dart:io 打不开（Windows 共享冲突）的文件每次启动重开重探，并且**整库重写一次档案** | `lib/library/import_service.dart`（`settled = opened \|\| outcome.isKnown`；批次信号改 `Future<bool>?`，什么都没学到就不触发收尾那次 `persist()`）、`lib/state/library_state.dart`（按信号决定落不落库） | 「标签读不出但时长探到的曲目也算治过」「回填什么都没学到时不重写档案」 | `f101ead` |
+| I10 | 封面落盘失败（目录满 / 无权限）会把已经拿到的标签结论一起丢掉：抛错冒到外壳，`settled = false` | `lib/library/import_service.dart`（封面写入隔离成 `_writeCoverQuietly`，失败只影响 `cover`；`hydrateMetadata` 仍如实回报「读到过字节」） | 「封面落盘失败仍记探测标记」 | `f101ead` |
+| I11 | R8 的「坏档只读不写」只 gate 了还原路径，回填收尾那次 `persist()` 里的痕迹同步没被 gate —— `.bak` 回退出来的那份快照会在下一次启动把 prefs 的 `order` 重写、`currentId` 重建，把 M3 的停止声明一笔抹掉 | `lib/state/library_state.dart`（`_traceWritable` 存成字段，`persist()` 里的 `_syncPrefsTrace()` 同样受 gate；**档案本身照常重写**）、`lib/main.dart` 与注释随规则改写 | 「损坏档案 + 回填收尾：也不覆盖 prefs 痕迹」（M3 那条用例里原先「待裁定」的注释改成了真断言） | `2fd5316` |
+| 复核 Minor | 四处注释写得比实现多：`track.dart` 的「探不出也算探测过」（C1 前契约）、R8 gate 的边界（播放侧 `flushPersist` 不受它管，也不该受管）、`media_kit_driver` 的内层超时先后（实际外层先到点，这里是兜底）、`app_bootstrap_test` 的「收尾 persist 正在后台写目录」（I9 起不写了） | 上述四处就地改对 | 新增「损坏档案 + 停止：播放侧 flushPersist 仍如实记录停止」把第三条边界钉成断言 | `676bf98` |
+
+### A9 第 4 轮的最终闸口（M1 收尾快照）
+
+采集于代码 HEAD `676bf98`（第 4 轮代码与注释全部落定之后），工作目录 `flutter-app/`，
+命令一律 `/d/flutter/bin/flutter`，产物字节数 `stat` / `du -sb` 现取。
+
+```text
+Analyzing flutter-app...
+No issues found! (ran in 11.1s)
+```
+
+```text
+00:47 +412: All tests passed!
+```
+
+```text
+Building Windows application...                                    32.6s
+√ Built build\windows\x64\runner\Release\light_music.exe
+```
+
+```text
+Running Gradle task 'assembleDebug'...                             12.5s
+√ Built build\app\outputs\flutter-apk\app-debug.apk
+```
+
+产物：`light_music.exe` 92,160 B · `data/app.so` 7,127,944 B · `Release/` 45,714,331 B ·
+`app-debug.apk` 216,197,544 B。测试数轨迹：324 → 380 → 396 → 403 → **412**。
+四轮修复波累计新增 88 条用例；被改写的既有断言只有三处，每处都记录着当轮被推翻的旧规则
+（I2 的 seek 断言、R4 的两条「无光标」用例、I2 的两条 `blockedMessage` 期望），
+没有删除任何用例。
 
 ---
 
@@ -401,7 +446,7 @@ Windows 侧先跑 `flutter run -d windows`（或直接用 A1 构建出来的 Rel
 
 | 项 | 状态 |
 | --- | --- |
-| A（自动化闸口） | **四条全绿**（HEAD `ec0e144`，本轮实测，输出原文在 A1）：`analyze` 无问题（9.7s）/ `flutter test` **396 全绿** / `build windows` 成功（`light_music.exe` 92,160 B、`data/app.so` 7,111,560 B）/ `build apk --debug` 成功（`app-debug.apk` 216,184,526 B）。第 1 波那条红灯（`permission_handler_android` 14.1.1 要 compileSdk 37，而 Flutter 3.47.9 与 AGP 9.1.0 上限都是 36）已由 `ae02ce1` 把 `permission_handler` 降到 `^12.0.0`（解析 12.0.3 + android 13.0.1）关掉；镜像与 10 项传递依赖的事实见 A1 末与 A5 |
+| A（自动化闸口） | **四条全绿**（HEAD `676bf98`，第 4 轮收尾实测，输出原文在 A9）：`analyze` 无问题（11.1s）/ `flutter test` **412 全绿** / `build windows` 成功（`light_music.exe` 92,160 B、`data/app.so` 7,127,944 B）/ `build apk --debug` 成功（`app-debug.apk` 216,197,544 B）。第 1 波那条红灯（`permission_handler_android` 14.1.1 要 compileSdk 37，而 Flutter 3.47.9 与 AGP 9.1.0 上限都是 36）已由 `ae02ce1` 把 `permission_handler` 降到 `^12.0.0`（解析 12.0.3 + android 13.0.1）关掉；镜像与 10 项传递依赖的事实见 A1 末与 A5 |
 | B1–B7（Windows 真人段） | 待真人跑 |
 | B8（Android 段） | pending-device：无设备，一条未跑。**可用 debug apk 已经有了**（A1 那条构建的产物），插上线即可 `flutter install` / `adb install -r` |
 | B9（读屏与系统减动效） | 待真人跑 |
