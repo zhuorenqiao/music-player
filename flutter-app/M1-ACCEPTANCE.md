@@ -14,12 +14,19 @@
 
 ## A. 已自动执行
 
-### A1 四条闸口的真实尾巴（第 2 轮修复波收尾重新采集）
+### A1 四条闸口的真实尾巴（第 2 轮修复波收尾采集）
+
+> **本文件的 HEAD 归属，先说清楚**（第 3 轮 M6）：本节那四段输出是**第 2 轮**在
+> HEAD `ec0e144` 上亲自跑的，**不是**本文件被提交时所在的那一笔。本文件随第 3 轮
+> 的 commit 一起进库，所以此刻 `git log` 上的 HEAD 比 `ec0e144` 新，而本节数字
+> 仍属 `ec0e144`；**第 3 轮的四条真实尾巴在 A7**（起点 `eab4674` + 本轮三笔代码
+> commit 之后复跑），A6 是本轮的「一条缺陷 ↔ 改在哪 ↔ 哪条测试守着 ↔ commit」。
+> 别把「文档内容」与「所报 HEAD」当成同一件事。
 
 工作目录 `flutter-app/`，Flutter 3.47.9 / Dart 3.13.7（`flutter --version` 实测），
 分支 `feat/flutter-m1-core-playback`，采集时间 2026-11-07，代码状态是 HEAD
 `ec0e144`（第 2 轮 R1–R8 + R2 残留那六笔的最后一笔）；本机 Flutter 不在 PATH，
-四条命令一律 `/d/flutter/bin/flutter` 起。下面四段是**这一轮亲自跑出来的**
+四条命令一律 `/d/flutter/bin/flutter` 起。下面四段是**那一轮亲自跑出来的**
 输出尾行，第 1 波采集的那批数字（10.0s / 380 / 86.8s / apk 红）已被整段替换。
 
 `flutter analyze --no-fatal-infos`：
@@ -155,14 +162,14 @@ analyze 干净（9.7s）、**396 全绿**、`build windows` 通过、`build apk 
 
 | 编号 | 缺陷一句话 | 改在哪 | 守它的测试 | commit |
 | --- | --- | --- | --- | --- |
-| R1（Critical） | 冷启动自愈把整个曲库每次启动重跑一遍（`!hasRealCover` + `_stillFileNameGuess` 对真实曲库形状几乎恒真） | `lib/playback/track.dart`（新增**落盘**的 `metadataProbed`：进 `toJson`、`normalizeTrack` 缺字段读回 false、`copy()` 带走）、`lib/library/import_service.dart`（`metadataIncomplete` 拆成「标记已置位即跳过」+ `_metadataFieldsMissing` 两道闸；`_enrichQuiet` 的 `finally` 无条件把标记记在列表里的活对象上）、`lib/state/library_state.dart`（`restore()` 的注释） | `test/state/library_state_test.dart`「还原时正常命名的带标签无封面曲目不重复回填」「自愈回填过的曲目第二次启动不再回填」「重启后 metadataProbed 仍为 true」 | `c01c322` |
+| R1（Critical） | 冷启动自愈把整个曲库每次启动重跑一遍（`!hasRealCover` + `_stillFileNameGuess` 对真实曲库形状几乎恒真） | `lib/playback/track.dart`（新增**落盘**的 `metadataProbed`：进 `toJson`、`normalizeTrack` 缺字段读回 false、`copy()` 带走）、`lib/library/import_service.dart`（`metadataIncomplete` 拆成「标记已置位即跳过」+ `_metadataFieldsMissing` 两道闸；标记记在列表里的活对象上。**置位条件第 3 轮 C1 收紧**：不再是 `finally` 无条件记，而是「真的打开并读到过字节」且「探针没被超时掐断」才记，详见 A6 的 C1 行）、`lib/state/library_state.dart`（`restore()` 的注释） | `test/state/library_state_test.dart`「还原时正常命名的带标签无封面曲目不重复回填」「自愈回填过的曲目第二次启动不再回填」「重启后 metadataProbed 仍为 true」＋第 3 轮守边界那三条：`test/library/import_service_test.dart`「打开了但确实没标签的曲目只治一次」「文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来」「时长探针超时的曲目不记探测标记」 | `c01c322`（收紧在 `2757696`） |
 | R2 | 「停止播放」那条腿只活在单元测试里；且自洽现场缺 `currentId` 键时回落到档案值，停掉的歌照样复活 | 写侧 `lib/playback/transport_controller.dart`（`stopPlayback()` 末尾 `await onStopped?.call()`）、`lib/main.dart`（装配层接线）、`lib/state/player_state.dart`（落盘通道注释按真实语义改写）；读侧 `lib/state/library_state.dart`（`_restoreCursor` 的候选集）＋ `lib/core/app_prefs.dart`（新增 `containsKey`，区分「键被如实删掉」与「这版根本没写过」） | `test/state/app_bootstrap_test.dart`「stopPlayback 后重建 bootstrap 再 restore：不复活已停的曲目」（走真实链路，不手调 flush） | `20ea828` |
 | R2 残留 | 停止走的是 400ms 防抖，「停止 → 立刻杀进程」等于没停过 | `lib/main.dart`（`transport.onStopped = player.flushPersist`）、`lib/playback/transport_controller.dart`、`lib/state/player_state.dart`（只改停止这一条腿；播放推进的防抖语义一字未动） | `test/state/app_bootstrap_test.dart`「停止后不落防抖窗口：立刻重建也不复活」 | `ec0e144` |
 | R3 | 手势重试成功后提示条不消失（`userGesture` 从不清 `_blockedMessage`） | `lib/playback/transport_controller.dart`（`userGesture()` 以 `player.playing == true` 收尾时清横幅、复位 `_blockedRetries`、`_publish()`） | `test/ui/autoplay_gate_test.dart`「空白手势成功出声后提示条消失」（第一次 blocked、第二次成功的假驱动） | `7c4ad28` |
 | R4 | 「没有有效 id 就没有光标」被写死，与原版 `player.tsx:556` 的 `storedId 有效 ? index : 0` 相反 | `lib/state/library_state.dart`（`_restoreCursor` 末尾：非空列表 → `setCurrentIndex(0)`，只有空列表才 `clearCurrent()`；紧随的 `_syncPrefsTrace()` 把 prefs 的 `currentId` 补写一致，对齐原版 `:243-249`） | `test/state/app_bootstrap_test.dart`「无有效存档时光标落到第一首且不自动播」；另**改写**既有两条（改名 + 改期望，计数不变）`test/state/library_state_test.dart`「还原以文件仓为准：陈旧 order 被纠正、光标落到列表第一首」「两边都指不到曲目：光标落到第一首，痕迹跟着补齐而不是留个幽灵键」 | `9c59f45` |
 | R5 | `setVolume(0)` 不碰 `_muted`，注释却声称与 `player.js:322` 一致 | `lib/playback/audio_player.dart`（两个分支都 `_muted = false`，只有 `v > 0` 额外记 `lastVolume`；那句站不住的注释改对） | `test/playback/audio_player_volume_test.dart`「静音中拖到 0：muted 清掉、音量留 0、记忆值不动」＋`test/state/player_state_persist_test.dart`「静音时拖到 0 后 muted 变 false 且音量存 0」 | `7c4ad28` |
 | R6 | 模式优先级用反：档案里那份 `mode` 盖过 prefs 的更新陈述，随机/单曲循环重启会丢 | `lib/state/library_state.dart`（新增 `_restoreMode()`：prefs 读到 `mode` 就用，读不到才回落 `snap.mode`；与 `_restoreCursor` 同源同权；`clearPlaylist()` 不扩到 mode —— 原版清列表不改模式） | `test/state/app_bootstrap_test.dart`「改完模式直接重启：模式不丢」「prefs 没写过模式时才回落档案里的模式」 | `7c4ad28` |
-| R7 | 手势闸口挂在 `AppShortcuts` 外层，被输入框/快捷键表吃掉的按键一次都不算；SAF `content://` 每首白等 3000ms 换 NaN | `lib/app.dart`＋`lib/ui/autoplay_gate.dart`（按键改 `HardwareKeyboard.addHandler`（document 级等价位置）、指针挂在路由与提示条之上的 `Listener`，新增 `GestureOwnedRegion` 让播放按钮与列表行自己认领指针、不重复花额度）、`lib/ui/panel.dart`、`lib/ui/transport.dart`（两块区域认领）、`lib/playback/track_handle.dart`（`canProbeDuration`，`SafUriHandle` 为 false）、`lib/library/import_service.dart`（`_enrich` 按句柄类型跳过探针）、`lib/playback/media_kit_driver.dart`（最后一道闸：非文件 URI 当场给 NaN） | `test/ui/autoplay_gate_test.dart`「快捷键被输入框吃掉时仍算一次手势」「按键被快捷键层消费时仍算一次手势」「点播放按钮只花一次重试额度」＋`test/library/import_service_test.dart`「content:// 曲目不触达时长探针」 | `a257595` |
+| R7 | 手势闸口挂在 `AppShortcuts` 外层，被输入框/快捷键表吃掉的按键一次都不算；SAF `content://` 每首白等 3000ms 换 NaN | `lib/app.dart`＋`lib/ui/autoplay_gate.dart`（按键改 `HardwareKeyboard.addHandler`（document 级等价位置）、指针挂在路由与提示条之上的 `Listener`，新增 `GestureOwnedRegion` 让播放按钮与列表行自己认领指针、不重复花额度）、`lib/ui/panel.dart`、`lib/ui/transport.dart`（两块区域认领）、`lib/playback/track_handle.dart`（`canProbeDuration`，`SafUriHandle` 为 false）、`lib/library/import_service.dart`（`_enrich` 按句柄类型跳过探针；**第 3 轮 I1 起 `metadataIncomplete` 的准入也换成同一个能力位** `track.handle.canProbeDuration`，于是 `content://` 既不进回填队列、也不记探测标记，见 A6 的 I1 行）、`lib/playback/media_kit_driver.dart`（最后一道闸：非文件 URI 当场给 NaN） | `test/ui/autoplay_gate_test.dart`「快捷键被输入框吃掉时仍算一次手势」「按键被快捷键层消费时仍算一次手势」「点播放按钮只花一次重试额度」＋`test/library/import_service_test.dart`「content:// 曲目不触达时长探针」「content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）」 | `a257595`（准入位在 `2757696`） |
 | R8 | 档案损坏时还原流程把 prefs 里唯一的 `order` 痕迹覆盖成 `[]` | `lib/state/library_state.dart`（`restore()` 里 `traceWritable = !snap.corrupted`，两处 `_syncPrefsTrace()` 都 gate 住；**读**痕迹照旧，只有真拿到过一次健康档案才写） | `test/state/library_state_test.dart`「档案损坏时不覆盖 prefs 里的 order 痕迹」 | `9c59f45` |
 | A9 | 本文件的 A1 还写着「`build apk --debug` 本波是红的、留待裁定」，`:137` 列着两条已改名的测试，6.6 还按旧「无光标」规则写 | 本文件（A1 四段真实输出 + 降级事实、A3 的 I4 行、A4 本节、B6 的 6.6/6.7/6.8、签核表） | 文档，无测试 | 本条 docs commit |
 | A10 | 设计文档 §8 那段光标规则与实现、与原版同时相反 | `docs/superpowers/specs/2026-11-06-flutter-port-design.md` §8「冷启动还原」那一段（就地改写：顺序权威 / R8 只读不写 / R2 否定断言 / R4 落到第一首 / 停止同步落盘 / R6 模式同权 / 音量两分支清静音 / R1 探测标记，并引 `src/state/player.tsx:556`、`:243-249`、`src/lib/player.js:322`） | 文档，无测试 | 本条 docs commit |
@@ -173,6 +180,81 @@ analyze 干净（9.7s）、**396 全绿**、`build windows` 通过、`build apk 
 复审发现；本轮 `git diff --name-only ae02ce1..ec0e144` 里没有任何
 `pubspec.yaml` / `pubspec.lock` / `android/` 路径 —— 第 2 轮只动了 Dart 与测试。
 Android 闸口本轮仍绿，是因为它自 `ae02ce1` 起就没被再碰过。
+
+### A6 第 3 轮修复波：C1 / I1 / I2 + M1–M6 ↔ 改在哪 ↔ 哪条测试守着 ↔ commit
+
+编号用 `final-review-fix-brief-9.md` 的原编号（第 2 轮复审的残留）。起点 HEAD
+`eab4674`（第 2 轮那三笔代码 + 两笔文档的终点），本轮代码三笔：`2757696`
+（C1+I1）、`f90c78b`（I2）、`2f18353`（M1–M5），文档随本条 commit。测试名全部
+`grep -F` 从 `test/` 里实测存在后才写在这里；用例数 396 → **403**（本轮新增 7 条，
+没有删除任何既有用例，也没有放宽任何既有断言 —— 唯一两处**按这次裁定改写**的既有
+期望见 I2 行，改的是「额度用尽后横幅还挂着」这句已被推翻的规则本身，重试上限那两句
+一字未动）。闸口数字在 A7，不在本节。
+
+| 编号 | 缺陷一句话 | 改在哪 | 守它的测试 | commit |
+| --- | --- | --- | --- | --- |
+| C1（Critical） | 回填外壳在 `finally` 里**无条件**记探测标记：文件根本没打开、或时长探针被超时掐断的那两条「什么都没干成」的路也照样记「已探测」；重复导入同一路径是 no-op，谓词此后恒为 false —— 除了改档案格式没有自愈路径，一次暂时的「盘没挂上」被冻结成永久降级 | `lib/library/import_service.dart`（`hydrateMetadata` 回报 `bool`「这次到底有没有打开文件」；`_enrich` 回报「这条可以记账」；`_enrichQuiet` 丢掉无条件 `finally`，抛错同样不记，并写明「永久拔掉的盘每次启动重试一次」是**接受的代价**而不是回到旧写法）、`lib/library/duration_probe.dart`（新增 `DurationProbeOutcome{seconds,timedOut}` 与 `probeOutcome()`：超时从「又一个 NaN」里分出来，`call()` 那条裸秒数照旧）、`lib/main.dart`（装配层改接 `probe.probeOutcome`） | `test/library/import_service_test.dart`「文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来」「时长探针超时的曲目不记探测标记」（用**真** `DurationProbe` + 永不返回的 opener + 5ms 预算，顺带钉住装配接缝接错就编译不过）、「打开了但确实没标签的曲目只治一次」（守 R1 的正向结论别被这次改回去） | `2757696` |
+| I1 | SAF 的 `content://` 曲目被记成「已探测」，M2 真接上 SAF 读取之后这批曲目对新能力永久隐形 | `lib/library/import_service.dart`（`metadataIncomplete` 的准入从 `track.isLocal` **换成**能力位 `track.handle.canProbeDuration`：既不进回填队列也不记标记；M2 把能力位翻成真值的那一刻自动回到未探测。`_enrich` 里 R7 那条探针守卫保留，双保险） | `test/library/import_service_test.dart`「content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）」（导入侧断言不记账，谓词侧断言 `rehydrateIncomplete()` 返回 null = 连队列都不进，假探针计数为 0） | `2757696` |
+| I2 | 重试额度用尽只是一句静默 `return`，而横幅上那颗「继续播放」还在 —— 此后每次点击都原样返回，等于一个永远不动的死键，且没有任何解释 | `lib/playback/transport_controller.dart`（`userGesture()` 用尽那一支补全三支：`_clearBlocked()` 撤状态与横幅、`toasts.error(kAutoplayGaveUpMessage)`、`return`；`userGesture` 的注释按新语义改写）、`lib/playback/play_error.dart`（新增第五类文案常量，逐字「仍无法自动恢复播放，请点击播放按钮」）；文案同步进设计文档 §7.1 | `test/playback/transport_controller_test.dart`「重试额度用尽后横幅撤下并明确提示点播放按钮」（永远失败的驱动 → 连点 4 次 → 横幅消失 + 那条 error 级提示 + 第 5 次一次内核都不碰 + 那句只说一次）；**改写**两条既有期望（`blockedMessage` 由 `isNotNull` 改成 `isNull`，重试上限 1+3 那两句不动）：同文件「blocked 状态暴露给界面并可重试，重试最多 3 次」、`test/ui/autoplay_gate_test.dart`「重试仍受上限约束：用完 3 次就不再碰内核」 | `f90c78b` |
+| M1 | `lib/main.dart` 那句注释写「存档里的模式是权威值，顺序反过来会被 prefs 里的旧值覆盖」，与 R6 的实现（prefs 优先）正好相反 | `lib/main.dart`（只改注释：三样都以 prefs 为准，顺序承重的是「restore 末尾那次 `syncView` 发布要读到已还原的值」，不是权威换人） | 注释，无测试；权威本身仍由 `test/state/app_bootstrap_test.dart`「改完模式直接重启：模式不丢」「prefs 没写过模式时才回落档案里的模式」守着 | `2f18353` |
+| M2 | `_loadPersistedPrefs` 里「先 volume 后 muted」这个顺序是承重的（`setVolume` 两个分支都清 muted），却没有注释说明，被换了顺序也不会立刻有人知道 | `lib/state/player_state.dart`（就地补注释，指明互换的后果与守它的用例名）＋设计文档 §8 音量段 | `test/state/player_state_persist_test.dart`「静音 + 音量为 0 的存档重启仍是静音：还原顺序承重」。**红法说明**：这条是顺序断言而不是缺陷复现，实现本来就对，所以红是靠**临时把两段互换**跑出来的（`Expected: true / Actual: <false>`），换回来即绿；本轮实测过程记在 fix report 第 3 轮一节 | `2f18353` |
+| M3 | R8 × R2 双故障组合（走 `.bak` 回退 + 痕迹陈旧）里，那句「键缺失 = 用户停过」的否定断言只在痕迹自洽时参与判定，候选退回 `[snap.currentId, traceId]`，停过的歌照样复活 | `lib/state/library_state.dart`（`_restoreCursor`：只要 `order` 写过而 `currentId` 缺失就一律算否定断言，候选集为空；连 `order` 都没有才让档案说话。`restore()` 与 `_restoreCursor` 的规则注释、设计文档 §8 光标段同步） | `test/state/library_state_test.dart`「损坏档案 + 陈旧痕迹：用户停过的曲目不许从档案里复活」 | `2f18353` |
+| M4 | R1 那三条用例靠 `sleep(120ms)` 撞回填完成，计时一抖就随机红 | `test/state/library_state_test.dart`（三处换成 `await state.enrichmentSettled` 这个批次自身的信号） | 复用同三条既有用例（`还原时正常命名的带标签无封面曲目不重复回填`、`自愈回填过的曲目第二次启动不再回填`、`还原时元数据齐备的曲目不重复回填，也不多落库`），不改断言 | `2f18353` |
+| M5 | 网关的 `_claimedPointers` 只在它自己那条微任务里出栈；网关没观察到的 claim（上面还有 Overlay / 对话框吃掉 down）会漏一个**被回收的 pointer id**，下一次同 id 的空白手势被白吞 | `lib/ui/autoplay_gate.dart`（`Listener` 补 `onPointerUp` / `onPointerCancel` → `_releasePointer`，清理同样排一条微任务，保证不抢在「这次算不算空白手势」的决定之前抹记录） | 无新增用例：这条只在「网关看不到那次 down」的形状下才漏，本机 widget 测试里造不出那个形状；顺序由微任务 FIFO 保证，误伤路径由既有 `test/ui/autoplay_gate_test.dart`「点播放按钮只花一次重试额度」守着 | `2f18353` |
+| M6 | 本文件 A1 那句「代码状态是 HEAD `ec0e144`」+ A4 表里 R1/R7 两行仍按第 2 轮（含已被这次推翻的写法）描述，而本文件要提交在第 3 轮的 commit 里 | 本文件（A1 顶部加「HEAD 归属」那段，把「文档内容」与「所报 HEAD」分开说；A4 的 R1 / R7 两行按本轮实现改写并指向 A6；新增 A6 本节与 A7 闸口）；设计文档 §8 自愈段、光标段、音量段与 §7.1 错误文案就地改对（§8 那句「甚至整个文件读不到都置位」原先是**在描述缺陷**） | 文档，无测试 | 本条 docs commit |
+
+### A7 第 3 轮四条闸口的真实尾巴
+
+> 采集主体是**主流程直接跑的**，不是转抄某一段执行者的数字：`analyze` / `test` /
+> `build windows` 三条在 HEAD `2f18353`（第 3 轮那三笔代码 commit 的最后一笔、
+> 本文件与 §8/§7.1 那两笔文档改动尚未提交时）跑，`build apk --debug` 在同一份工作区
+> 里随后单独跑了一遍。产物字节数用 `stat -c '%s'` / `du -sb` 现取。
+> 工作目录 `flutter-app/`，Flutter 3.47.9 / Dart 3.13.7，命令一律 `/d/flutter/bin/flutter`。
+
+`flutter analyze --no-fatal-infos`：
+
+```text
+Analyzing flutter-app...
+No issues found! (ran in 12.5s)
+```
+
+`flutter test`：
+
+```text
+00:43 +403: All tests passed!
+```
+
+测试数轨迹：324（T30 收口）→ 380（第 1 波收尾）→ 396（第 2 轮收尾）→
+**403**（本轮）。+7 由三笔代码 commit 逐条点出来：`2757696` 4 条（C1 三条边界 +
+I1 一条）、`f90c78b` 1 条（I2 用尽分支）、`2f18353` 2 条（M2 顺序承重、M3 双故障）。
+本轮没有删除任何既有用例；被改写的既有期望只有 I2 那两条（`blockedMessage`
+由 `isNotNull` 改成 `isNull`，重试上限 1+3 那两句一字未动），因为它们记录的正是
+本轮推翻的旧规则，详见 A6 的 I2 行。
+
+`flutter build windows`：
+
+```text
+Nuget.exe not found, trying to download or use cached version.
+Building Windows application...                                    37.7s
+√ Built build\windows\x64\runner\Release\light_music.exe
+```
+
+产物实测：`light_music.exe` 92,160 字节（启动器没重编，与前几轮同一个数）、
+`data/app.so` 7,127,944 字节（比第 2 轮的 7,111,560 大 16,384 字节，跟 Dart 侧改动一致）、
+整个 `Release/` 目录 45,714,331 字节（≈ 43.6 MiB）。
+
+`flutter build apk --debug`：
+
+```text
+Running Gradle task 'assembleDebug'...                             13.1s
+√ Built build\app\outputs\flutter-apk\app-debug.apk
+```
+
+产物 `app-debug.apk` 216,191,796 字节。注意**至今只构建过 debug**：
+签名、minify、release 变体，以及 B8 那一整节装机验收都还挂着（缺的是设备，不是构建）。
+
+签核：四条闸口在第 3 轮起点与终点都是绿的 —— `analyze` 无问题 · `test` 403 全绿 ·
+`build windows` 通过 · `build apk --debug` 通过。
 
 ---
 
