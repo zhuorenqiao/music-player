@@ -126,4 +126,50 @@ void main() {
     await probe.close();
     expect(await probe('/m/a.flac'), isNaN);
   });
+
+  // -- 第 4 轮 C8：关闭必须是「没探成」，不是「这文件没有时长」 -----------------
+
+  test('关闭之后入队的探测是「没探成」，不是「这文件没有时长」', () async {
+    final probe = DurationProbe((source) async => 100);
+    await probe.close();
+
+    final outcome = await probe.probeOutcome('/m/a.flac');
+    expect(outcome.status, DurationProbeStatus.notAttempted);
+    expect(outcome.attempted, isFalse, reason: '连 opener 都没碰');
+    expect(
+      outcome.isConclusive,
+      isFalse,
+      reason: '上层拿它去记 metadataProbed 就是把一次被丢弃的尝试冻成永久结论',
+    );
+    expect(outcome.seconds.isNaN, isTrue);
+  });
+
+  test('探测途中被 close：秒数照交，但这份答案不作数', () async {
+    final gate = Completer<double>();
+    final probe = DurationProbe((source) => gate.future);
+
+    final pending = probe.probeOutcome('/m/a.flac');
+    // 用户在探测途中按了返回键：close() 先置位，再排空队列
+    final closing = probe.close();
+    gate.complete(187.5);
+    final outcome = await pending;
+    await closing;
+
+    expect(outcome.status, DurationProbeStatus.interrupted);
+    expect(outcome.seconds, 187.5, reason: '能填就填：数已经拿到了');
+    expect(outcome.isKnown, isTrue);
+    expect(outcome.isConclusive, isFalse, reason: '但它是被拆掉的内核给的，不许记账');
+  });
+
+  test('opener 说「这一趟我根本没探」：归成没探成，不是没有时长', () async {
+    final probe = DurationProbe(
+      (source) async => throw const DurationProbeSkipped('native player gone'),
+    );
+
+    final outcome = await probe.probeOutcome('/m/a.flac');
+    expect(outcome.status, DurationProbeStatus.notAttempted);
+    expect(outcome.isConclusive, isFalse);
+    // 与「探了一趟、结论是没有时长」必须分得开（那是 probed + NaN）
+    expect(const DurationProbeOutcome(double.nan).isConclusive, isTrue);
+  });
 }

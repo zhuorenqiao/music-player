@@ -624,6 +624,61 @@ void main() {
     expect(probes, 0);
   });
 
+  // -- 第 4 轮 C8：探针「已关闭」不是「这文件没有时长」 -----------------------
+
+  test('探针关掉后没跑到的曲目不记探测标记', () async {
+    // 真实路径：首次冷启动的自愈回填刚排上队，用户在 Android 上按了返回键 ——
+    // `lib/app.dart` 的 `unawaited(bootstrap.dispose())` → `probe.close()`。
+    // close() 会把已入队的探测照常排空（这是对的），但排空期间 `_closed` 已为真：
+    // 从前每一条都落成「探了一趟、结论是没时长」，毫秒级跑完，标记照记 ——
+    // 这批曲目从此永远 `--:--` 且没有自愈路径（第 2 轮 C1 的冻结换个入口回来）。
+    final files = [
+      writeFile('a.mp3', withId3([textFrame('TIT2', '甲')])),
+      writeFile('b.mp3', withId3([textFrame('TIT2', '乙')])),
+      writeFile('c.mp3', withId3([textFrame('TIT2', '丙')])),
+    ];
+    var calls = 0;
+    final first = Completer<double>();
+    final probe = DurationProbe((source) {
+      calls += 1;
+      // 第一条真的在飞（等我们放行），后面几条「秒回」：这样两种关闭时机都会被
+      // 走到 —— 已入队但还没轮到（收尾时才发现已关）与关闭之后才入队（根本没探）。
+      if (calls == 1) return first.future;
+      return Future<double>.value(187.5);
+    }, timeoutMs: 200);
+    addTearDown(probe.close);
+
+    final playlist = Playlist(tracks: const []);
+    playlist.replaceAll([
+      for (final file in files) restoredFromArchive(file.path),
+    ]);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      // 走**真探针**：`probeOutcome` 把「关闭」丢掉的那条路也要被这条抓住。
+      durationProbe: probe.probeOutcome,
+    );
+
+    final batch = service.rehydrateIncomplete();
+    await waitUntil(() => calls == 1, reason: '第一条探测没开始');
+    // 用户按了返回键：探针关闭，队列开始排空
+    final closing = probe.close();
+    first.complete(187.5); // 正在飞的那条照常收尾（close 要等它跑完）
+    await closing;
+    await batch;
+
+    expect(
+      playlist.tracks.every((track) => !track.metadataProbed),
+      isTrue,
+      reason: '关闭期间跑完的探测不是这个文件自己的结论；记上就是永久冻结',
+    );
+    expect(
+      playlist.tracks.any((track) => track.hasDuration),
+      isTrue,
+      reason: '数已经拿到就照填（能填就填），只是不许记账',
+    );
+  });
+
   test('content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）', () async {
     const safSource =
         'content://com.android.externalstorage.documents/document/'

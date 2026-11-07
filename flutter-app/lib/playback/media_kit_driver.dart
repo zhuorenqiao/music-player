@@ -21,6 +21,7 @@ import 'dart:async';
 // 这里隐藏掉，避免与本文件的 `Track` 产生歧义。
 import 'package:media_kit/media_kit.dart' hide Track;
 
+import '../library/duration_probe.dart' show DurationProbeSkipped;
 import 'audio_driver.dart';
 import 'play_error.dart';
 import 'track.dart';
@@ -225,19 +226,28 @@ class MediaKitDurationOpener {
   bool _disposed = false;
 
   /// 探一个来源（文件路径或已经是 URI）；失败 / 超时都是 NaN，绝不抛。
+  ///
+  /// 唯一的例外是 [DurationProbeSkipped]：那三支**根本没探**（内核已释放、来源
+  /// 不能探、原生库起不来）不许伪装成「这文件没有时长」—— 第 4 轮 C8 的要点是
+  /// NaN 这个返回值必须只有一个含义，否则上层会把一次被丢弃的尝试记成永久结论。
   Future<double> call(String source) async {
-    if (_disposed) return double.nan;
+    // 已经释放的探测器不再碰内核（第 4 轮 C8）：退出时排在队列里的探测会一路
+    // 跑到这里来，从前它返回 NaN，与「文件没有时长」同形 → 标记照记。
+    if (_disposed) throw const DurationProbeSkipped('opener disposed');
     // 终审 R7：这一层只会把来源包成文件 URI，`content://` 之类的 SAF 句柄
     // 开不了 —— 与其占着串行队列白等满 [timeoutMs] 再换一个 NaN，不如当场
     // 承认「这条我探不了」。调用方（`ImportService._enrich`）已经先按句柄
     // 类型挡了一道，这里是最后一道闸：探针还有别的入口时同样不许白等。
-    if (!FilePathHandle(source).canProbeDuration) return double.nan;
+    if (!FilePathHandle(source).canProbeDuration) {
+      throw const DurationProbeSkipped('source is not a readable file');
+    }
     final Player player;
     try {
       player = _player ??= Player();
     } catch (_) {
-      // 原生库不可用（测试环境、缺 libmpv 的平台）：全部当「探不出来」。
-      return double.nan;
+      // 原生库不可用（测试环境、缺 libmpv 的平台）：这是**环境**没探成，不是
+      // 文件的结论 —— 记成「没时长」等于把库里每一条都永久冻在 `--:--`。
+      throw const DurationProbeSkipped('native player unavailable');
     }
     final deadline = Duration(milliseconds: timeoutMs);
     final completer = Completer<double>();
