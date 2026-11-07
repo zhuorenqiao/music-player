@@ -798,6 +798,15 @@ void main() {
       isFalse,
       reason: '记上就是替 M2 宣布「这条不用管」，将来接上 SAF 读取也看不见',
     );
+    // 第 4 轮：上面这条是 **M1 真正导入出来的**那条曲目（`_buildTrack` 给的是
+    // FilePathHandle，生产上靠 `track_handle.dart` 的能力位排除）。下面第二半
+    // 手工构造 SafUriHandle 只是把 M2 的形状提前钉住，不能替代这一条 ——
+    // 对导入产物本身也要断言：它压根不进回填队列。
+    expect(
+      service.rehydrateIncomplete(),
+      isNull,
+      reason: '导入出来的 content:// 曲目（FilePathHandle）同样不进自愈队列',
+    );
 
     // 谓词侧：准入条件换成能力位之后，这类曲目**不进回填队列**（也就每次启动白跑一次都没有）。
     playlist.replaceAll([

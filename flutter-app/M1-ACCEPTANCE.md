@@ -195,19 +195,19 @@ Android 闸口本轮仍绿，是因为它自 `ae02ce1` 起就没被再碰过。
 | --- | --- | --- | --- | --- |
 | C1（Critical） | 回填外壳在 `finally` 里**无条件**记探测标记：文件根本没打开、或时长探针被超时掐断的那两条「什么都没干成」的路也照样记「已探测」；重复导入同一路径是 no-op，谓词此后恒为 false —— 除了改档案格式没有自愈路径，一次暂时的「盘没挂上」被冻结成永久降级 | `lib/library/import_service.dart`（`hydrateMetadata` 回报 `bool`「这次到底有没有打开文件」；`_enrich` 回报「这条可以记账」；`_enrichQuiet` 丢掉无条件 `finally`，抛错同样不记，并写明「永久拔掉的盘每次启动重试一次」是**接受的代价**而不是回到旧写法）、`lib/library/duration_probe.dart`（新增 `DurationProbeOutcome{seconds,timedOut}` 与 `probeOutcome()`：超时从「又一个 NaN」里分出来，`call()` 那条裸秒数照旧）、`lib/main.dart`（装配层改接 `probe.probeOutcome`） | `test/library/import_service_test.dart`「文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来」「时长探针超时的曲目不记探测标记」（用**真** `DurationProbe` + 永不返回的 opener + 5ms 预算，顺带钉住装配接缝接错就编译不过）、「打开了但确实没标签的曲目只治一次」（守 R1 的正向结论别被这次改回去） | `2757696` |
 | I1 | SAF 的 `content://` 曲目被记成「已探测」，M2 真接上 SAF 读取之后这批曲目对新能力永久隐形 | `lib/library/import_service.dart`（`metadataIncomplete` 的准入从 `track.isLocal` **换成**能力位 `track.handle.canProbeDuration`：既不进回填队列也不记标记；M2 把能力位翻成真值的那一刻自动回到未探测。`_enrich` 里 R7 那条探针守卫保留，双保险） | `test/library/import_service_test.dart`「content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）」（导入侧断言不记账，谓词侧断言 `rehydrateIncomplete()` 返回 null = 连队列都不进，假探针计数为 0） | `2757696` |
-| I2 | 重试额度用尽只是一句静默 `return`，而横幅上那颗「继续播放」还在 —— 此后每次点击都原样返回，等于一个永远不动的死键，且没有任何解释 | `lib/playback/transport_controller.dart`（`userGesture()` 用尽那一支补全三支：`_clearBlocked()` 撤状态与横幅、`toasts.error(kAutoplayGaveUpMessage)`、`return`；`userGesture` 的注释按新语义改写）、`lib/playback/play_error.dart`（新增第五类文案常量，逐字「仍无法自动恢复播放，请点击播放按钮」）；文案同步进设计文档 §7.1 | `test/playback/transport_controller_test.dart`「重试额度用尽后横幅撤下并明确提示点播放按钮」（永远失败的驱动 → 连点 4 次 → 横幅消失 + 那条 error 级提示 + 第 5 次一次内核都不碰 + 那句只说一次）；**改写**两条既有期望（`blockedMessage` 由 `isNotNull` 改成 `isNull`，重试上限 1+3 那两句不动）：同文件「blocked 状态暴露给界面并可重试，重试最多 3 次」、`test/ui/autoplay_gate_test.dart`「重试仍受上限约束：用完 3 次就不再碰内核」 | `f90c78b` |
+| I2 | 重试额度用尽只是一句静默 `return`，而横幅上那颗「继续播放」还在 —— 此后每次点击都原样返回，等于一个永远不动的死键，且没有任何解释 | `lib/playback/transport_controller.dart`（`userGesture()` 用尽那一支补全三支：`_clearBlocked()` 撤状态与横幅、`toasts.error(kAutoplayGaveUpMessage)`、`return`；`userGesture` 的注释按新语义改写）、`lib/playback/play_error.dart`（新增第五类文案常量，逐字「仍无法自动恢复播放，请点击播放按钮」）；文案同步进设计文档 §7 的「错误归一」段（`:190`） | `test/playback/transport_controller_test.dart`「重试额度用尽后横幅撤下并明确提示点播放按钮」（永远失败的驱动 → 连点 4 次 → 横幅消失 + 那条 error 级提示 + 第 5 次一次内核都不碰 + 那句只说一次）；**改写**两条既有期望（`blockedMessage` 由 `isNotNull` 改成 `isNull`，重试上限 1+3 那两句不动）：同文件「blocked 状态暴露给界面并可重试，重试最多 3 次」、`test/ui/autoplay_gate_test.dart`「重试仍受上限约束：用完 3 次就不再碰内核」 | `f90c78b` |
 | M1 | `lib/main.dart` 那句注释写「存档里的模式是权威值，顺序反过来会被 prefs 里的旧值覆盖」，与 R6 的实现（prefs 优先）正好相反 | `lib/main.dart`（只改注释：三样都以 prefs 为准，顺序承重的是「restore 末尾那次 `syncView` 发布要读到已还原的值」，不是权威换人） | 注释，无测试；权威本身仍由 `test/state/app_bootstrap_test.dart`「改完模式直接重启：模式不丢」「prefs 没写过模式时才回落档案里的模式」守着 | `2f18353` |
 | M2 | `_loadPersistedPrefs` 里「先 volume 后 muted」这个顺序是承重的（`setVolume` 两个分支都清 muted），却没有注释说明，被换了顺序也不会立刻有人知道 | `lib/state/player_state.dart`（就地补注释，指明互换的后果与守它的用例名）＋设计文档 §8 音量段 | `test/state/player_state_persist_test.dart`「静音 + 音量为 0 的存档重启仍是静音：还原顺序承重」。**红法说明**：这条是顺序断言而不是缺陷复现，实现本来就对，所以红是靠**临时把两段互换**跑出来的（`Expected: true / Actual: <false>`），换回来即绿；本轮实测过程记在 fix report 第 3 轮一节 | `2f18353` |
 | M3 | R8 × R2 双故障组合（走 `.bak` 回退 + 痕迹陈旧）里，那句「键缺失 = 用户停过」的否定断言只在痕迹自洽时参与判定，候选退回 `[snap.currentId, traceId]`，停过的歌照样复活 | `lib/state/library_state.dart`（`_restoreCursor`：只要 `order` 写过而 `currentId` 缺失就一律算否定断言，候选集为空；连 `order` 都没有才让档案说话。`restore()` 与 `_restoreCursor` 的规则注释、设计文档 §8 光标段同步） | `test/state/library_state_test.dart`「损坏档案 + 陈旧痕迹：用户停过的曲目不许从档案里复活」 | `2f18353` |
 | M4 | R1 那三条用例靠 `sleep(120ms)` 撞回填完成，计时一抖就随机红 | `test/state/library_state_test.dart`（三处换成 `await state.enrichmentSettled` 这个批次自身的信号） | 复用同三条既有用例（`还原时正常命名的带标签无封面曲目不重复回填`、`自愈回填过的曲目第二次启动不再回填`、`还原时元数据齐备的曲目不重复回填，也不多落库`），不改断言 | `2f18353` |
 | M5 | 网关的 `_claimedPointers` 只在它自己那条微任务里出栈；网关没观察到的 claim（上面还有 Overlay / 对话框吃掉 down）会漏一个**被回收的 pointer id**，下一次同 id 的空白手势被白吞 | `lib/ui/autoplay_gate.dart`（`Listener` 补 `onPointerUp` / `onPointerCancel` → `_releasePointer`，清理同样排一条微任务，保证不抢在「这次算不算空白手势」的决定之前抹记录） | 无新增用例：这条只在「网关看不到那次 down」的形状下才漏，本机 widget 测试里造不出那个形状；顺序由微任务 FIFO 保证，误伤路径由既有 `test/ui/autoplay_gate_test.dart`「点播放按钮只花一次重试额度」守着 | `2f18353` |
-| M6 | 本文件 A1 那句「代码状态是 HEAD `ec0e144`」+ A4 表里 R1/R7 两行仍按第 2 轮（含已被这次推翻的写法）描述，而本文件要提交在第 3 轮的 commit 里 | 本文件（A1 顶部加「HEAD 归属」那段，把「文档内容」与「所报 HEAD」分开说；A4 的 R1 / R7 两行按本轮实现改写并指向 A6；新增 A6 本节与 A7 闸口）；设计文档 §8 自愈段、光标段、音量段与 §7.1 错误文案就地改对（§8 那句「甚至整个文件读不到都置位」原先是**在描述缺陷**） | 文档，无测试 | 本条 docs commit |
+| M6 | 本文件 A1 那句「代码状态是 HEAD `ec0e144`」+ A4 表里 R1/R7 两行仍按第 2 轮（含已被这次推翻的写法）描述，而本文件要提交在第 3 轮的 commit 里 | 本文件（A1 顶部加「HEAD 归属」那段，把「文档内容」与「所报 HEAD」分开说；A4 的 R1 / R7 两行按本轮实现改写并指向 A6；新增 A6 本节与 A7 闸口）；设计文档 §8 自愈段、光标段、音量段与 §7 的错误文案（「错误归一」段）就地改对（§8 那句「甚至整个文件读不到都置位」原先是**在描述缺陷**） | 文档，无测试 | 本条 docs commit |
 
 ### A7 第 3 轮四条闸口的真实尾巴
 
 > 采集主体是**主流程直接跑的**，不是转抄某一段执行者的数字：`analyze` / `test` /
 > `build windows` 三条在 HEAD `2f18353`（第 3 轮那三笔代码 commit 的最后一笔、
-> 本文件与 §8/§7.1 那两笔文档改动尚未提交时）跑，`build apk --debug` 在同一份工作区
+> 本文件与 §8/§7 那两笔文档改动尚未提交时）跑，`build apk --debug` 在同一份工作区
 > 里随后单独跑了一遍。产物字节数用 `stat -c '%s'` / `du -sb` 现取。
 > 工作目录 `flutter-app/`，Flutter 3.47.9 / Dart 3.13.7，命令一律 `/d/flutter/bin/flutter`。
 
@@ -360,7 +360,7 @@ Windows 侧先跑 `flutter run -d windows`（或直接用 A1 构建出来的 Rel
 | 8.6 | 系统设置里拒绝通知权限后启动 | 仍能出声播放；提示条是权限说明文案而不是错误 | pending-device |
 | 8.7 | 窄屏（<900，任选一台小屏） | 单列堆叠；控制条贴底；音量整块隐藏；五颗按钮等距；列表按钮弹底部 sheet | pending-device |
 | 8.8 | 杀掉进程重开 | SAF 授权仍在（不用重新选目录），歌单/模式/音量原样恢复 | pending-device |
-| 8.9 | 系统自动播放策略拦住首播（冷启动后面板显示「被拦」提示条）后，**点一下界面空白处**（不打到任何按钮） | 立刻重试一次播放；每次真实手势只花一格额度、最多 3 格，用完后提示条与「继续播放」按钮仍可手动重试（终审 I5 的 `AutoplayGestureGate`；原版 `src/App.tsx:1557-1579` 的 document 级监听） | pending-device |
+| 8.9 | 系统自动播放策略拦住首播（冷启动后面板显示「被拦」提示条）后，**点一下界面空白处**（不打到任何按钮） | 每次真实手势原地重试一次播放（`resume()`，进度不回 0:00），额度 3 格；**用尽那一次三支一起做**：撤下横幅、连「继续播放」一起消失、并发一条错误级提示「仍无法自动恢复播放，请点击播放按钮」。此后点空白处什么都不发生（横幅已撤、不再重试），要**点播放按钮**（或按一次播放快捷键）才继续（终审 I5 + 第 3 轮 I2；原版 `src/App.tsx:1557-1579` 的 document 级监听、`src/state/player.tsx:204-208` 的三支收尾） | pending-device |
 | 8.10 | 被拦状态下改按手机音量键以外的**任意按键/触摸**（如列表行、播放按钮） | 同样算一次手势并原地续播：进度不回 0:00（重试走 `resume()`，不是 `load`）。代价是这些点击各消耗一格额度，属已裁定的可接受残留 | pending-device |
 
 ### B9 无障碍与减少动态效果（真人确认部分）

@@ -535,8 +535,15 @@ String displayNameForSource(String source) {
 /// 一遍；更关键的是它**也不该被记上探测标记**（[_enrichQuiet] 那一刀），否则
 /// M2 真接上 SAF 读取之后，这批曲目在谓词眼里永远是「已经管过了」，新能力
 /// 对它们隐形。用句柄自己报的能力位，M2 把 `canProbeDuration` 翻成真值的那一刻，
-/// 这些曲目自动回到未探测状态、自愈管路自动接上。远程 URL 依旧被这同一句
-/// 挡在门外（句柄开不了字节），与从前 `!isLocal` 的外延一致。
+/// 这些曲目自动回到未探测状态、自愈管路自动接上。
+///
+/// 与从前 `!isLocal` 的**外延并不相同**（别按「换了写法、判定没变」去理解）：
+/// 能力位只问「这条来源能不能开」，不问那条记录标没标自己本地。于是老档案里
+/// `isLocal` 缺省成 false 的纯路径记录（`Track.fromJson` 用 `map['isLocal'] == true`，
+/// 缺字段即 false）**开始进队列了** —— 该进，路径是真能开的；`app_bootstrap_test`
+/// 里那条「旧档案里残留的 volume / muted 不参与还原」就记着这个形状。
+/// 远程 URL 仍被挡在门外，因为 `FilePathHandle` 的 `canProbeDuration` 对
+/// `http(s)://` 同样给 false（来源根本不是文件）。
 bool metadataIncomplete(Track track) {
   // 能力判断：句柄自己说「这条来源我到底能不能读」。
   if (!track.handle.canProbeDuration) return false;
