@@ -387,8 +387,9 @@ void main() {
     // 这条档案里的记录没有 duration（`/m/a.flac` 也不在盘上），所以它是自愈回填
     // 的候选：第 3 轮 I1 把谓词的准入从 `isLocal` 换成句柄能力位之后，这类
     // 「只有文件名 + 纯路径」的老记录**开始**进队列了（该进 —— 路径是真能开的）。
-    // 于是批次收尾那一次 `persist()` 正在后台写 `dir`，而 tearDown 要删它。
-    // 等它落完：既让断言见到最终状态，也不给 Windows 留一个「删不掉的目录」。
+    // 文件不在盘上 ⇒ 这一批什么都没学到 ⇒ 第 4 轮 I9 起**不会**再触发收尾那次
+    // `persist()`（从前会，白写一遍档案）。仍等批次信号落定：既让断言见到最终状态，
+    // 也不给 Windows 留一个「还在跑的目录删除」。
     await bootstrap.library.enrichmentSettled;
     // 文件根本不在盘上 → 这次什么都没读到，不许记探测标记（第 3 轮 C1 同一条规则
     // 在装配层这一侧的落点）。
@@ -396,6 +397,57 @@ void main() {
       bootstrap.library.tracks.single.metadataProbed,
       isFalse,
       reason: '装配层这条真链路也一样：打不开文件就不记账',
+    );
+  });
+
+  /// 第 4 轮复核对 I11 的边界修正落点：R8 的「坏档只读不写」gate 的是**曲库层
+  /// 自己**那两次写（还原末尾与回填收尾的 `persist()`）；播放侧 `flushPersist`
+  /// 写的是用户动作的如实陈述（停止就该清掉 `currentId`），在坏档会话里照样写 ——
+  /// 把它一起 gate 掉反而会把 R2（停止不落盘、停过的歌重启复活）重新撕开。
+  test('损坏档案 + 停止：播放侧 flushPersist 仍如实记录停止', () async {
+    // 先让正式文件与 `.bak` 都长成一份正常档案，再把正式文件写坏：
+    // 仓储只能回退 `.bak`，并把这一份快照标成 corrupted。
+    final repo = LibraryRepository(directory: dir.path);
+    for (var i = 0; i < 2; i++) {
+      await repo.save(
+        LibrarySnapshot(
+          tracks: [track('a', '十年')],
+          order: const ['a'],
+          currentId: 'a',
+          mode: PlayMode.list,
+        ),
+      );
+    }
+    File('${dir.path}${Platform.pathSeparator}library.json')
+        .writeAsStringSync('{"tracks": [坏数据]}');
+
+    final bootstrap = await buildBootstrap(
+      prefs: prefs,
+      dataDirectory: dir.path,
+      driver: FakeAudioDriver(),
+      bridge: FakeMediaSessionBridge(),
+    );
+    addTearDown(bootstrap.player.dispose);
+
+    expect(
+      bootstrap.library.tracks.map((t) => t.id),
+      ['a'],
+      reason: '回退出来的正是 `.bak` 那份：这一轮确实是坏档会话',
+    );
+    await bootstrap.library.enrichmentSettled;
+
+    // 停止：清指针 + 同步落盘（R2 残留那条腿）。
+    await bootstrap.player.transport.stopPlayback();
+
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      isNull,
+      reason: '停止是一句用户陈述，坏档会话里也必须如实写下去',
+    );
+    expect(
+      await prefs.readJson(StorageKeys.order),
+      ['a'],
+      reason: '顺序跟着现场走，不该被坏档的 gate 冻住',
     );
   });
 

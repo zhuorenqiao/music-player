@@ -213,11 +213,15 @@ class MediaKitDriver implements AudioDriver {
 /// 卸掉」这一件事。
 ///
 /// 实例**懒建**：组合根在 widget 测试里也会被构造，而那里从未调过
-/// `MediaKit.ensureInitialized()`，`Player()` 直接抛。这条路径按「探不出来」
-/// 处理成 NaN，绝不冒泡 —— 没有时长可比界面崩掉轻得多。
+/// `MediaKit.ensureInitialized()`，`Player()` 直接抛。这条路径归到
+/// [DurationProbeSkipped]（第 4 轮 C8：**根本没探**，不是「这文件没有时长」），
+/// 由 `DurationProbe` 折算成 `notAttempted`；绝不冒泡 —— 没有时长可比界面崩掉轻得多。
 class MediaKitDurationOpener {
-  /// [timeoutMs] 由装配层给（与 `DurationProbe` 同一预算），两个数值必须一致：
-  /// 这里先到点，才能保证 `finally` 的清理赶在队列放行之前。
+  /// [timeoutMs] 由装配层给（与 `DurationProbe` 同一预算）。
+  ///
+  /// 实际先到点的是外层 `DurationProbe` 的预算（它比这里更早起表），所以生产路径上
+  /// 超时由外层归成 `timedOut`，这里是**兜底**：万一下次有人改预算、把外层去掉，
+  /// 也不会让一次 `open` 无限挂着。`finally` 的清理在本 future 结束时照跑。
   MediaKitDurationOpener({required this.timeoutMs});
 
   final int timeoutMs;

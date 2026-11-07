@@ -57,9 +57,14 @@ class LibraryState extends ChangeNotifier {
   /// 「这一份现场是从坏档案里退回来的吗」（终审 R8，第 4 轮 I11）。
   ///
   /// [restore] 按快照的 `corrupted` 置位，[persist] 里那次 [_syncPrefsTrace]
-  /// 受它 gate：坏档这一整轮里 prefs 的 `order` / `currentId` 都只读不写，
-  /// 包括回填收尾那一次 persist（它照常写文件仓）。默认 true —— 没走过还原
-  /// 就落库（首次导入）时档案是健康的。
+  /// 受它 gate：坏档这一轮里**本类自己**写的 prefs 痕迹（还原末尾、回填收尾那次
+  /// persist）一律只读不写；文件仓照常重写。
+  ///
+  /// 注意 gate 的边界：播放层（`PlayerState.flushPersist` / 400ms 防抖）不经过这里，
+  /// 它写的 `order` / `currentId` 是**用户动作的如实陈述**（停播就该清掉键），
+  /// 在坏档会话里也照样写 —— 那不是 R8 要拦的「按坏快照覆盖痕迹」，
+  /// 拦了反而会破坏 R2（停止不落盘）。见第 4 轮复核的 I11 注释修正。
+  /// 默认 true —— 没走过还原就落库（首次导入）时档案是健康的。
   bool _traceWritable = true;
 
   /// 搜索框的文本控制器（T28 面板用）。
