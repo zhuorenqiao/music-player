@@ -147,8 +147,16 @@ Future<AppBootstrap> buildBootstrap({
   // transport 建在 player 之前，所以这条线只能建好之后接。
   transport.onStopped = player.flushPersist;
 
-  // 先把音量 / 静音 / 模式读回来，再还原曲库：存档里的模式是权威值，
-  // 顺序反过来会被 prefs 里的旧值覆盖。
+  // 先把音量 / 静音 / 模式读回来，再还原曲库。**这三样的权威都是 prefs**
+  // （终审 R6：`LibraryState._restoreMode` 里 prefs 写过就用 prefs，档案那份
+  // 只是兜底；音量 / 静音本来就只有 prefs 一个来源，见 §6.3 / §8）——
+  // 从前这里写的是「存档里的模式是权威值，顺序反过来会被 prefs 里的旧值覆盖」，
+  // 那句和实现正好相反，是 R6 落地时漏改的注释，别照它理解优先级。
+  //
+  // 那这条顺序还承重吗？承重，但承的是另一件事：restore 末尾会经
+  // `onPlaylistChanged` 补推一次视图（`syncView`），prefs 还没读回来就推，
+  // 首帧就会先按默认音量 / 列表循环发布一次、等 ready 再改一次，界面闪一下
+  // 「没读过档」的样子。顺序对了，第一次发布就已经是现场值。
   await player.ready();
   await library.restore();
 

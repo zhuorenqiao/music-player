@@ -145,7 +145,10 @@ class LibraryState extends ChangeNotifier {
   ///     的闸门。自洽而**键缺失**是否定断言（用户停过播放，终审 R2），不许再
   ///     回落到档案值；矛盾（或缺 order）时整份现场按陈旧处理，退回文件仓的
   ///     `currentId`。**两边都给不出有效光标时落到列表第一首**（终审 R4，
-  ///     原版 `src/state/player.tsx:556`），只有空列表才是空舞台。
+  ///     原版 `src/state/player.tsx:556`），只有空列表才是空舞台。矛盾（或缺
+  ///     `order`）时整份按陈旧处理、退回档案的 `currentId`，但「痕迹写过而
+  ///     `currentId` 缺失」这句否定断言**照旧算数**（第 3 轮 M3），否则走
+  ///     `.bak` 回退时会把用户停过的那一首重新扶正。
   ///   - **模式**同权：prefs 写过 `mode` 就以它为准（`PlayerState.cycleMode`
   ///     只写这一处，档案里那份要等下一次 `persist()` 才跟上），没写过才回落
   ///     `snap.mode`（终审 R6，见 [_restoreMode]）。
@@ -214,6 +217,9 @@ class LibraryState extends ChangeNotifier {
   ///      停止之前那次 persist 写下的旧值，回落它就是把停掉的歌复活。
   ///   2. 快照自相矛盾（order 与文件仓不一致）或缺失时，整份按过期处理，
   ///      退回文件仓快照的 `currentId` —— 顺序与曲目以文件仓为权威。
+  ///      **唯一的例外**是那句否定断言（第 3 轮 M3）：痕迹里的 `order` 写过、
+  ///      而 `currentId` 不在，那不管是哪一代都在说「没有光标」，此时候选是空集，
+  ///      档案里那份 `currentId` 也不许打头。
   ///   3. 两边都指不到列表里的曲目（光标被删 / 键被清）时**落到列表第一首**，
   ///      保持暂停、不自动播（终审 R4）：原版
   ///      `src/state/player.tsx:556` 写的是
@@ -236,11 +242,25 @@ class LibraryState extends ChangeNotifier {
     );
     // 「现场自洽」时键缺失＝否定断言（R2），键在就用它；「现场过期」时整份
     // prefs 都不作数，才轮到文件仓的 `currentId` 打头。
-    final candidates = !traceIsCurrent
+    //
+    // 但**这句否定断言本身不以「自洽」为前提**（第 3 轮 M3）：只要 prefs 那份
+    // 痕迹写过（`order` 键在盘上），而 `currentId` 不在，就是「用户停过播放 /
+    // 当前曲目被删空过」一次如实清除。从前它只在痕迹自洽时才生效，于是
+    // R8 × R2 的双故障组合（走 `.bak` 回退 → 天生带着上一代的陈旧 order）里
+    // 候选变成 `[snap.currentId, traceId]`，第一顺位正是停止之前那次 persist
+    // 留下的旧值 —— 停过的歌照样复活。痕迹新不新鲜决定的是「要不要信它指的
+    // 那一首」，不是「要不要信它说没有光标」。
+    //
+    // 反过来，连 `order` 都没有（首次使用 / 老版本从没写过痕迹）时就真的没有
+    // 任何陈述，仍按原规则让档案说话。
+    final traceWasWritten = prefs.containsKey(StorageKeys.order);
+    final stopDeclared =
+        traceWasWritten && !prefs.containsKey(StorageKeys.currentId);
+    final candidates = stopDeclared
+        ? const <String?>[]
+        : !traceIsCurrent
         ? <String?>[snap.currentId, traceId]
-        : prefs.containsKey(StorageKeys.currentId)
-        ? <String?>[traceId]
-        : const <String?>[];
+        : <String?>[traceId];
     for (final id in candidates) {
       if (id != null && playlist.indexOfId(id) >= 0) {
         playlist.setCurrentById(id);

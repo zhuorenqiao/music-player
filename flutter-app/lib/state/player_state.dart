@@ -78,6 +78,16 @@ class PlayerState extends ChangeNotifier {
       min: 0,
       max: 1,
     );
+    // **这两段的顺序是承重的，不许互换**（第 3 轮 M2）。
+    //
+    // `AudioPlayer.setVolume` 两个分支都清 muted（终审 R5，对齐
+    // `src/lib/player.js:322`），所以必须**先** volume、**后** muted：
+    // 反过来写，`setMuted(true)` 刚落地的静音会被紧随其后的那次
+    // `setVolume(...)`（哪怕存档里的音量就是 0）当场擦掉，用户
+    // 「静音 + 音量 0」的现场重启就变成「没静音」，而音量本来就是 0，
+    // 连按静音按钮都解不掉什么。守这条顺序的用例：
+    // `test/state/player_state_persist_test.dart`
+    // 「静音 + 音量为 0 的存档重启仍是静音：还原顺序承重」。
     if (volume != null) await transport.setVolume(volume.toDouble());
     if (await prefs.readBool(StorageKeys.muted)) {
       await transport.player.setMuted(true);

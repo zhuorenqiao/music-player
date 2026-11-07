@@ -180,6 +180,43 @@ void main() {
     expect(await prefs.readBool(StorageKeys.muted), isFalse);
   });
 
+  /// 第 3 轮 M2：还原里「先 volume、后 muted」这个**顺序**是承重的，不是巧合。
+  ///
+  /// `AudioPlayer.setVolume` 两个分支都清静音（终审 R5），所以 muted 一旦摆在
+  /// 前面，紧随其后的 `setVolume(0)` 就会把刚落地的静音当场擦掉 —— 用户
+  /// 「静音 + 音量 0」这份现场重启后变成「没静音」，而音量本来就是 0，
+  /// 按静音按钮也解不掉任何东西。把 `_loadPersistedPrefs` 的两段换过来，
+  /// 这条就红（`lib/state/player_state.dart` 那段注释守的正是这里）。
+  test('静音 + 音量为 0 的存档重启仍是静音：还原顺序承重', () async {
+    final prefs = AppPrefs.inMemory();
+    final state = buildState(prefs);
+    addTearDown(state.dispose);
+
+    await state.setVolume(0);
+    // 上一条是 R5：拖到 0 只写音量，不写静音。
+    expect(await prefs.readNumber(StorageKeys.volume), 0);
+    expect(await prefs.readBool(StorageKeys.muted), isFalse);
+    // 再按静音，就留下「volume=0 + muted=true」这份现场（toggleMute 不碰音量键）。
+    await state.toggleMute();
+    expect(await prefs.readNumber(StorageKeys.volume), 0);
+    expect(await prefs.readBool(StorageKeys.muted), isTrue);
+
+    final restart = buildState(prefs);
+    addTearDown(restart.dispose);
+    await restart.ready();
+
+    expect(
+      restart.muted,
+      isTrue,
+      reason: 'setVolume(0) 清掉的那一次必须被后面的 setMuted(true) 覆盖回来',
+    );
+    expect(
+      await prefs.readBool(StorageKeys.muted),
+      isTrue,
+      reason: '还原只是读回现场，不许顺手把它改掉',
+    );
+  });
+
   test('当前曲目与顺序落 prefs', () async {
     final prefs = AppPrefs.inMemory();
     final state = buildState(prefs, tracks: [t('1'), t('2')]);

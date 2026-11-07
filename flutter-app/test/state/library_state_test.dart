@@ -455,7 +455,9 @@ void main() {
     addTearDown(fresh.dispose);
 
     await fresh.restore();
-    await Future<void>.delayed(const Duration(milliseconds: 120));
+    // 第 3 轮 M4：等**批次自己报完成**，不等 120ms 的运气 —— 回填这条链
+    // 迟早会因为文件数、磁盘与探针预算改变耗时，计时耦合就是随机红的来源。
+    await fresh.enrichmentSettled;
 
     expect(fresh.tracks.single.title, '甲');
     expect(probes, 0, reason: '时长与封面都在了，不该再探一次');
@@ -516,7 +518,8 @@ void main() {
     final second = buildEnrichingState(repo: secondRepo, probe: countingProbe);
     addTearDown(second.dispose);
     await second.restore();
-    await Future<void>.delayed(const Duration(milliseconds: 120));
+    // 第 3 轮 M4：同上，用批次信号取代 120ms 计时耦合。
+    await second.enrichmentSettled;
 
     expect(probes, 0, reason: '已经探测过一次就不重探（终审 R1 的持久化标记）');
     expect(secondRepo.saves, 0, reason: '没有东西被补上就不必再整库重写档案');
@@ -564,7 +567,8 @@ void main() {
     final second = buildEnrichingState(repo: secondRepo, probe: countingProbe);
     addTearDown(second.dispose);
     await second.restore();
-    await Future<void>.delayed(const Duration(milliseconds: 120));
+    // 第 3 轮 M4：同上，用批次信号取代 120ms 计时耦合。
+    await second.enrichmentSettled;
 
     expect(probes, 0, reason: '回填过的曲目第二次启动不再探时长');
     expect(secondRepo.saves, 0, reason: '也没有东西要补，不该再落一次库');
@@ -769,6 +773,61 @@ void main() {
       await prefs.readString(StorageKeys.currentId),
       ids.last,
       reason: '同一次判定里也不许顺手清掉 currentId —— 那是用户停没停过的唯一线索',
+    );
+  });
+
+  // -- 第 3 轮 M3：R8 × R2 双故障的组合里，「停过」这句陈述也不能丢 ----------
+  //
+  // 上一条守住的是「痕迹自洽 → 键缺失＝否定断言」。但走 `.bak` 回退时痕迹
+  // 天生就是陈旧的（order 对不上），于是候选变成 `[snap.currentId, traceId]`：
+  // 那句否定断言在此**根本不参与**，档案里那份「停止之前最后一次 persist 写下
+  // 的 currentId」就又被扶正了 —— 用户明明停过的那首歌复活。
+  // 裁定：键缺失这句陈述只要 prefs 那份痕迹**写过**（order 在盘上）就一律算数，
+  // 与它新不新鲜无关；只有连痕迹都没有（首次使用 / 老版本升级）才让档案自己说话。
+  test('损坏档案 + 陈旧痕迹：用户停过的曲目不许从档案里复活', () async {
+    await state.importPaths(['/m/a.flac', '/m/b.flac']);
+    await state.enrichmentSettled;
+    final ids = state.tracks.map((t) => t.id).toList();
+    // 现场：正在播第二首，档案与 prefs 都指着它。
+    await state.setCurrent(ids.last);
+    // 再存一次，让 `.bak` 也长成「currentId = 第二首」那份（回退时要读的就是它）。
+    await state.persist();
+
+    // 停止播放那条腿把键如实清了（R2 / flushPersist 的同一条写侧规则）。
+    await prefs.remove(StorageKeys.currentId);
+    // 双故障的另一半：prefs 那份 order 属于上一代，与回退出来的档案对不上。
+    await prefs.writeJson(StorageKeys.order, ids.reversed.toList());
+    // 正式文件坏了 → 仓储只能回退 `.bak`，并把这一份标成 corrupted。
+    File('${dir.path}/library.json').writeAsStringSync('{"tracks": [坏数据]}');
+
+    final fresh = buildState();
+    addTearDown(fresh.dispose);
+    await fresh.restore();
+    await fresh.enrichmentSettled;
+
+    expect(
+      fresh.currentId,
+      isNot(ids.last),
+      reason: '键缺失＝用户停过，这句不许因为痕迹陈旧就被档案顶掉',
+    );
+    // 两边都给不出有效光标 → 落第一首、保持暂停（终审 R4）。
+    expect(fresh.currentId, ids.first);
+    // 停止这句陈述也不许在下一轮变成复活的材料：落定后的痕迹指的必须还是
+    // 这一轮落定的光标，绝不能是停掉的那一首。
+    expect(
+      await prefs.readString(StorageKeys.currentId),
+      isNot(ids.last),
+      reason: '无论哪条写侧路径，都不许把停掉的那首重新写回现场',
+    );
+    // 注意（留给裁定）：`restore()` 自己按 R8 走了「只读不写」，但自愈批次
+    // 收尾那一次 `persist()` 里含 `_syncPrefsTrace()`，仍会按当前列表把两份
+    // 痕迹重写一遍 —— 于是这里读回的是 R4 落定的第一首（而不是「保持不动」）。
+    // 这与 M3 要排除的「复活停过的歌」不冲突，但 R8 那句「损坏的快照不许改写
+    // 现场」目前只覆盖 restore() 这一条腿，覆盖不到回填收尾。
+    expect(
+      await prefs.readJson(StorageKeys.order),
+      ids,
+      reason: '回填收尾把陈旧的那份 order 纠正成现场顺序（persist 的既有规则）',
     );
   });
 }

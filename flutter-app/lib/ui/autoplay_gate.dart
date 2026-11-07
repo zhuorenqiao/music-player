@@ -105,6 +105,23 @@ class _AutoplayGestureGateState extends State<AutoplayGestureGate> {
     });
   }
 
+  /// 收摊：pointer-up / cancel 把这个 id 从认领表里划掉（第 3 轮 M5）。
+  ///
+  /// 正常路径用不到它 —— 网关自己看到过的那次 down，其微任务已经把 id 处理掉了
+  /// （认领就 remove、没认领就根本不在表里）。它清的是**网关没观察到的 claim**：
+  /// 上面还有 Overlay / 对话框之类吃掉了 down，而子树里的 [GestureOwnedRegion]
+  /// 仍然登记了一次认领。这样的 id 会永远留在表里，而 Flutter 是**回收** pointer
+  /// id 的（4 个一套），于是下一次同样 id 的空白点击会被当成「控件自己的」而
+  /// 白白吞掉一次手势 —— 少一格重试额度，还是那种复现不出来的少。
+  ///
+  /// 同样排一条微任务：微任务是 FIFO，down 那条先排先跑，所以这里绝不会抢在
+  /// 「这一次算不算空白手势」的决定之前把认领记录抹掉（那样点播放按钮就会
+  /// 被算成两次手势，正是 R7 要挡的）。
+  void _releasePointer(PointerEvent event) {
+    final pointer = event.pointer;
+    scheduleMicrotask(() => _claimedPointers.remove(pointer));
+  }
+
   void _gesture() {
     if (!mounted) return;
     unawaited(context.read<PlayerState>().userGesture());
@@ -117,6 +134,9 @@ class _AutoplayGestureGateState extends State<AutoplayGestureGate> {
       // 这正是原版 `document` 上那条 pointerdown 的覆盖面。
       behavior: HitTestBehavior.translucent,
       onPointerDown: _onPointerDown,
+      // 认领表只在网关自己那条微任务里出栈，漏进去的 id 由这两条收摊（M5）。
+      onPointerUp: _releasePointer,
+      onPointerCancel: _releasePointer,
       child: _GestureClaimScope(claim: _claimedPointers.add, child: widget.child),
     );
   }
