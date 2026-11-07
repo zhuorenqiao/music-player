@@ -33,6 +33,10 @@ class RecordingRecent implements RecentRecorder {
 class RecordingToasts implements ToastSink {
   final List<String> messages = [];
 
+  /// 经 [error] 发出的那几条（第 3 轮 I2 要断言「放弃」那句是**错误级**）。
+  /// 加记一路，不动 [messages]，既有用例的断言一字未改。
+  final List<String> errors = [];
+
   @override
   void show(String message, {String key = '', int durationMs = 3200}) =>
       messages.add(key.isEmpty ? message : '$message[$key]');
@@ -41,7 +45,10 @@ class RecordingToasts implements ToastSink {
   void info(String message) => show(message);
 
   @override
-  void error(String message) => show(message);
+  void error(String message) {
+    errors.add(message);
+    show(message);
+  }
 }
 
 class _Scheduled {
@@ -561,8 +568,58 @@ void main() {
 
       // 首次 + 最多 3 次重试
       expect(driver.calls.where((call) => call == 'play').length, 1 + 3);
-      // 用完了也不会假装好了：提示还在
-      expect(c.blockedMessage, isNotNull);
+      // 第 3 轮 I2 改写的一句：从前这里期望「额度用完了提示还挂着」，而挂着的那条
+      // 横幅带一颗「继续播放」按钮，按钮再点已经什么都不做了 —— 等于一个永远不动的
+      // 死键。原版在同一位置（`src/state/player.tsx:204-208`）撤提示 + 报错，
+      // 这里跟着改成「撤横幅」，重试额度的上限（上面那句 1 + 3）一字未动。
+      expect(c.blockedMessage, isNull);
+    });
+
+    // 第 3 轮 I2：额度用尽那条路从前只有一句 `return`，静默。
+    test('重试额度用尽后横幅撤下并明确提示点播放按钮', () async {
+      final driver = FakeAudioDriver()
+        ..playThrows = StateError('NotAllowedError: play blocked');
+      final toasts = RecordingToasts();
+      final c = build(
+        playlist: Playlist.fromTracks([t('1')]),
+        driver: driver,
+        toasts: toasts,
+      );
+
+      await c.playTrack('1', autoplay: true);
+      await settle();
+      expect(c.blockedMessage, kAutoplayBlockedMessage);
+
+      // 3 次额度 + 第 4 次（用尽那一次，不再碰内核）
+      for (var i = 0; i < 4; i++) {
+        await c.userGesture();
+        await settle();
+      }
+
+      expect(
+        c.blockedMessage,
+        isNull,
+        reason: '还要留着横幅就是留一个点不动的死按钮（原版 hideNotice()）',
+      );
+      expect(c.view.value.blocked, isNull, reason: '界面读的是视图快照，一并撤掉');
+      expect(
+        toasts.errors,
+        contains('仍无法自动恢复播放，请点击播放按钮'),
+        reason: '原版 player.tsx:206 是 error 级，这句文案逐字照搬',
+      );
+
+      // 第 5 次手势：已经放弃自动恢复，一次内核都不许再碰。
+      driver.calls.clear();
+      await c.userGesture();
+      await settle();
+      expect(driver.calls, isEmpty);
+      expect(
+        toasts.errors.where(
+          (message) => message == '仍无法自动恢复播放，请点击播放按钮',
+        ),
+        hasLength(1),
+        reason: '放弃只该说一句，之后每次点击再喊就成了刷屏',
+      );
     });
 
     // 终审 I5：手势入口从「只有继续播放按钮」扩成「被拦状态下任何一次真实交互」，

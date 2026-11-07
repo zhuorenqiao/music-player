@@ -19,6 +19,14 @@ const Map<PlayErrorKind, String> kPlayErrorMessages = {
 /// 原版是「浏览器阻止了自动播放」；Flutter 侧对应音频焦点被抢（spec §4）。
 const String kAutoplayBlockedMessage = '无法开始播放，请点击播放按钮开始';
 
+/// 手势重试额度（`kMaxAutoplayRetries`）用尽之后的文案（第 3 轮 I2）。
+///
+/// 移植新增的第五类错误文案：原版 `src/state/player.tsx:204-208` 在同样位置做的是
+/// `clearPendingAutoplay(); hideNotice(); show('仍无法自动恢复播放，请点击播放按钮', 'error')`。
+/// 从前这里只是一句静默 `return`，而那条横幅上还挂着一颗「继续播放」按钮 ——
+/// 按钮再点已经什么都不做了，等于一个永远不动的死键。文案逐字照搬原版，不许改写。
+const String kAutoplayGaveUpMessage = '仍无法自动恢复播放，请点击播放按钮';
+
 /// 可播放的扩展名白名单，11 项与原版一致。
 const Set<String> kAudioExtensions = {
   'mp3',

@@ -177,7 +177,11 @@ void main() {
       kMaxAutoplayRetries,
       reason: '任意手势也不许无限打转（原版 MAX_AUTOPLAY_RETRIES 同一档）',
     );
-    expect(player.blockedMessage, isNotNull);
+    // 第 3 轮 I2 改写的一句：从前这里期望「额度用完了横幅还挂着」。挂着的那条
+    // 横幅带一颗「继续播放」，而它往后再点已经什么都不做 —— 死按钮。原版在
+    // 同一位置（`src/state/player.tsx:204-208`）撤提示并给一句错误级说明，
+    // 现在这条全局手势链路也一样收手。上面那句额度上限一字未动。
+    expect(player.blockedMessage, isNull);
   });
 
   /// 终审 R3：第 1 轮那批用例全用「永远抛错的驱动」，所以看不见另一半 ——

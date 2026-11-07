@@ -18,6 +18,7 @@ import 'dart:math' show max;
 import 'package:flutter/foundation.dart';
 
 import 'audio_player.dart';
+import 'play_error.dart';
 import 'play_mode.dart';
 import 'playlist.dart';
 import 'track.dart';
@@ -388,7 +389,9 @@ class TransportController {
   }
 
   /// 页面里一次真实交互：把被拦住的播放再拉一次，最多 [kMaxAutoplayRetries] 次。
-  /// 用完就保持 [blockedMessage] 不变 —— 让用户自己点播放，绝不无限打转。
+  /// 额度用尽就**当场收手**：撤掉横幅、给一句 [kAutoplayGaveUpMessage] 的错误提示，
+  /// 让用户自己点播放按钮 —— 既不许无限打转，也不许留一条还在、但点了没反应的
+  /// 死横幅（第 3 轮 I2，原版 `player.tsx:204-208` 同一支）。
   /// 反过来，只要这一次真的出声了就当场把横幅收掉（终审 R3）。
   ///
   /// 重试走**原地续播**（终审 I5，对齐原版 `resumeAutoplay()` 里那句
@@ -407,7 +410,22 @@ class TransportController {
       _clearBlocked();
       return;
     }
-    if (_blockedRetries >= kMaxAutoplayRetries) return;
+    if (_blockedRetries >= kMaxAutoplayRetries) {
+      // 额度用尽＝这一轮自动恢复放弃了。原版在同一位置（`player.tsx:204-208`）
+      // 做的是 `clearPendingAutoplay()` + `hideNotice()` + 一句 error 级提示，
+      // 三支缺一不可：只 `return` 的话横幅还在，而横幅上那颗「继续播放」
+      // （`ui/panel.dart`）此后每次点击都走到这里原样返回 —— 用户面对的是一个
+      // 永远不动的死按钮，还一句解释都没有（第 3 轮 I2）。
+      //
+      // 撤状态走 [_clearBlocked]（连额度一起归零）：横幅一撤，后面的手势在
+      // 「没有被拦」那句就返回，不会再碰内核；真又被拦住了（新的 BlockedEvent）
+      // 才重新拿到一整轮额度，与原版同一外延。
+      _clearBlocked();
+      // 错误级 + 固定 key：`ToastState.error` 自带 `error:<文案>` 去重，
+      // 同一条不叠行、重新计时（第 3 轮 I2 第 3 条的规矩）。
+      toasts.error(kAutoplayGaveUpMessage);
+      return;
+    }
     _blockedRetries += 1;
     if (player.track?.id == track.id) {
       await player.resume();
