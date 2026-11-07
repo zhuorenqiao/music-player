@@ -13,6 +13,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/core/storage_keys.dart';
+import 'package:light_music/library/duration_probe.dart';
 import 'package:light_music/library/import_service.dart';
 import 'package:light_music/library/library_repository.dart';
 import 'package:light_music/metadata/cover_image.dart';
@@ -304,7 +305,7 @@ void main() {
   LibraryState buildEnrichingState({
     LibraryRepository? repo,
     Playlist? target,
-    Future<double> Function(String path)? probe,
+    Future<DurationProbeOutcome> Function(String path)? probe,
   }) => LibraryState(
     prefs: prefs,
     repo: repo ?? LibraryRepository(directory: dir.path),
@@ -325,7 +326,9 @@ void main() {
       textFrame('TALB', '认了吧'),
       apicFrame('image/png', onePixelPng),
     ]);
-    final enriching = buildEnrichingState(probe: (path) async => 187.5);
+    final enriching = buildEnrichingState(
+      probe: (path) async => const DurationProbeOutcome(187.5),
+    );
     addTearDown(enriching.dispose);
 
     await enriching.importPaths([file.path]);
@@ -356,7 +359,7 @@ void main() {
     final counting = _CountingRepository(directory: dir.path);
     final enriching = buildEnrichingState(
       repo: counting,
-      probe: (path) async => 120,
+      probe: (path) async => const DurationProbeOutcome(120),
     );
     addTearDown(enriching.dispose);
 
@@ -372,7 +375,9 @@ void main() {
 
   test('回填批次收尾会通知界面（不只是改了内存对象）', () async {
     final file = taggedFile('a.mp3', [textFrame('TIT2', '甲')]);
-    final enriching = buildEnrichingState(probe: (path) async => 90);
+    final enriching = buildEnrichingState(
+      probe: (path) async => const DurationProbeOutcome(90),
+    );
     addTearDown(enriching.dispose);
 
     var notifications = 0;
@@ -444,7 +449,7 @@ void main() {
       repo: counting,
       probe: (path) async {
         probes += 1;
-        return 300;
+        return const DurationProbeOutcome(300);
       },
     );
     addTearDown(fresh.dispose);
@@ -488,9 +493,10 @@ void main() {
     );
 
     var probes = 0;
-    Future<double> countingProbe(String path) async {
+    Future<DurationProbeOutcome> countingProbe(String path) async {
       probes += 1;
-      return double.nan; // 「探不出」：真实曲库里就是有这么一批文件
+      // 「探不出」：真实曲库里就是有这么一批文件
+      return const DurationProbeOutcome(double.nan);
     }
 
     // 第一次启动：没有探测标记 → 补跑一次，并把标记随批次收尾落盘。
@@ -541,9 +547,9 @@ void main() {
     );
 
     var probes = 0;
-    Future<double> countingProbe(String path) async {
+    Future<DurationProbeOutcome> countingProbe(String path) async {
       probes += 1;
-      return 187.5;
+      return const DurationProbeOutcome(187.5);
     }
 
     final first = buildEnrichingState(probe: countingProbe);
@@ -583,7 +589,9 @@ void main() {
       ),
     );
 
-    final fresh = buildEnrichingState(probe: (path) async => 100);
+    final fresh = buildEnrichingState(
+      probe: (path) async => const DurationProbeOutcome(100),
+    );
     addTearDown(fresh.dispose);
     await fresh.restore();
     await fresh.enrichmentSettled;

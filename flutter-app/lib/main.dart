@@ -121,7 +121,10 @@ Future<AppBootstrap> buildBootstrap({
     toasts: toasts,
     covers: const CoverImageWriter(),
     coverDirectory: '$dataDirectory/covers',
-    durationProbe: probe.call,
+    // 交出去的是**带来路**的那条（`probeOutcome`）而不是裸秒数：回填批次
+    // 要不要给这条曲目记「已探测」标记，取决于探不出是**超时**还是
+    // **这文件真没有时长**（第 3 轮 C1）。两条从前都是 NaN，接错编译不过。
+    durationProbe: probe.probeOutcome,
   );
   final recent = RecentState(recentStore);
   final library = LibraryState(

@@ -29,6 +29,33 @@ const int kDurationProbeTimeoutMs = 3000;
 /// 经 `closeOpener` 关（终审 A2）。
 typedef DurationOpener = Future<double> Function(String source);
 
+/// 一次探测的结论：**多少秒** + **这个结论是怎么来的**（第 3 轮 C1）。
+///
+/// 为什么不能只给一个 `double`：从前超时也被归成 NaN，于是调用方拿到
+/// 「探不出」这同一个形状，却分不清背后是两种完全不同的事 ——
+///   * [timedOut] = 内核在预算内**没来得及回话**（U 盘还没挂上、大 FLAC 首次
+///     打开慢、媒体线程排队）。这是暂时的，下次启动该再看一眼；
+///   * `seconds` 非有限 / 非正而 `timedOut` 为假 = 文件**确实没有时长可报**
+///     （或压根没有这个容器信息）。这是结论，重复探测一万次也是这个结论。
+/// 探测标记 `Track.metadataProbed` 只能记给后者：把前者也记上，就是把一次
+/// 暂时的失败冻结成永久降级，整条自愈管路再也不看它第二眼（C1 的 Critical
+/// 正在这里）。两种情况返回值统统是 NaN，所以必须把「为什么是 NaN」单独带出来。
+class DurationProbeOutcome {
+  /// 探到的秒数（非有限 / 0 / 负数统统算「这个文件没有时长」）。
+  const DurationProbeOutcome(this.seconds) : timedOut = false;
+
+  /// 预算内 opener 没回话：值一定是「未知」，但**原因**是超时。
+  const DurationProbeOutcome.timedOut()
+    : seconds = double.nan,
+      timedOut = true;
+
+  final double seconds;
+  final bool timedOut;
+
+  /// 真的探到了一个可用时长。
+  bool get isKnown => seconds.isFinite && seconds > 0;
+}
+
 /// 排队 + 超时 + 归一：把「一个能开媒体的 opener」变成「导入服务要的探针」。
 ///
 /// [close] 是它持有原生资源的唯一释放点（终审 A2）：`MediaKitDurationOpener`
@@ -62,13 +89,21 @@ class DurationProbe {
   int _inFlight = 0;
   int _peak = 0;
 
-  /// 探测一次。可以直接当函数值递给 `ImportService.durationProbe`。
+  /// 探测一次，只要秒数（NaN = 未知）。
   ///
-  /// 「关掉之后不再探」这条判定在**入列那一刻**就做（[call] 自己），而不是等
+  /// 「关掉之后不再探」这条判定在**入列那一刻**就做（[probeOutcome] 自己），而不是等
   /// 队列真跑到它时才看标记：否则一次 [close] 会把已经排在前面的那一首
   /// 悄悄变成 NaN，而它其实正要被排队等它结果的调用方当作「这一首的时长」。
-  Future<double> call(String source) {
-    if (_closed) return Future<double>.value(double.nan);
+  ///
+  /// 需要分清「超时」与「这个文件真的没有时长」的调用方（`ImportService` 记
+  /// 探测标记那条路，第 3 轮 C1）请用 [probeOutcome]。
+  Future<double> call(String source) =>
+      probeOutcome(source).then((outcome) => outcome.seconds);
+
+  /// 探测一次并带上结论的**来路**（探到 / 探不出 / 被超时掐掉）。
+  Future<DurationProbeOutcome> probeOutcome(String source) {
+    // 关完之后：未知，但**不是超时**（没有内核可等，谈不上预算）。
+    if (_closed) return Future.value(const DurationProbeOutcome(double.nan));
     // 排到队尾再跑：`_tail` 只在上一个**真正结束**（含清理）之后才 complete，
     // 所以这里能保证一次只开一个媒体。
     final next = _tail.then((_) => _probeOne(source));
@@ -94,17 +129,27 @@ class DurationProbe {
     }
   }
 
-  Future<double> _probeOne(String source) async {
+  Future<DurationProbeOutcome> _probeOne(String source) async {
     _inFlight += 1;
     if (_inFlight > _peak) _peak = _inFlight;
     try {
       final value = await _open(source).timeout(_timeout);
       // 非有限 / 0 / 负数统统算「没探到」：未知时长必须保持 NaN。
-      if (!value.isFinite || value <= 0) return double.nan;
-      return value;
+      // 这是**文件的结论**，不是暂时的失败 —— 所以 timedOut 为假。
+      if (!value.isFinite || value <= 0) {
+        return const DurationProbeOutcome(double.nan);
+      }
+      return DurationProbeOutcome(value);
+    } on TimeoutException {
+      // 超时单独归队（第 3 轮 C1）：以前它和下面那条 `catch` 共用一个 NaN，
+      // 调用方拿到「探不出」这个形状时分不清该不该再来一次，于是探测标记
+      // 要么记早了（永久冻结一次暂时失败）、要么记晚了（每启动重跑整库）。
+      return const DurationProbeOutcome.timedOut();
     } catch (_) {
-      // 超时、平台异常、opener 自己抛 —— 一律按「未知」处理，绝不冒泡。
-      return double.nan;
+      // 平台异常、opener 自己抛 —— 一律按「未知」处理，绝不冒泡。
+      // 注意这里**不算超时**：内核明明白白回了话（「这条不行」），
+      // 再来一遍也是同样的答案，所以调用方可以记标记。
+      return const DurationProbeOutcome(double.nan);
     } finally {
       _inFlight -= 1;
     }

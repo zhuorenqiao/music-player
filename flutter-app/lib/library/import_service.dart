@@ -36,6 +36,7 @@ import '../playback/track.dart';
 import '../playback/track_handle.dart';
 import '../playback/transport_controller.dart' show ToastSink;
 import 'audio_filter.dart';
+import 'duration_probe.dart';
 
 /// 一次导入的结果。
 class ImportResult {
@@ -112,7 +113,7 @@ class ImportService {
   /// 封面落盘目录（应用缓存目录下的 covers/）。
   final String? coverDirectory;
 
-  /// 时长探测：来源 → 秒（探不到给任意非有限值 / 非正数，保持「未知」）。
+  /// 时长探测：来源 → 结论（[DurationProbeOutcome]，含「是不是被超时掐掉的」）。
   ///
   /// 注入而不是在这里引播放器：导入属于数据层，探时长是平台能力，由装配层
   /// （`main.dart`）把内核那侧递进来 —— 生产上是 `DurationProbe` 包着的
@@ -122,7 +123,12 @@ class ImportService {
   /// 异步签名：真探测要等原生内核回报时长，同步版只能靠阻塞读，而那会冻住
   ///  isolate。实现必须在自己的预算内返回且绝不抛（排队 / 超时见
   /// `library/duration_probe.dart`）。
-  final Future<double> Function(String source)? durationProbe;
+  ///
+  /// 返回值为什么不是裸 `double`（第 3 轮 C1）：探测标记 `metadataProbed`
+  /// 只在「这个文件真的没有时长」时才许记，而**超时**是暂时的失败、记了就
+  /// 等于把这一个人永久冻结在降级状态。两路从前都只给 NaN，分不开。
+  /// 生产上接的是 `DurationProbe.probeOutcome`。
+  final Future<DurationProbeOutcome> Function(String source)? durationProbe;
 
   /// 新曲目入列后回调（落库用）。fire-and-forget，出错不影响导入结果。
   final Future<void> Function(List<String> ids)? onImported;
@@ -222,14 +228,21 @@ class ImportService {
   ///
   /// 任何失败（文件不在、读不了、SAF URI 用不了 dart:io、标签畸形）都只意味着
   /// 「这次没回填」，绝不抛：导入是用户点的按钮，不能因为一个坏文件整页崩掉。
-  Future<void> hydrateMetadata(Track track) async {
+  ///
+  /// 返回值是**这次到底有没有打开文件、读到过字节**（第 3 轮 C1）：调用方
+  /// （[_enrichQuiet]）用它决定要不要记那个持久的探测标记。false 只代表
+  /// 「什么都没看到」，绝不代表「这文件没标签」—— 两者混起来的代价见 [_enrichQuiet]。
+  Future<bool> hydrateMetadata(Track track) async {
     final live = playlist.byId(track.id) ?? track;
     final path = live.handle.pathish;
     final head = await _prefetchHead(path);
-    if (head == null) return;
+    // null 的含义按 [_prefetchHead] 自己的注释就是「文件不存在 / 打不开 /
+    // SAF URI 用不了 dart:io」，不是「标签为空」——所以这里如实报「没打开」。
+    if (head == null) return false;
     final source = ByteSource.fromFile(path, prefetched: head);
     final tags = await readAudioTags(source, fileName: live.handle.displayName);
-    if (!tags.hasAnyText && !tags.hasPicture) return;
+    // 打开了、也确实什么标签都没有：这是**结论**，同样报「打开了」。
+    if (!tags.hasAnyText && !tags.hasPicture) return true;
 
     final names = mergeTaggedNames(
       tags,
@@ -247,7 +260,7 @@ class ImportService {
         writer == null ||
         directory == null ||
         live.hasRealCover) {
-      return;
+      return true;
     }
     final saved = await writer.write(
       picture,
@@ -256,24 +269,36 @@ class ImportService {
       id: live.id,
     );
     if (saved != null) live.cover = saved;
+    return true;
   }
 
   /// 入列后的后台补全：标签 → 时长。
   ///
   /// 标签先跑，是为了让「文件名猜反了」的曲目在探时长之前就拿到正确的词
   /// （与原版 tagging.ts 的顺序一致）。时长只填空缺：已经有时长的不重探。
-  Future<void> _enrich(Track live) async {
-    await hydrateMetadata(live);
+  ///
+  /// 返回值 = 「这一条可以记探测标记」（第 3 轮 C1）：只有**真的读到过文件字节**
+  /// 而且**时长探针不是被超时掐断的**才许置位。「打开了、也确实没标签没时长」
+  /// 同样算可以记 —— 那是文件给的结论，R1 要的正是结论落一次盘就不再重跑。
+  Future<bool> _enrich(Track live) async {
+    // 这一路唯一的失败形状是「文件没打开」（打不开时 hydrate 什么都没读到）。
+    final opened = await hydrateMetadata(live);
     final probe = durationProbe;
-    if (probe == null || live.hasDuration) return;
+    if (probe == null || live.hasDuration) return opened;
     // 终审 R7：句柄自己说「能不能探」。SAF 的 `content://` 在 M1 开不了，
     // 让它进队列就是每首白等满 3000ms 预算换一个 NaN —— 而且这个 NaN 正好
     // 会和 R1 的「探不出」叠成反复重跑。标签那条照旧尽力（读不了就是读不了）。
-    if (!live.handle.canProbeDuration) return;
+    // 第 3 轮 I1 之后这条是**双保险**：谓词 `metadataIncomplete` 已经按同一个
+    // 能力位把这类曲目挡在队列外，挡不住的路径（导入那一条）仍然归这里兜。
+    if (!live.handle.canProbeDuration) return opened;
     // 探时长排在标签之后、也排在整批完成信号之前：批次的落库收尾会连它一起落盘。
-    final value = await probe(live.handle.pathish);
+    final outcome = await probe(live.handle.pathish);
+    // 超时 = 内核这次没来得及回话（大文件、盘没挂稳、媒体线程排队），
+    // 不是「这文件没有时长」。记了标记就永久停在 `--:--`，一点自愈都不剩（C1）。
+    if (outcome.timedOut) return false;
     // NaN / 0 / 负数 / 无穷都算「探不出来」：未知时长必须保持 NaN，不是 0。
-    if (value.isFinite && value > 0) live.duration = value;
+    if (outcome.isKnown) live.duration = outcome.seconds;
+    return opened;
   }
 
   /// [_enrich] 的「绝不抛」外壳：失败只意味着这次没回填。
@@ -281,21 +306,33 @@ class ImportService {
   /// 必须存在：批次的完成信号是 `Future.wait` 出来的，一条抛错会把整批的落库
   /// 收尾一起带走（终审 C1 要的就是那次收尾）。
   ///
-  /// `finally` 里那一句是终审 R1 的核心：**不管这一条补上了什么、探到了什么、
-  /// 还是整个文件都读不了**，都给它记一个持久的「已探测」标记。冷启动自愈
-  /// 只认这个标记 —— 字段缺不缺不是「没回填过」的证据（见 [metadataIncomplete]），
-  /// 不记就是每次启动把整个曲库重跑一遍。标记随那一次批次收尾 `persist()`
-  /// 一起落盘；批次里任何一条都在这个外壳里，所以没有漏记的路径。
+  /// 标记这一记是终审 R1 的**根治点**，也是第 3 轮 C1 改的那一刀：从前这里
+  /// 写在 `finally` 里、无条件置位，于是「文件根本没打开」「探针被超时掐了」
+  /// 这两支什么都没干成的路也照样记上「已探测」。重复导入同一个路径是 no-op
+  /// （`isNew == false`），谓词此后恒为 false —— 除了改档案格式之外没有任何
+  /// 自愈路径，一次暂时的失败就被冻结成永久降级（歌手/歌名猜反、时长永远
+  /// `--:--`）。现在只有 [_enrich] 明确回报「看到了结论」才记账，抛错同样不记。
+  ///
+  /// **接受那一侧的代价，别改回旧写法**：真的永久拔掉的盘会每次启动都重试
+  /// 一次。这不是回到 R1 之前那种整库重跑 —— 谓词里 `!metadataProbed` 那道
+  /// 闸还在，每条曲目**一次启动最多重试一次**、失败即不置位，也不会波及库里
+  /// 任何一条已经记上标记的曲目；探针本身还是串行的，预算封顶 3000ms/首。
+  /// 换来的是「插回硬盘的下次启动就能自愈」，这笔账是划算的。
+  ///
+  /// 标记随那一次批次收尾 `persist()` 一起落盘。
   Future<void> _enrichQuiet(Track live) async {
+    var settled = false;
     try {
-      await _enrich(live);
+      settled = await _enrich(live);
     } catch (_) {
       // 回填是增值项：导入已经成功，这里不许冒泡。
-    } finally {
-      // 记在**列表里的活对象**上（文件头第 2 条同一个理由：改到克隆副本上
-      // 就等于没改，标记落不了盘）。
-      (playlist.byId(live.id) ?? live).metadataProbed = true;
+      // 抛错也**不记账**（第 3 轮 C1）：什么都没看到，就还是欠着一次重试。
+      settled = false;
     }
+    if (!settled) return;
+    // 记在**列表里的活对象**上（文件头第 2 条同一个理由：改到克隆副本上
+    // 就等于没改，标记落不了盘）。
+    (playlist.byId(live.id) ?? live).metadataProbed = true;
   }
 
   /// 一批回填的完成信号；空批次给 null（调用方据此决定要不要再落一次库）。
@@ -444,10 +481,19 @@ String displayNameForSource(String source) {
 /// 标记为假时仍然要再看一眼字段：全都齐了就没必要开文件，于是老档案升级后
 /// 只补跑一次、之后永远不再重跑（`metadataProbed` 与字段两道闸缺一即跳过）。
 ///
-/// 只认本地文件：SAF / 远程来源在 M1 读不了字节，判成「缺」也只会白跑一遍。
+/// 准入条件为什么是**能力位**而不是 `isLocal`（第 3 轮 I1）：SAF 的
+/// `content://` 在 M1 既开不了字节也探不了时长，判成「缺」就是每次启动白跑
+/// 一遍；更关键的是它**也不该被记上探测标记**（[_enrichQuiet] 那一刀），否则
+/// M2 真接上 SAF 读取之后，这批曲目在谓词眼里永远是「已经管过了」，新能力
+/// 对它们隐形。用句柄自己报的能力位，M2 把 `canProbeDuration` 翻成真值的那一刻，
+/// 这些曲目自动回到未探测状态、自愈管路自动接上。远程 URL 依旧被这同一句
+/// 挡在门外（句柄开不了字节），与从前 `!isLocal` 的外延一致。
 bool metadataIncomplete(Track track) {
-  if (!track.isLocal) return false;
-  // 探测过的（包括「探不出东西」的）永远不再重跑 —— 这条才是回归的根治点。
+  // 能力判断：句柄自己说「这条来源我到底能不能读」。
+  if (!track.handle.canProbeDuration) return false;
+  // 探测过的（包括「打开了、确实什么也没有」的）永远不再重跑 —— 这条才是
+  // 反复重跑的根治点。**没打开过 / 探针超时** 的不在这里（第 3 轮 C1：
+  // 那种一次什么都没干成的尝试不许记账），于是下次启动还会再看一眼。
   if (track.metadataProbed) return false;
   return _metadataFieldsMissing(track);
 }

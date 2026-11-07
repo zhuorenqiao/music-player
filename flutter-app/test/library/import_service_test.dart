@@ -6,14 +6,18 @@
 // （`Playlist.addAt` 会经 toJson/normalizeTrack 重建对象），盯着本地变量看不出来。
 // 带标签的用例用 tag_fixtures 现造 ID3v2 字节写进临时文件，走的是真实的
 // 「读文件 → 解析 → 回填」，不 mock 解析器。
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:light_music/library/duration_probe.dart';
 import 'package:light_music/library/import_service.dart';
 import 'package:light_music/metadata/cover_image.dart';
 import 'package:light_music/playback/playlist.dart';
+import 'package:light_music/playback/track.dart';
+import 'package:light_music/playback/track_handle.dart';
 import 'package:light_music/playback/transport_controller.dart';
 
 import '../metadata/tag_fixtures.dart';
@@ -283,7 +287,7 @@ void main() {
       toasts: RecordingToasts(),
       durationProbe: (path) async {
         probed.add(path);
-        return 187.5;
+        return const DurationProbeOutcome(187.5);
       },
     );
 
@@ -324,7 +328,7 @@ void main() {
       // 异步签名：真探测要等原生内核回报时长（I1），假的也得是同一个形态。
       durationProbe: (path) async {
         probed.add(path);
-        return path.contains('slow') ? double.nan : 187.5;
+        return DurationProbeOutcome(path.contains('slow') ? double.nan : 187.5);
       },
     );
 
@@ -483,5 +487,187 @@ void main() {
     expect(result.rejectedNames, isEmpty);
     expect(toasts.messages, isEmpty);
     expect(playlist.size, 0);
+  });
+
+  // -- 第 3 轮 C1 / I1：探测标记只能记给「真的看过这个文件」的那几条路 --------
+  //
+  // 第 2 轮 R1 把「要不要再补跑一次」全押在落盘的 `metadataProbed` 上，方向是对的；
+  // 但置位点写在外壳的 `finally` 里，于是**整条管路什么都没干**的那一支（文件根本
+  // 没打开、时长探针被超时掐断）也照样记上了「已探测」。重复导入同一个路径是
+  // no-op，谓词此后恒为 false —— 除了改档案格式之外没有任何自愈路径，一次
+  // 暂时的「盘没挂上」就被冻结成永久降级（歌手/歌名猜反、时长 `--:--` 永远留着）。
+  // 这一组用例钉的就是「标记只记给结论，不记给失败」。
+
+  Track restoredFromArchive(String path, {String title = '白玫瑰', TrackHandle? handle}) => Track(
+        id: localIdFor(path),
+        src: path,
+        title: title,
+        artist: '陈奕迅',
+        duration: double.nan,
+        isLocal: true,
+        handle: handle,
+      );
+
+  test('文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来', () async {
+    // 档案里早就有这条记录，文件这一次没挂上（U 盘 / 网盘尚未就位、或被别的进程占用）。
+    final path = '${root.path}${Platform.pathSeparator}陈奕迅 - 白玫瑰.mp3';
+    final playlist = Playlist(tracks: const []);
+    playlist.replaceAll([restoredFromArchive(path)]);
+    var probes = 0;
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      // 与真内核同一个脾气：文件不在就是探不出（不是超时，是「这次没有结果」）。
+      durationProbe: (source) async {
+        probes += 1;
+        return File(source).existsSync()
+            ? const DurationProbeOutcome(187.5)
+            : const DurationProbeOutcome(double.nan);
+      },
+    );
+
+    await service.rehydrateIncomplete();
+
+    expect(
+      playlist.tracks.single.metadataProbed,
+      isFalse,
+      reason: '什么都没读到的这一次不算结论，记了标记就再也没人来看第二眼',
+    );
+    expect(
+      metadataIncomplete(playlist.tracks.single),
+      isTrue,
+      reason: '自愈通路还活着：这条仍然在下一次的候选里',
+    );
+    expect(playlist.tracks.single.duration.isNaN, isTrue);
+
+    // 盘插回来了：同一条记录、同一个服务，第二次启动必须把标签与时长补上。
+    File(path).writeAsBytesSync(withId3([
+      textFrame('TIT2', '红玫瑰'),
+      textFrame('TPE1', '陈奕迅'),
+    ]));
+    await service.rehydrateIncomplete();
+
+    final healed = playlist.tracks.single;
+    expect(healed.title, '红玫瑰', reason: '补跑必须真的把标签回填上');
+    expect(healed.duration, 187.5, reason: '时长也一样补上');
+    expect(healed.metadataProbed, isTrue, reason: '这次真的看过文件，才许记账');
+    expect(probes, 2, reason: '一次启动最多重试一次，两条都在这一次的份额里');
+  });
+
+  test('时长探针超时的曲目不记探测标记', () async {
+    // 文件在盘上、标签读得出来（hydrate 这一路是成功的），只有内核在预算里没回话：
+    // 大 FLAC 首次打开、媒体线程排队都会这样。这跟「这文件真的没有时长」不是一回事。
+    final file = writeFile(
+      '慢文件.flac',
+      withId3([textFrame('TIT2', '甲'), textFrame('TPE1', '陈奕迅')]),
+    );
+    final never = Completer<double>();
+    final probe = DurationProbe((source) => never.future, timeoutMs: 5);
+    addTearDown(probe.close);
+
+    final playlist = Playlist(tracks: const []);
+    playlist.replaceAll([restoredFromArchive(file.path)]);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      // 走**真探针**而不是假函数：装配层那条线接错（交成 `probe.call`）也要被这条抓住。
+      durationProbe: probe.probeOutcome,
+    );
+
+    await service.rehydrateIncomplete();
+
+    expect(
+      playlist.tracks.single.metadataProbed,
+      isFalse,
+      reason: '超时是暂时的失败；记上标记就等于把这一个人永久冻在 --:--',
+    );
+    expect(playlist.tracks.single.title, '甲', reason: '标签那半截是真读到的，照样留下');
+    expect(
+      metadataIncomplete(playlist.tracks.single),
+      isTrue,
+      reason: '下一次启动还要再探一次（标题已不是文件名猜值，靠时长这一条撑住）',
+    );
+  });
+
+  test('打开了但确实没标签的曲目只治一次', () async {
+    // 守 R1 的正向结论别被 C1 这次改回去：文件能打开、里面确实什么标签都没有、
+    // 时长也确实探不出来（**不是**超时）—— 这就是结论，第二次启动不许再开文件。
+    final file = writeFile('空壳.mp3');
+    final playlist = Playlist(tracks: const []);
+    playlist.replaceAll([restoredFromArchive(file.path, title: '空壳')]);
+    var probes = 0;
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      durationProbe: (source) async {
+        probes += 1;
+        return const DurationProbeOutcome(double.nan);
+      },
+    );
+
+    await service.rehydrateIncomplete();
+
+    expect(probes, 1);
+    expect(
+      playlist.tracks.single.metadataProbed,
+      isTrue,
+      reason: '看过了、确实什么都没有 —— 这就是 R1 要止住的那次反复重跑',
+    );
+    expect(metadataIncomplete(playlist.tracks.single), isFalse);
+
+    probes = 0;
+    expect(
+      service.rehydrateIncomplete(),
+      isNull,
+      reason: '第二次启动连队列都不该进（没有要补的），更不该再探一次',
+    );
+    expect(probes, 0);
+  });
+
+  test('content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）', () async {
+    const safSource =
+        'content://com.android.externalstorage.documents/document/'
+        'primary%3AMusic%2Fa.flac';
+    final playlist = Playlist(tracks: const []);
+    var probes = 0;
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      durationProbe: (source) async {
+        probes += 1;
+        return const DurationProbeOutcome(200);
+      },
+    );
+
+    // 导入侧：M1 把 SAF 串存成 FilePathHandle（T22 才换 SafUriHandle），
+    // 这条路上 dart:io 永远开不了它 —— 一个字都没读到，就没有资格记账。
+    final result = await service.importPaths([safSource]);
+    await result.enrichment;
+    expect(
+      playlist.tracks.single.metadataProbed,
+      isFalse,
+      reason: '记上就是替 M2 宣布「这条不用管」，将来接上 SAF 读取也看不见',
+    );
+
+    // 谓词侧：准入条件换成能力位之后，这类曲目**不进回填队列**（也就每次启动白跑一次都没有）。
+    playlist.replaceAll([
+      restoredFromArchive(safSource, handle: SafUriHandle(safSource, 'a.flac')),
+    ]);
+    expect(
+      service.rehydrateIncomplete(),
+      isNull,
+      reason: '句柄自己说不能探 → 整个回填都不排这一条',
+    );
+    expect(
+      metadataIncomplete(playlist.tracks.single),
+      isFalse,
+      reason: '谓词按能力位排除（第 2 轮 R7 的探针守卫仍在，双保险）',
+    );
+    expect(playlist.tracks.single.metadataProbed, isFalse);
+    expect(
+      probes,
+      0,
+      reason: '两条路都挡在探针之前（R7 的守卫 + I1 的谓词），一次也不许白等 3 秒',
+    );
   });
 }

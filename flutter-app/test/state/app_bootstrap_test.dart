@@ -383,6 +383,20 @@ void main() {
     expect(bootstrap.library.tracks.map((t) => t.id), ['a']);
     expect(bootstrap.player.volume, closeTo(0.33, 1e-9));
     expect(bootstrap.player.muted, isFalse);
+
+    // 这条档案里的记录没有 duration（`/m/a.flac` 也不在盘上），所以它是自愈回填
+    // 的候选：第 3 轮 I1 把谓词的准入从 `isLocal` 换成句柄能力位之后，这类
+    // 「只有文件名 + 纯路径」的老记录**开始**进队列了（该进 —— 路径是真能开的）。
+    // 于是批次收尾那一次 `persist()` 正在后台写 `dir`，而 tearDown 要删它。
+    // 等它落完：既让断言见到最终状态，也不给 Windows 留一个「删不掉的目录」。
+    await bootstrap.library.enrichmentSettled;
+    // 文件根本不在盘上 → 这次什么都没读到，不许记探测标记（第 3 轮 C1 同一条规则
+    // 在装配层这一侧的落点）。
+    expect(
+      bootstrap.library.tracks.single.metadataProbed,
+      isFalse,
+      reason: '装配层这条真链路也一样：打不开文件就不记账',
+    );
   });
 
   test('通知权限只查询不申请：结果进 AppBootstrap，且能再查一次', () async {
