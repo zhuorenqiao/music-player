@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../core/name_split.dart';
 import 'byte_reader.dart';
 import 'id3.dart';
 import 'mp4.dart';
@@ -192,18 +193,12 @@ Names mergeTaggedNames(TagResult tags, String fromName) {
   return Names(title: title, artist: artist, usedTags: usedTags);
 }
 
-/// 从文件名拆「歌手 - 曲名」：只在**第一个** ` - ` 处拆，左侧歌手、右侧曲名，
-/// 两侧去空白。
-///
-/// 拆不出（没有分隔符、分隔符在开头、任一侧为空）时返回（空歌手, 原文）。
-/// 这是原版 `splitArtistTitle` 的同名实现；M2 把它迁到 `lyrics/` 时调用方不变。
+/// 从文件名拆「歌手 - 曲名」。规则的唯一真源是 `core/name_split.dart`
+/// （对译 `src/lib/lyrics-source.js:117`，被文件名拆分、手动歌词配对与
+/// 查询归一三处共用）。这里保留 M1 的记录返回形态：拆不出时给
+/// （空歌手, 原文），调用方不必处理 null。
 ({String artist, String title}) splitArtistTitle(String raw) {
-  final text = raw.trim();
-  if (text.isEmpty) return (artist: '', title: '');
-  final at = text.indexOf(' - ');
-  if (at <= 0) return (artist: '', title: text);
-  final left = text.substring(0, at).trim();
-  final right = text.substring(at + 3).trim();
-  if (left.isEmpty || right.isEmpty) return (artist: '', title: text);
-  return (artist: left, title: right);
+  final split = splitArtistTitleOrNull(raw);
+  if (split != null) return split;
+  return (artist: '', title: raw.trim());
 }
