@@ -1,0 +1,130 @@
+[
+  {
+    "input": "",
+    "expected": ""
+  },
+  {
+    "input": "十年",
+    "expected": "十年"
+  },
+  {
+    "input": "陳奕迅",
+    "expected": "陈奕迅"
+  },
+  {
+    "input": "你好，世界",
+    "expected": "你好，世界"
+  },
+  {
+    "input": "幹麵好吃",
+    "expected": "干面好吃"
+  },
+  {
+    "input": "頭髮很長",
+    "expected": "头发很长"
+  },
+  {
+    "input": "裡面有鐘錶",
+    "expected": "里面有钟表"
+  },
+  {
+    "input": "皇后與後宮",
+    "expected": "皇后与后宫"
+  },
+  {
+    "input": "計算機程式",
+    "expected": "计算机程式"
+  },
+  {
+    "input": "資料庫",
+    "expected": "资料库"
+  },
+  {
+    "input": "網路連線",
+    "expected": "网路连线"
+  },
+  {
+    "input": "滑鼠與鍵盤",
+    "expected": "滑鼠与键盘"
+  },
+  {
+    "input": "臺灣",
+    "expected": "台湾"
+  },
+  {
+    "input": "台北",
+    "expected": "台北"
+  },
+  {
+    "input": "高雄",
+    "expected": "高雄"
+  },
+  {
+    "input": "記憶體",
+    "expected": "记忆体"
+  },
+  {
+    "input": "硬碟",
+    "expected": "硬碟"
+  },
+  {
+    "input": "螢幕",
+    "expected": "萤幕"
+  },
+  {
+    "input": "為什麼",
+    "expected": "为什么"
+  },
+  {
+    "input": "甚麼",
+    "expected": "甚么"
+  },
+  {
+    "input": "妳好",
+    "expected": "妳好"
+  },
+  {
+    "input": "甚么",
+    "expected": "甚么"
+  },
+  {
+    "input": "﨑",
+    "expected": "﨑"
+  },
+  {
+    "input": "⿰甲乙",
+    "expected": "⿰甲乙"
+  },
+  {
+    "input": "𠀀",
+    "expected": "𠀀"
+  },
+  {
+    "input": "混合 English 與中文",
+    "expected": "混合 English 与中文"
+  },
+  {
+    "input": "[00:01.00]繁體歌詞第一句\n[00:05.00]第二句在這裡",
+    "expected": "[00:01.00]繁体歌词第一句\n[00:05.00]第二句在这里"
+  },
+  {
+    "input": "髮型設計師",
+    "expected": "发型设计师"
+  },
+  {
+    "input": "麵條",
+    "expected": "面条"
+  },
+  {
+    "input": "乾脆",
+    "expected": "干脆"
+  },
+  {
+    "input": "幹部",
+    "expected": "干部"
+  },
+  {
+    "input": " later ",
+    "expected": " later "
+  }
+]
