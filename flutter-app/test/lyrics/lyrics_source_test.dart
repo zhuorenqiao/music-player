@@ -268,7 +268,7 @@ void main() {
   });
 
   // 以下几条补的是上面用例没覆盖到的生产逻辑（索引 ok 命中 / search 打分 /
-  // get 压过 search / 取消时留下的冷却）。
+  // get 压过 search / 取消时冷却闸原样保留）。
   test('索引命中 ok 时直接用缓存，保留 source 且不发请求', () async {
     final first = RoutingClient([
       (
@@ -358,9 +358,11 @@ void main() {
     expect(result.reason, UpstreamReason.timeout);
   });
 
-  test('取消时上游已记下的冷却被清掉，结果仍是 aborted', () async {
-    // get 一路 429 会先把冷却闸记上（60s），随后 search 那趟把 token 取消：
-    // 取消不能让用户看到一个「在限流」的后续拦截（controller R16）。
+  test('取消时上游已记下的冷却保留下来，结果仍是 aborted', () async {
+    // get 一路 429 会先把冷却闸记上（60s），随后 search 那趟把 token 取消。
+    // 429 是真实的上游信号：abort 只是不写缓存，冷却要原样留着。清掉它，下一次
+    // 自动匹配会再打 2~5 条请求、撞回「歌词库正在限流（HTTP 429）」，而冷却存在
+    // 的意义正是让那次匹配安静地跳过（「歌词服务刚才在限流，请稍后点「重试」」）。
     final token = CancelToken();
     final gate = RateLimitGate();
     final client = RoutingClient([
@@ -381,7 +383,25 @@ void main() {
       gate: gate,
     ).match(query, cancel: token);
     expect(result.status, 'aborted');
-    expect(gate.isLimited, isFalse);
+    expect(gate.isLimited, isTrue);
+    expect(await prefs.readString(LyricsIndexCache.prefsKey), isNull);
+  });
+
+  test('开跑前就取消：不动冷却闸、不发请求、不写索引', () async {
+    // abort 绝不碰闸的最纯粹形态：一条请求都没发出去，闸上那个 60s 窗口只可能是
+    // 别人（上一轮匹配）记下的。老实现在这条路上 gate.clear() 一次，等于凭空
+    // 删掉一个与本次匹配无关的冷却。useCache: false 是为了绕开入口的冷却拦截，
+    // 否则这条用例会被闸挡住、走不到取消那一支。
+    final token = CancelToken()..cancel();
+    final gate = RateLimitGate()..note(60);
+    final client = RoutingClient([]);
+    final result = await sourceWith(
+      client,
+      gate: gate,
+    ).match(query, cancel: token, useCache: false);
+    expect(result.status, 'aborted');
+    expect(gate.isLimited, isTrue);
+    expect(client.calls, isEmpty);
     expect(await prefs.readString(LyricsIndexCache.prefsKey), isNull);
   });
 }

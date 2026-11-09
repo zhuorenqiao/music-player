@@ -23,7 +23,10 @@
 // * 上游抛错才回退过期磁盘缓存，且 source 硬编码「LRCLIB（离线缓存）」；
 //   not-found 是正常结果、不回退（与 React 代理侧一致）；
 // * useCache: false（手动重试 / 重开双语）只跳过「读」，仍然写；
-// * 取消一律静默：aborted 不写缓存、不留冷却、不给用户看错误（controller R16）。
+// * 取消一律静默：aborted 不写缓存、不动冷却闸、不给用户看错误（controller R16）。
+//   abort 绝不碰闸（React lyrics-source.js:617-619 的 aborted 分支也不碰）：冷却即便
+//   是本轮某条请求记下的，也是真实的上游信号，留着让下一次匹配安静跳过而不是再打
+//   2~5 条请求回来换一句「歌词库正在限流（HTTP 429）」。
 import 'dart:async';
 
 import 'lyrics_cache.dart';
@@ -137,9 +140,9 @@ class LyricsSource implements LyricsMatcher {
       return const LyricsMatch(status: 'empty-query', message: '曲目信息不足，无法匹配歌词');
     }
 
-    // 已取消的匹配不碰网络、不碰冷却。
+    // 已取消的匹配不碰网络、不写缓存，也不改动冷却闸：一个 abort 从不碰闸。
+    // 这里什么请求都没发，闸上若有关着的窗口，那一定是别人记下的，删不得。
     if (cancel?.isCancelled ?? false) {
-      gate.clear();
       return const LyricsMatch(status: 'aborted');
     }
 
@@ -184,8 +187,11 @@ class LyricsSource implements LyricsMatcher {
         source: record.isOk ? record.source : '',
       );
     } on RequestAborted {
-      // R16：取消是静默的 —— 不写缓存、不留冷却、不给用户看错误。
-      gate.clear();
+      // R16：取消是静默的 —— 不写缓存、不给用户看错误，且不动冷却闸。
+      // 闸上的窗口（包括本轮某条请求因 429 / 503 记下的）是真实的上游信号：
+      // 清掉它会让下一次匹配再打 2~5 条请求，并换回一句「歌词库正在限流（HTTP 429）」，
+      // 而不是冷却本来要产生的安静跳过。React 的 aborted 分支同样不碰闸
+      // （src/lib/lyrics-source.js:617-619）。
       return const LyricsMatch(status: 'aborted');
     } on UpstreamFailure catch (failure) {
       // 上游抛错才试过期缓存；not-found 是正常结果，走不到这里。
