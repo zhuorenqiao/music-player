@@ -265,6 +265,15 @@ void main() {
       duration: 125,
     );
     expect(client.calls.length, callsAfterFirst);
+    // 先把这一轮写下的缓存清掉，否则下面的「写方向」断言永远被第一轮的旧数据
+    // 满足 —— 变异（把 _writeCaches 包进 `if (useCache)`）照样全绿。
+    final key = TranslationDiskCache.keyFor(
+      title: 'Yesterday',
+      artist: 'The Beatles',
+      duration: 125,
+    );
+    File('${dir.path}/$key.json').deleteSync();
+
     await source.fetch(
       title: 'Yesterday',
       artist: 'The Beatles',
@@ -272,6 +281,12 @@ void main() {
       useCache: false,
     );
     expect(client.calls.length, greaterThan(callsAfterFirst));
+    // 「只跳过读、仍然写」的**写**方向：把 _writeCaches 包进 `if (useCache)`
+    // 也不能让任何用例变红的话，这条契约就没有 pin —— T14 的「重开后台刷新」
+    // 正是带 useCache:false 来的，写丢了下次就永远读不到。
+    final diskHit = await disk.read(key);
+    expect(diskHit, isNotNull, reason: 'useCache:false 仍然要把结果写进磁盘');
+    expect(diskHit!.status, 'ok');
   });
 
   test('上游抛错时回退过期磁盘缓存，source 追加「（离线缓存）」', () async {
@@ -305,6 +320,34 @@ void main() {
     expect(result.status, 'ok');
     expect(result.translatedLyrics, '[00:01]昨天');
     expect(result.source, '网易云译文库（人工翻译）（离线缓存）');
+  });
+
+  test('not-found 的过期回退：source 是纯「（离线缓存）」，不带库名', () async {
+    // React 盘上的 not-found 根本没有 source 字段（music-api.ts:601/:612
+    // 只返回 {status, reason}，:867 原样落盘），所以回退时追加的结果应是纯
+    // '（离线缓存）'。`TranslationRecord.source` 的默认值 '网易云译文库' 是
+    // 字段兜底、不是结果语义 —— 与 c6aa5b2 在索引命中那支统一过的口径一致。
+    final key = TranslationDiskCache.keyFor(
+      title: 'Yesterday',
+      artist: 'The Beatles',
+      duration: 125,
+    );
+    await disk.write(
+      key,
+      const TranslationRecord(status: 'not-found', reason: 'song-not-matched'),
+    );
+    File('${dir.path}/$key.json').setLastModifiedSync(
+      DateTime.now().subtract(const Duration(days: 400)),
+    );
+
+    final failing = _FlakyClient((_) => const JsonTimeout());
+    final result = await TranslateSource(
+      client: failing,
+      disk: disk,
+      index: TranslationIndexCache(AppPrefs.inMemory()),
+    ).fetch(title: 'Yesterday', artist: 'The Beatles', duration: 125);
+    expect(result.status, 'not-found');
+    expect(result.source, '（离线缓存）');
   });
 
   test('取消 → 抛 RequestAborted', () async {

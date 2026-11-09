@@ -175,7 +175,12 @@ class TranslateSource implements TranslationFetcher {
           translatedLyrics: stale.translated,
           originalLyrics: stale.original,
           // 原版是 `{...stale, source: `${stale.source}（离线缓存）`}`：追加，不是覆盖。
-          source: '${stale.source}$_staleSuffix',
+          // 但 React 盘上的 not-found 根本没有 source 字段
+          // （music-api.ts:601/:612 只返回 {status, reason}，:867 原样落盘），
+          // 所以那里追加的结果是纯「（离线缓存）」。`TranslationRecord.source`
+          // 的默认值 '网易云译文库' 是字段兜底、不是结果语义 —— 与 c6aa5b2
+          // 在索引命中那支统一过的口径保持一致，不能让 stale 这支漏出去。
+          source: '${stale.isOk ? stale.source : ''}$_staleSuffix',
           reason: stale.reason,
         );
       }
