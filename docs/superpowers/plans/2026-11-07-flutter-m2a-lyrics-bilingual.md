@@ -588,7 +588,7 @@ void main() {
     expect(splitArtistTitleOrNull('周杰倫-十年'), (artist: '周杰倫', title: '十年'));
     expect(splitArtistTitleOrNull('track-02'), isNull);
     expect(splitArtistTitleOrNull('Jay-Z'), isNull);
-    expect(splitArtistTitleOrNull('初音ミク-歌名'), isNull); // 左侧无汉字
+    expect(splitArtistTitleOrNull('初音ミク-歌名'), (artist: '初音ミク', title: '歌名')); // 含一个汉字即算 CJK，会拆（parity 校正）
   });
 
   test('全角减号与 U+2212 不是分隔符', () {
@@ -699,7 +699,7 @@ void main() {
 
     test('括号替换是单次，不循环', () {
       // 第一遍剥掉 (Live)，剩下的 (Official) 不再剥
-      expect(cleanTitle('十年 (Live) (Official)'), '十年 (Official)');
+      expect(cleanTitle('十年 (Live) (Official)'), '十年'); // /gi 的 g 一次剥掉全部（parity 校正）
     });
   });
 
@@ -807,7 +807,7 @@ git commit -m "feat(lyrics): 移植查询归一与严格版名称拆分，文件
   class OpenccTrie {
     void addWord(String word, String value);
     void loadDict(String dict);              // "src dst|src dst"
-    void loadDictGroup(List<String> dicts);  // 逆序加载：数组里靠后的词典优先级更高
+    void loadDictGroup(List<String> dicts);  // upstream 的优先级：**数组里靠前的词典赢**（见 R14）
     ({int end, String value})? matchPrefix(String s, int start); // end 是 UTF-16 下标
     List<String> segment(String s);
     String convert(String s);
@@ -860,10 +860,17 @@ void main() {
     });
   });
 
+  // R14 裁定（2026-11-09）：upstream `core.js:86-90` 是
+  // `arr.slice().reverse().forEach(loadDict)`，配合 `addWord` 后写覆盖，
+  // 结果是**数组里靠前的词典赢**（第一个元素最后写入）。散文原写反了。
   group('loadDictGroup 逆序加载', () {
-    test('数组里靠后的词典覆盖靠前的', () {
+    test('数组里靠前的词典覆盖靠后的', () {
       final t = OpenccTrie()..loadDictGroup(['甲 first', '甲 second']);
-      expect(t.convert('甲'), 'second');
+      expect(t.convert('甲'), 'first');
+    });
+    test('三份词典同样是第一份胜出', () {
+      final t = OpenccTrie()..loadDictGroup(['甲 A', '甲 B', '甲 C']);
+      expect(t.convert('甲'), 'A');
     });
   });
 
@@ -2902,12 +2909,18 @@ void main() {
     });
 
     test('不跨嵌套括号', () {
-      expect(coreTitle('十年 (甲 (乙))'), '十年');
+      // parity 校正（2026-11-09，rev-t10 用 node 按字节复现 music-api.ts:417-561）：
+      // 括号内容类 `[^()（）【】\[\]]*` 排除括号本身，嵌套时匹配不到末尾 `)`，
+      // 所以**原样不剥**。计划原写 `'十年'` 是错的。
+      expect(coreTitle('十年 (甲 (乙))'), '十年 (甲 (乙))');
     });
 
     test('最后剥一个尾部 - – — : , ;', () {
       expect(coreTitle('十年 -'), '十年');
-      expect(coreTitle('十年：'), '十年');
+      // parity 校正：尾部分隔符类只有**半角** `-–—:,;`，不含全角 `：`。
+      // 计划原写 `'十年'` 是错的（node 实测 `'十年：'` 不剥）。
+      expect(coreTitle('十年：'), '十年：');
+      expect(coreTitle('十年:'), '十年');
     });
   });
 
@@ -2924,22 +2937,35 @@ void main() {
       final s = song(artists: ['陈奕迅 / 王菲']);
       expect(artistHitSong(s, '王菲'), isTrue);
       expect(artistHitSong(s, '陈奕迅'), isTrue);
-      expect(artistHitSong(s, '陈奕迅王菲'), isFalse);
+      // parity 校正：拆出的 token `陈奕迅 / 王菲` 归一后是 `陈奕迅王菲`，与
+      // wantArtist 全等 → true。计划原写 isFalse 是错的（node 实测 true）。
+      expect(artistHitSong(s, '陈奕迅王菲'), isTrue);
     });
 
     test('feat. 也拆', () {
       final s = song(artists: ['A feat. B']);
-      expect(artistHitSong(s, 'B'), isTrue);
-      expect(artistHitSong(s, 'A'), isTrue);
+      // parity 校正：wantArtist **由调用方先归一化**（JS 内部不再 normText），
+      // 所以必须传小写。计划原写大写 'B'/'A' 期望 true 是错的（node 实测 false）。
+      expect(artistHitSong(s, 'b'), isTrue);
+      expect(artistHitSong(s, 'a'), isTrue);
+      expect(artistHitSong(s, 'B'), isFalse);
     });
 
     test('token ≥3 才允许前缀匹配', () {
       expect(artistHitSong(song(artists: ['陈奕迅乐队']), '陈奕迅'), isTrue);
+      // 原用例是一条**假绿**：'AB乐队' 归一后 4 字符，门槛其实是开的，
+      // 它之所以 false 只因为传了未归一化的大写 'AB'。换成能真正区分门槛
+      // 的输入（token 长度 3 vs 2），并用归一化入参补一条「门槛是开的」。
+      expect(artistHitSong(song(artists: ['abc']), 'abcd'), isTrue);
+      expect(artistHitSong(song(artists: ['ab']), 'abcd'), isFalse);
+      expect(artistHitSong(song(artists: ['AB乐队']), 'ab'), isTrue);
       expect(artistHitSong(song(artists: ['AB乐队']), 'AB'), isFalse);
     });
 
     test('不做整串包含：Zzzx Nope vs N.O.P.E 必须为假', () {
-      expect(artistHitSong(song(artists: ['Zzzx Nope']), 'N.O.P.E'), isFalse);
+      // 原用例也是假绿：'N.O.P.E' 与归一后的 token 'zzzxnope' 永远比不上，
+      // 无论实现怎么写都通过。换成归一化入参 'nope' 才真正钉住这条语义。
+      expect(artistHitSong(song(artists: ['Zzzx Nope']), 'nope'), isFalse);
     });
   });
 
@@ -2984,11 +3010,15 @@ void main() {
         trackName: '十年', artistName: '', duration: 0,
       );
       expect(noInfo, isNull);
+      // parity 校正（rev-t10 复核，implementer 报告漏列的一条）：
+      // trackName '十年' 只有 2 字符，titlePrefix 的 `wantTitle.length >= 3`
+      // 门槛把前缀路径整个关掉，无论歌手/时长如何都命中不了。
+      // 计划原写 isNotNull 是错的（node 实测 isNull）。
       final near = pickTranslatableSong(
         [song(name: '十年 (Live)', artists: ['别人']),],
         trackName: '十年', artistName: '', duration: 300,
       );
-      expect(near, isNotNull);
+      expect(near, isNull);
       final far = pickTranslatableSong(
         [song(name: '十年 (Live)', artists: ['别人'], durationMs: 330000)],
         trackName: '十年', artistName: '', duration: 300,
@@ -3041,13 +3071,23 @@ void main() {
   });
 
   group('translatePairs', () {
-    test('原方向 → 对调（strict）→ 拆头 → 拆尾，各就各位', () {
+    test('原方向 → 对调（strict）；拆分要求两侧各 2~60 字符', () {
+      // parity 校正（rev-t10 用 node 复核）：拆分的正则
+      // `/^(.{2,60}?)\s+[-–—]\s+(.{2,60})$/` 要求破折号两侧各 2~60 字符，
+      // '甲 - 乙' 两侧各 1 字符 → **不拆**，只有原方向 + 对调两条。
+      // 计划原写 4 条（含拆头/拆尾）是错的（node 实测 2 条）。
       final pairs = translatePairs('甲 - 乙', '丙');
       expect(pairs.map((p) => (p.name, p.artist, p.strict)), [
         ('甲 - 乙', '丙', false),
         ('丙', '甲 - 乙', true),
-        ('甲', '乙', true),
-        ('乙', '甲', true),
+      ]);
+      // 对照组：两侧各 2 字符才真的拆出「拆头 / 拆尾」。
+      final four = translatePairs('甲乙 - 丙丁', '戊');
+      expect(four.map((p) => (p.name, p.artist, p.strict)), [
+        ('甲乙 - 丙丁', '戊', false),
+        ('戊', '甲乙 - 丙丁', true),
+        ('甲乙', '丙丁', true),
+        ('丙丁', '甲乙', true),
       ]);
     });
 
@@ -3265,9 +3305,12 @@ void main() {
       now = now.add(const Duration(days: 4));
       expect(await cache.read('ok'), isNotNull);
       expect(await cache.read('none'), isNull);
-      now = now.add(const Duration(days: 27));
+      // parity 校正（2026-11-09，rev-t11 独立复算）：原写 4+27=31 天，
+      // 已经越过 30 天命中 TTL，正确实现下这条 isNotNull 必红。改成 4+26=30，
+      // 正好钉住「第 30 天仍命中」（判据是 `> ttl` 严格大于），强度只增。
+      now = now.add(const Duration(days: 26));
       expect(await cache.read('ok'), isNotNull);
-      now = now.add(const Duration(days: 1, seconds: 1));
+      now = now.add(const Duration(seconds: 1));
       expect(await cache.read('ok'), isNull);
     });
 
@@ -3722,9 +3765,17 @@ void main() {
       expect(matchLyricsTrack('十年.lrc', dup)!.id, 'a');
     });
 
-    test('占位歌手不算 real artist，不能拿 50 分', () {
-      final ph = [t('p', title: '十年', artist: '本地文件', src: '/m/x.flac')];
-      expect(matchLyricsTrack('本地文件 - 十年.lrc', ph), isNull);
+    test('占位歌手不算 real artist，拿不到 50 分', () {
+      // parity 校正（2026-11-09，rev-t12 用 node 逐字复现 lyrics-file.ts:17-76）：
+      // 计划原写 `matchLyricsTrack('本地文件 - 十年.lrc', [p])` 为 isNull 是错的 ——
+      // 拆出 titleOnly='十年' 与 p 的 title 相同 → 30 分 → **返回 p**。
+      // 改成鉴别性写法：加一首整串同名 q（40 分），占位歌手只能拿 30 分，
+      // 于是 40 压过 30、真正钉住「占位歌手不拿 50」的原意。
+      final ph = [
+        t('p', title: '十年', artist: '本地文件', src: '/m/x.flac'),
+        t('q', title: '本地文件 - 十年', src: '/m/q.flac'),
+      ];
+      expect(matchLyricsTrack('本地文件 - 十年.lrc', ph)!.id, 'q');
       expect(matchLyricsTrack('十年.lrc', ph)!.id, 'p');
     });
 
