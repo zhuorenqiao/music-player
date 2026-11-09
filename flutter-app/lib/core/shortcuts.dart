@@ -29,11 +29,14 @@
 //   - `Play/Pause`、`NextTrack`、`PrevTrack` 这些媒体键由系统媒体会话进来
 //     （T21/T22 的 `MediaSessionBridge` → `MediaSessionCoordinator`），键盘层
 //     再注册一遍就是两个入口抢同一首歌；
-//   - `L`（歌词页开关）与 `Escape`（关歌词页 / 关弹层）属歌词页，M2 落地时由
-//     那一页自己注册；现在写进这张表只会让 M1 按 Esc 什么都不做还占住键位。
 //   - 原版还有「列表弹层 / 放大层开着时只认 Esc」那条总闸：M1 只有底部弹层，
 //     它自带模态焦点域（`showModalBottomSheet` 的 barrier 把按键挡在外面），
-//     M2 的放大层再补这道闸。
+//     M2 的放大层再补这道闸（歌词页这一层 T19 已经接上，见下）。
+//
+// T19 起 L / Esc 已进表（`ToggleLyricsPageIntent` / `CloseOverlayIntent`），
+// 由 `app.dart` 接到 `bootstrap.lyricsPage`。M1 时期这里写着「留给 M2、别写进
+// 这张表」的那段理由（「按 Esc 什么都不做还占住键位」）已经不成立：现在有真的
+// 接收方了。输入框聚焦时让位沿用上面同一条 `_hasTextEditingFocus`。
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -84,6 +87,19 @@ class PlayPrevIntent extends Intent {
   const PlayPrevIntent();
 }
 
+/// 打开 / 关闭全屏歌词页（T19，原版 `case 'KeyL'`，`src/App.tsx:1603`）。
+class ToggleLyricsPageIntent extends Intent {
+  const ToggleLyricsPageIntent();
+}
+
+/// 关闭盖在内容区上的那一层（T19，原版 `case 'Escape'`，`src/App.tsx:1595`）。
+///
+/// 目前只有歌词页一层；M3 的放大层接进来时仍复用这一个 Intent，
+/// 「谁在最上面谁响应」由界面层判断（与 `app.dart` 里那段 switch 一致）。
+class CloseOverlayIntent extends Intent {
+  const CloseOverlayIntent();
+}
+
 const Map<ShortcutActivator, Intent> _kLightMusicShortcutMap =
     <ShortcutActivator, Intent>{
       SingleActivator(LogicalKeyboardKey.space): TogglePlayIntent(),
@@ -95,7 +111,9 @@ const Map<ShortcutActivator, Intent> _kLightMusicShortcutMap =
       // N / P：与 M 不冲突，也不与系统媒体键冲突（上下曲由 MediaSessionBridge 管）。
       SingleActivator(LogicalKeyboardKey.keyN): PlayNextIntent(),
       SingleActivator(LogicalKeyboardKey.keyP): PlayPrevIntent(),
-      // L（歌词页）/ Escape（关歌词页）留给 M2，见文件头。
+      // L（开 / 关全屏歌词页）/ Escape（关歌词页）—— T19 落地，见文件头。
+      SingleActivator(LogicalKeyboardKey.keyL): ToggleLyricsPageIntent(),
+      SingleActivator(LogicalKeyboardKey.escape): CloseOverlayIntent(),
     };
 
 /// 快捷键表：八个键，一组一个动作。
@@ -204,6 +222,23 @@ class AppShortcuts extends StatelessWidget {
             enabled: () => !_hasTextEditingFocus(),
             onInvoke: (PlayPrevIntent intent) {
               onAction('playPrev');
+              return null;
+            },
+          ),
+          // L / Esc 同样让位给输入框：面板搜索框里打 l 只该进文字。
+          ToggleLyricsPageIntent: _LightMusicAction<ToggleLyricsPageIntent>(
+            enabled: () => !_hasTextEditingFocus(),
+            onInvoke: (ToggleLyricsPageIntent intent) {
+              onAction('toggleLyricsPage');
+              return null;
+            },
+          ),
+          // Esc 不让位给按钮：按钮上的 Esc 没有原生含义，原版也是全局先到先得
+          // （`src/App.tsx:1595` 在 `tag === 'BUTTON'` 的豁免之外）。
+          CloseOverlayIntent: _LightMusicAction<CloseOverlayIntent>(
+            enabled: () => !_hasTextEditingFocus(),
+            onInvoke: (CloseOverlayIntent intent) {
+              onAction('closeOverlay');
               return null;
             },
           ),

@@ -1,31 +1,44 @@
 // lib/ui/stage.dart
 //
 // 播放卡：对译 `src/styles/app.css` 的 `.stage` 一族（`.stage__cover-wrap`、
-// `.stage__title`、`.stage__artist`、`.stage__album`）。
+// `.stage__title-row`、`.stage__title`、`.stage__artist`、`.stage__album`、
+// `.stage__meta`、`.stage__lyrics`）与 React `src/App.tsx:380-533` 的 `Stage` 组件。
 //
 //   ┌──────────────────────────────┐
-//   │           圆碟封面            │  ← 独立热区（M2 打开灯箱）
-//   │           曲名 + 损坏角标      │  ┐
-//   │           歌手                │  ├ 一整块热区（M2 进歌词页）
+//   │           圆碟封面            │  ← 独立热区（M2b 打开灯箱）
+//   │           曲名 ←→ 双语开关     │  ┐
+//   │           歌手                │  ├ 一整块热区（进歌词页）
 //   │           专辑（有才显示）      │  │
-//   │           ── 歌词占位 66px ──  │  ┘
+//   │           ── 歌词条 ──         │  ┘
 //   │          当前 / 总时长（贴底）  │
 //   └──────────────────────────────┘
 //
-// 两条硬约束：
+// 四条硬约束：
 //   1. 进度不进 `ChangeNotifier`。整卡只在语义变化时重建，`player.position`
 //      只被时间行那一层 `ValueListenableBuilder` 订阅 —— 一秒四次的重绘必须
 //      只落在那一行 `Text` 上。
-//   2. M1 不做歌词。歌词位按 M2 的真实高度留出来（固定 66），两块热区的回调
-//      现在是空实现，注释里标了 M2 的去向。
+//   2. [StagePreview] 保持**纯展示**：T18 新增的 `lyrics` / `titleTrailing` /
+//      `onOpenLyrics` 三个参数默认 null，null 时一律退回 M1 的原样。状态层的
+//      接线全在 [Stage] 里，widget 脱离状态层仍可独立测（既有 286 行用例）。
+//   3. 颜色一律 `context.tokens`，本文件不出现颜色字面量。
+//   4. 歌词区高度是 CSS 的 `clamp(112px, 15vh, 132px)`（app.css:1903-1906），
+//      用 [compactLyricsHeight] 现算，不再是 M1 那个固定 66。
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/breakpoints.dart';
 import '../core/format_time.dart';
+import '../state/bilingual_state.dart';
+import '../state/lyrics_page_controller.dart';
+import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
+import 'bilingual_toggle.dart';
+import 'lyrics_status.dart';
+// T17 并行产出；本文件只用到 `LyricsView(variant: LyricsVariant.compact)`。
+import 'lyrics_view.dart';
+import 'swipe_to_switch.dart';
 import 'vinyl_deck.dart';
 
 /// 空态标题（原版 `IDLE_TITLE`）。
@@ -37,10 +50,24 @@ const String kIdleStageArtist = '从播放列表选一首开始';
 /// 曲目没有歌手名时的占位。
 const String kUnknownStageArtist = '未知歌手';
 
-/// 歌词位高度：M2 的歌词预览按这个高度设计，换实现不改卡片布局。
-const double kLyricsSlotHeight = 66;
+/// 歌词条高度：CSS `height: clamp(112px, 15vh, 132px)`（app.css:1903-1906）。
+///
+/// 原版注释：「桌面留给歌词的高度由封面与信息区挤出来，随视口高度伸缩，且不顶破
+/// stage」。三档钳位是字面的 `clamp`：低视口给足 112（约 4 行）、高视口封顶 132。
+double compactLyricsHeight(double viewportHeight) =>
+    (viewportHeight * 0.15).clamp(112.0, 132.0);
 
-/// 真实入口：从 [PlayerState] 取当前曲目与进度。
+/// 窄屏断点：`@media (max-width: 899px)`（app.css:3940，CSS 的 max-width 含等号，
+/// 所以是 `< 900`）。窄屏 ready 态隐藏状态行，见 [_StageLyrics]。
+const double _kNarrowWidth = 900;
+
+/// 旧占位块的高度（M1 的 66）。只在调用方**没给** `lyrics` 时用。
+///
+/// 保留它而不是直接删掉这个占位：`StagePreview` 是纯展示组件，既有调用点
+/// （预览、老用例、T18 之前写下的 widget 测试）不传 `lyrics` 时必须还是原样。
+const double _kLegacyLyricsSlotHeight = 66;
+
+/// 真实入口：从状态层取当前曲目、歌词与双语开关状态。
 class Stage extends StatelessWidget {
   const Stage({super.key});
 
@@ -48,6 +75,14 @@ class Stage extends StatelessWidget {
   Widget build(BuildContext context) {
     // 只订阅语义变化（切歌 / 播放 / 损坏…）；position 单独走 ValueListenable
     final player = context.watch<PlayerState>();
+    // 这三个 provider 由 `app.dart` 注册（`LyricsState` / `BilingualState` 归 T15，
+    // `LyricsPageController` 归 T18）。写成可空泛型 `watch<T?>()`：provider 包的
+    // `Provider.of<T?>` 在「没有注册这个类型」时返回 null 而不是抛
+    // （provider.dart 的 `null is! T` 守卫），这样 T18 单独落地、T15 还没接上时
+    // 播放卡照常能画（歌词区退回占位、开关不出现、点热区不打开页面）。
+    final lyricsState = context.watch<LyricsState?>();
+    final bilingual = context.watch<BilingualState?>();
+    final page = context.read<LyricsPageController?>();
     final track = player.view.value.current;
     // 总时长的两级取值（终审 minor 3，与 `TransportBar._totalOf` 同一思路）：
     // 标签里有时长就以标签为准（那是权威元数据，内核报的往往晚到），
@@ -56,7 +91,8 @@ class Stage extends StatelessWidget {
     // 曲目即使内核早就知道多长，卡片也一直挂着 `--:--`（ledger T26）。
     // 两处都不知道才是 `--:--`。
     final labeled = track != null && track.hasDuration ? track.duration : null;
-    return StagePreview(
+
+    final preview = StagePreview(
       title: track?.title ?? kIdleStageTitle,
       artist: switch (track) {
         null => kIdleStageArtist,
@@ -70,6 +106,93 @@ class Stage extends StatelessWidget {
       position: player.position,
       coverPath: track?.cover ?? '',
       broken: track?.broken ?? false,
+      // 点曲目区任意留白进歌词页（原版 `App.tsx:410-421` 的 onStageClick）。
+      // 没有控制器时给 null，`StagePreview` 退回 M1 的空实现。
+      onOpenLyrics: page?.open,
+      // 标题行尾部：只有非中文歌词才出「双语」开关（原版组件里那句
+      // `if (!translatable) return null`，由调用方判 —— 见 bilingual_toggle.dart）。
+      titleTrailing: bilingual != null && bilingual.translatable
+          ? BilingualToggle(
+              enabled: bilingual.enabled,
+              onChanged: bilingual.setEnabled,
+              tooltip: _toggleTooltip(bilingual),
+            )
+          : null,
+      lyrics: _StageLyrics(state: lyricsState, bilingual: bilingual),
+    );
+
+    // 左右滑切歌（原版 `App.tsx:332-378` 的 useTrackSwipe，挂在 `<section.stage>` 上）。
+    // `next()` / `previous()` 返回 Future<void>，这里包一层 lambda 当 VoidCallback。
+    return SwipeToSwitchTrack(
+      onPrev: () => player.previous(),
+      onNext: () => player.next(),
+      child: preview,
+    );
+  }
+}
+
+/// 「双语」开关的读屏说明，逐字对译 `BilingualToggle.tsx:26-38` 的 `titleMap`。
+///
+/// 四档取 [BilingualState.state]（`TranslationState`），其余落回开关自身的开 / 关
+/// 说明。`error` 档优先用 [BilingualState.note]（原版 `transNote || '中文译文获取失败'`）。
+String _toggleTooltip(BilingualState b) => switch (b.state) {
+  TranslationState.loading => '正在获取中文译文…',
+  TranslationState.none => '译文库里没有这首歌的中文译文',
+  TranslationState.unavailable => '中文译文依赖本地代理服务（npm run dev）',
+  TranslationState.error => b.note.isNotEmpty ? b.note : '中文译文获取失败',
+  _ => b.enabled ? '关闭中文译文对照' : '开启中文译文对照',
+};
+
+/// 播放卡内的歌词条整块：状态行 + 固定高度的紧凑歌词视图。
+///
+/// 对译 `App.tsx:498-530` 的 `<div className="stage__lyrics">`：
+///   * 状态行只在「有话要说」时出现 —— 原版是
+///     `{(transNote || status) && <p ...>}`，译文说明优先于歌词状态（`:499-502`）；
+///   * 窄屏（`< 900`）的 ready 态隐藏状态行（app.css:3988-3990：
+///     「小屏不显示『歌词自动匹配自…』这行来源说明；加载 / 失败状态仍保留」），
+///     所以要判 `width < 900` 且只在非加载、非失败时藏。
+///
+/// 状态为空（ready 且无译文说明）时整块 `SizedBox.shrink()` —— 但**歌词本体仍要
+/// 占位**，原版 `.lyrics--compact` 的高度是写死的 clamp，不随状态行有无伸缩。
+class _StageLyrics extends StatelessWidget {
+  const _StageLyrics({required this.state, required this.bilingual});
+
+  final LyricsState? state;
+  final BilingualState? bilingual;
+
+  @override
+  Widget build(BuildContext context) {
+    final lyrics = state;
+    // provider 还没接上（T15 之前的装配）：保留 M1 的占位块，不闪不塌。
+    if (lyrics == null) return const _LyricsSlot();
+
+    final note = bilingual?.note ?? '';
+    final status = note.isNotEmpty ? note : lyrics.status;
+    final loading = lyrics.state == LyricsLoad.loading;
+    final failed =
+        lyrics.state == LyricsLoad.missing || lyrics.state == LyricsLoad.error;
+    final narrow = MediaQuery.sizeOf(context).width < _kNarrowWidth;
+    // 窄屏 ready 态藏状态行（CSS 只在 `[data-state="ready"]` 上隐藏，加载 / 失败
+    // 两档照旧显示）。译文说明非空时不算 ready —— 它有话要说，必须显示。
+    final hiddenOnNarrow = narrow && !loading && !failed && note.isEmpty;
+    final showStatus = status.isNotEmpty && !hiddenOnNarrow;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showStatus)
+          LyricsStatusLine(
+            status: status,
+            loading: loading,
+            failed: failed,
+            showRetry: lyrics.showRetry,
+            onRetry: lyrics.retry,
+          ),
+        SizedBox(
+          height: compactLyricsHeight(MediaQuery.sizeOf(context).height),
+          child: const LyricsView(variant: LyricsVariant.compact),
+        ),
+      ],
     );
   }
 }
@@ -86,6 +209,9 @@ class StagePreview extends StatelessWidget {
     this.totalFromKernel,
     this.coverPath = '',
     this.broken = false,
+    this.lyrics,
+    this.titleTrailing,
+    this.onOpenLyrics,
     super.key,
   });
 
@@ -111,6 +237,21 @@ class StagePreview extends StatelessWidget {
   final String coverPath;
   final bool broken;
 
+  /// 歌词区整块（T18 由 [Stage] 传进来：状态行 + 紧凑歌词视图）。
+  ///
+  /// null 时退回 M1 的占位块（66px + 一个波形图标）—— 纯展示组件不许假设
+  /// 状态层存在，否则既有的预览用例与 T18 之前的调用点会全部要改。
+  final Widget? lyrics;
+
+  /// 标题行尾部槽（T18：放「双语」开关）。
+  ///
+  /// null 时这一行只有歌名、居中位置不变（原版 css 注释：「没有译文开关时
+  /// 这一行只有歌名，居中位置不变」）。
+  final Widget? titleTrailing;
+
+  /// 点曲目区进歌词页。null 时保持 M1 的空实现（点了不抛、也不做事）。
+  final VoidCallback? onOpenLyrics;
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
@@ -126,7 +267,7 @@ class StagePreview extends StatelessWidget {
       label: broken ? '$title（无法播放）封面' : '$title 封面',
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        // M2：打开封面灯箱（原版 stage__cover-wrap 的点击）
+        // M2b：打开封面灯箱（原版 stage__cover-wrap 的点击）
         onTap: () {},
         child: CoverDisc(
           coverPath: coverPath,
@@ -142,8 +283,10 @@ class StagePreview extends StatelessWidget {
       label: '查看歌词：$title',
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        // M2：进入完整歌词页
-        onTap: () {},
+        // 进完整歌词页（原版 `onStageClick` 派发 app:open-lyrics-page）。
+        // null 时不给回调：GestureDetector 在 onTap 为 null 时不参与竞技场，
+        // 与 M1 那个空实现的可观察行为一致（点了不抛、也不做事）。
+        onTap: onOpenLyrics,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -168,7 +311,8 @@ class StagePreview extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 10),
-            const _LyricsSlot(),
+            // 状态层还没接上（或纯展示的调用点没给）时，退回 M1 的占位块。
+            lyrics ?? const _LyricsSlot(),
           ],
         ),
       ),
@@ -224,10 +368,17 @@ class StagePreview extends StatelessWidget {
     );
   }
 
-  /// 曲名行：长曲名省略号截断，「损坏」角标挂在右侧。
+  /// 曲名行：歌名居中省略号截断，右侧依次挂「双语」开关与「损坏」角标。
+  ///
+  /// 对译 `.stage__title-row`（app.css:1039-1044）：`align-items: center` +
+  /// `justify-content: center` + `gap: 10px`；没有尾部槽时这一行只有歌名、
+  /// 居中位置不变。
   Widget _titleRow(AppTokens tokens) {
+    final trailing = titleTrailing;
+    final hasSlot = trailing != null || broken;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Flexible(
           child: Text(
@@ -242,7 +393,12 @@ class StagePreview extends StatelessWidget {
             ),
           ),
         ),
-        if (broken) ...[const SizedBox(width: 8), const _BrokenBadge()],
+        if (hasSlot) const SizedBox(width: 10),
+        ?trailing,
+        if (broken) ...[
+          if (trailing != null) const SizedBox(width: 8),
+          const _BrokenBadge(),
+        ],
       ],
     );
   }
@@ -270,7 +426,11 @@ class _BrokenBadge extends StatelessWidget {
   }
 }
 
-/// 歌词位（M2 填充）：高度先按真实预览留好，不给布局返工的机会。
+/// M1 的歌词占位块：66px + 一个波形图标。
+///
+/// 只在调用方**没给** `lyrics` 时用（纯展示的调用点、T18 之前的预览与用例，
+/// 以及 T15 还没把 provider 接上时的降级态）。T18 之后的真实入口走
+/// [_StageLyrics]。
 class _LyricsSlot extends StatelessWidget {
   const _LyricsSlot();
 
@@ -278,7 +438,7 @@ class _LyricsSlot extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     return SizedBox(
-      height: kLyricsSlotHeight,
+      height: _kLegacyLyricsSlotHeight,
       child: Center(
         child: Icon(Icons.graphic_eq, size: 20, color: tokens.progressTrack),
       ),

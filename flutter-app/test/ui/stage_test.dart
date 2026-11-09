@@ -14,10 +14,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/core/breakpoints.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
+import 'package:light_music/state/lyrics_page_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
+import 'package:light_music/ui/bilingual_toggle.dart';
 import 'package:light_music/ui/stage.dart';
+import 'package:light_music/ui/swipe_to_switch.dart';
 import 'package:provider/provider.dart';
 
 Widget wrap(Widget child) => MaterialApp(
@@ -282,5 +285,176 @@ void main() {
     state.position.value = 30;
     await tester.pump();
     expect(find.text('00:30 / 02:00'), findsOneWidget);
+  });
+
+  // -- T18：播放卡接入歌词条、标题行开关、点开歌词页、滑切歌 ---------------
+  //
+  // 三条硬约束在这一组里钉住：
+  //   1. 歌词区高度是 CSS 的 `clamp(112px, 15vh, 132px)`（app.css:1903-1906），
+  //      不是 M1 那个固定 66 —— 低视口钳到 112、高视口钳到 132；
+  //   2. `StagePreview` 仍然纯展示：新参数默认 null 时**保留原占位逻辑**
+  //      （上面 8 条老用例一条都不用改就是这条的证据）；
+  //   3. 滑切歌用 `flingFrom`（带初速度）而不是 `dragFrom` —— `dragFrom` 的末速度
+  //      是 0，任何以速度为条件的实现都会被误判成「不切」，等于没测。
+
+  testWidgets('歌词区按 clamp(112,15vh,132) 取高', (tester) async {
+    await pumpAt(
+      tester,
+      1200,
+      800,
+      StagePreview(
+        title: 'A',
+        artist: 'B',
+        album: '',
+        total: '3:00',
+        lyrics: SizedBox(
+          key: const Key('stage-lyrics-slot'),
+          height: compactLyricsHeight(800),
+          child: const SizedBox(),
+        ),
+      ),
+    );
+    // 800 × 0.15 = 120，落在 [112, 132] 之间照实取
+    expect(compactLyricsHeight(800), 120);
+    // 400 × 0.15 = 60 → 钳到下界 112
+    expect(compactLyricsHeight(400), 112);
+    // 2000 × 0.15 = 300 → 钳到上界 132
+    expect(compactLyricsHeight(2000), 132);
+    // 三档都真的落到布局上（不只是函数返回值）
+    expect(
+      tester.getRect(find.byKey(const Key('stage-lyrics-slot'))).height,
+      120,
+    );
+  });
+
+  testWidgets('默认不给 lyrics 时保留原歌词占位逻辑', (tester) async {
+    // 纯展示那条约束的回归网：老调用点（不传 lyrics）必须还是那个 66px 的占位块，
+    // 否则 M1 的既有用例与预览都会变样。
+    await pumpAt(tester, 1200, 800, fullStage);
+    expect(find.byIcon(Icons.graphic_eq), findsOneWidget);
+  });
+
+  testWidgets('标题行有尾部槽时与歌名同排居中', (tester) async {
+    await pumpAt(
+      tester,
+      1200,
+      800,
+      StagePreview(
+        title: 'Yesterday',
+        artist: 'The Beatles',
+        album: '',
+        total: '3:00',
+        titleTrailing: BilingualToggle(enabled: false, onChanged: (_) {}),
+      ),
+    );
+    final title = tester.getRect(find.text('Yesterday'));
+    final toggle = tester.getRect(find.byKey(const Key('bilingual-toggle')));
+    // CSS `.stage__title-row { align-items: center; justify-content: center }`
+    // （app.css:1039-1044）：两者竖直居中对齐、开关在歌名右侧。
+    expect((title.center.dy - toggle.center.dy).abs(), lessThan(1));
+    expect(toggle.left, greaterThan(title.right));
+  });
+
+  testWidgets('点曲目区任意留白进歌词页', (tester) async {
+    var opened = 0;
+    await pumpAt(
+      tester,
+      1200,
+      800,
+      StagePreview(
+        title: 'A',
+        artist: 'B',
+        album: '',
+        total: '3:00',
+        onOpenLyrics: () => opened++,
+      ),
+    );
+    await tester.tap(find.byKey(const Key('stage-hit-area')));
+    expect(opened, 1);
+  });
+
+  testWidgets('没给 onOpenLyrics 时点热区不抛（保持 M1 的空实现语义）', (tester) async {
+    await pumpAt(tester, 1200, 800, fullStage);
+    await tester.tap(find.byKey(const Key('stage-hit-area')));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('左滑下一首、右滑上一首；小幅滑动不切', (tester) async {
+    var prev = 0;
+    var next = 0;
+    await pumpAt(
+      tester,
+      1200,
+      800,
+      SwipeToSwitchTrack(
+        onPrev: () => prev++,
+        onNext: () => next++,
+        child: const SizedBox.expand(),
+      ),
+    );
+    // flingFrom 带初速度：dragFrom 的末速度归 0，测不出「够快才算」。
+    await tester.flingFrom(const Offset(600, 400), const Offset(-120, 0), 1200);
+    await tester.pumpAndSettle();
+    expect(next, 1);
+    await tester.flingFrom(const Offset(600, 400), const Offset(120, 0), 1200);
+    await tester.pumpAndSettle();
+    expect(prev, 1);
+
+    await tester.flingFrom(const Offset(600, 400), const Offset(-30, 0), 1200);
+    await tester.pumpAndSettle();
+    expect(next, 1); // 位移不足 56，不切
+  });
+
+  testWidgets('横滑为主才算：纵向位移压过横向时不切', (tester) async {
+    // |dx| >= |dy| * 1.25 那条：dx=120、dy=200 → 120 < 250，不切。
+    var prev = 0;
+    var next = 0;
+    await pumpAt(
+      tester,
+      1200,
+      800,
+      SwipeToSwitchTrack(
+        onPrev: () => prev++,
+        onNext: () => next++,
+        child: const SizedBox.expand(),
+      ),
+    );
+    await tester.flingFrom(const Offset(600, 400), const Offset(-120, 200), 1200);
+    await tester.pumpAndSettle();
+    expect(next, 0);
+    expect(prev, 0);
+  });
+
+  test('LyricsPageController：open/close/toggle 各通知一次', () {
+    final c = LyricsPageController();
+    addTearDown(c.dispose);
+    var notified = 0;
+    c.addListener(() => notified++);
+    expect(c.isOpen, isFalse);
+    c.open();
+    expect(c.isOpen, isTrue);
+    c.toggle();
+    expect(c.isOpen, isFalse);
+    c.toggle();
+    expect(c.isOpen, isTrue);
+    c.close();
+    expect(c.isOpen, isFalse);
+    // 4 不是 5：这五次调用里有**四次**发生了状态变化（open / toggle / toggle /
+    // close），`isOpen` 前后不同才通知。brief 写 5 是数成了「调用次数」，
+    // 与它自己那句「每次**变更** notifyListeners()」矛盾；按变更次数取 4。
+    expect(notified, 4);
+  });
+
+  test('LyricsPageController：同值重复调用不通知（避免无意义重建）', () {
+    final c = LyricsPageController();
+    addTearDown(c.dispose);
+    var notified = 0;
+    c.addListener(() => notified++);
+    c.close(); // 本来就关着
+    expect(notified, 0);
+    c.open();
+    c.open(); // 本来就开着
+    expect(notified, 1);
   });
 }

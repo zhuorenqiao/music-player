@@ -38,6 +38,7 @@ class HomeLayout extends StatelessWidget {
     required this.stage,
     required this.panel,
     required this.transport,
+    this.overlay,
     super.key,
   });
 
@@ -46,11 +47,24 @@ class HomeLayout extends StatelessWidget {
   final Widget panel;
   final Widget transport;
 
+  /// 盖住「曲目区 + 面板」的可选整块内容（T19 的全屏歌词页）。
+  ///
+  /// 只在**内容区**替换，不碰骨架：头部仍在上、`transport` 仍在最后
+  /// （原版 `App.tsx:1707` 是把 `<LyricsPage>` 与 `<Stage>` 二选一渲染，
+  /// 控制条在两者之外，所以切到歌词页时播放控制仍然可见可操作）。
+  ///
+  /// 两档的替换范围不同，随各自骨架走：
+  ///   - 桌面：替换整个 `Row`（左右两列一起让位）；
+  ///   - 窄屏：替换 `stage + panel` 那一串（`transport` 本来就贴底，仍留在最后）。
+  final Widget? overlay;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final desktop = isDesktop(constraints.maxWidth);
+        // 公共字段不参与类型提升，先取到局部变量（`overlay != null` 之后才好用）。
+        final overlay = this.overlay;
         return SafeArea(
           child: Padding(
             padding: desktop ? kDesktopPadding : kNarrowPadding,
@@ -63,29 +77,44 @@ class HomeLayout extends StatelessWidget {
                     header,
                     SizedBox(height: desktop ? 18 : 14),
                     if (desktop)
-                      Expanded(
-                        child: Row(
-                          key: const Key('desktop-grid'),
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(
-                              // minmax(0, 1.02fr) / minmax(0, 1fr) 按 102 : 100 取整
-                              flex: 102,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Expanded(child: stage),
-                                  const SizedBox(height: 18),
-                                  transport,
-                                ],
+                      if (overlay != null) ...[
+                        // 桌面有 overlay：两列一起让位，但 `transport` 必须留下 ——
+                        // 「切到歌词页时播放控制仍可见可操作」（原版 `App.tsx:1707`
+                        // 也是 `<LyricsPage>` / `<Stage>` 二选一，控制条在两者之外）。
+                        // 无 overlay 时这根控制条仍留在左列内部（骨架原样，不动）。
+                        Expanded(child: overlay),
+                        const SizedBox(height: 18),
+                        transport,
+                      ] else
+                        Expanded(
+                          child: Row(
+                            key: const Key('desktop-grid'),
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                // minmax(0, 1.02fr) / minmax(0, 1fr) 按 102 : 100 取整
+                                flex: 102,
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(child: stage),
+                                    const SizedBox(height: 18),
+                                    transport,
+                                  ],
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 18),
-                            Expanded(flex: 100, child: panel),
-                          ],
-                        ),
-                      )
-                    else ...[
+                              const SizedBox(width: 18),
+                              Expanded(flex: 100, child: panel),
+                            ],
+                          ),
+                        )
+                    else if (overlay != null) ...[
+                      // 窄屏：歌词页吃掉 stage + panel 的位置，控制条仍在最底。
+                      Expanded(child: overlay),
+                      const SizedBox(height: 14),
+                      transport,
+                    ] else ...[
                       stage,
                       const SizedBox(height: 14),
                       Expanded(child: panel),

@@ -54,7 +54,7 @@ Intent? intentOf(LogicalKeyboardKey key) {
 }
 
 void main() {
-  test('快捷键表覆盖八组键，且不抢媒体键与歌词页的 L / Esc', () {
+  test('快捷键表覆盖十组键，且不抢媒体键（L / Esc 已由 T19 接上）', () {
     final pressed = kLightMusicShortcuts.keys
         .map(
           (activator) =>
@@ -74,11 +74,16 @@ void main() {
         // 终审 I5：原版 `src/App.tsx:1639-1645` 的 N / P 两张牌此前漏移植
         LogicalKeyboardKey.keyN,
         LogicalKeyboardKey.keyP,
+        // T19（parity 校正）：M1 时这里断言「不注册」，理由是「歌词页两个键属
+        // M2，注册了就会和未来的歌词页抢按键」。M2a 的歌词页落地后该理由不再
+        // 成立，原版确实把两张牌都吃在同一张表里：
+        //   * `src/App.tsx:1646-1648` `case 'KeyL': setLyricsPage(v => !v)`；
+        //   * `src/App.tsx:1600-1604` `event.key === 'Escape' && lyricsPage`
+        //     → `setLyricsPage(false)`。
+        LogicalKeyboardKey.keyL,
+        LogicalKeyboardKey.escape,
       },
     );
-    // 歌词页两个键属 M2：这里注册了就会和未来的歌词页抢按键
-    expect(pressed, isNot(contains(LogicalKeyboardKey.keyL)));
-    expect(pressed, isNot(contains(LogicalKeyboardKey.escape)));
     // 播放/上下曲由系统媒体会话（T21/T22）负责，不在键盘层重复
     expect(pressed, isNot(contains(LogicalKeyboardKey.mediaPlayPause)));
     expect(pressed, isNot(contains(LogicalKeyboardKey.mediaTrackNext)));
@@ -86,6 +91,13 @@ void main() {
     // N / P 与静音的 M 不冲突：三张牌各指各的动作
     expect(intentOf(LogicalKeyboardKey.keyM), isA<ToggleMuteIntent>());
     expect(intentOf(LogicalKeyboardKey.keyN), isNot(intentOf(LogicalKeyboardKey.keyM)));
+    // T19：L 开合歌词页、Esc 关层，两者是**不同的** Intent（Esc 不 toggle）
+    expect(intentOf(LogicalKeyboardKey.keyL), isA<ToggleLyricsPageIntent>());
+    expect(intentOf(LogicalKeyboardKey.escape), isA<CloseOverlayIntent>());
+    expect(
+      intentOf(LogicalKeyboardKey.escape),
+      isNot(intentOf(LogicalKeyboardKey.keyL)),
+    );
   });
 
   test('八个 Intent 的步长与 README 一致：±5 秒 / ±5%', () {

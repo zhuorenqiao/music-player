@@ -100,6 +100,17 @@ void main() {
       expect(matchLyricsTrack('.lrc', tracks), isNull);
     });
 
+    // stripExtension 的条件是 `dot > 0`（不是 `>= 0`）：首字符就是点的名字整串当
+    // base。实现注释（manual_lyrics.dart:16-17）正是这么说的，但上面那条 `'.lrc'`
+    // 用例分不出两种写法 —— `dot > 0` 得 base `.lrc`（对不上 → null），`dot >= 0`
+    // 得 base `''`（提前 return null），两条路都是 null。
+    // 只有「整串 base 恰好能配上」的输入才分得出来：曲名就叫 `.lrc` 时，
+    // 正确实现（保留整串）命中 40 分，错误实现（切成空串）返回 null。
+    test('stripExtension 的 dot > 0：首字符是点的名字整串保留', () {
+      final dotted = [t('dot', title: '.lrc', src: '/m/dot.flac')];
+      expect(matchLyricsTrack('.lrc', dotted)!.id, 'dot');
+    });
+
     test('同分取靠前的', () {
       final dup = [t('a', title: '十年'), t('b', title: '十年')];
       expect(matchLyricsTrack('十年.lrc', dup)!.id, 'a');
@@ -123,6 +134,19 @@ void main() {
         matchLyricsTrack('the   beatles - yesterday.LRC', tracks)!.id,
         '3',
       );
+    });
+
+    // 上一条两侧的空白形态一致，所以「压缩空白」与「删空白」都能过 —— 它区分不出
+    // 两种口径。这条用「压缩后不等」的输入把语义钉死：文件名 `a b` 压缩成 `a b`、
+    // 曲名 `ab` 压缩成 `ab`，两者不等 → null；若实现写成「删空白」，两边都会变成
+    // `ab` 而误配成同一首歌。brief 硬口径第 2 条点名这是**第四套**口径
+    // （T9 删标点、T10 另一套、lrc_parser 再一套），别被复用到别的归一化里。
+    test('空白是压缩不是删除：a b 与 ab 不是同一个名字', () {
+      final only = [t('x', title: 'ab', src: '/m/x.flac')];
+      expect(matchLyricsTrack('a b.lrc', only), isNull);
+      // 对照组：曲名里空白**多一个**时仍能配上（两侧都压缩成同一个空格）。
+      final spaced = [t('y', title: 'a  b', src: '/m/y.flac')];
+      expect(matchLyricsTrack('a b.lrc', spaced)!.id, 'y');
     });
   });
 
@@ -151,6 +175,22 @@ void main() {
         ..writeAsStringSync('x' * (kMaxLyricsBytes + 1));
       final read = await readLyricsFile(file.path, displayName: 'big.lrc');
       expect(read.error, '歌词文件过大，已跳过：big.lrc');
+    });
+
+    // 上一条用 ASCII，字节数 == 字符数，**区分不出**「按字节」与「按字符」：
+    // 把实现改成 `text.length > kMaxLyricsBytes` 它照样绿。这条用中文内容把两种
+    // 口径分开 —— 200000 个汉字按 UTF-8 是 600000 字节（该拒），但 `text.length`
+    // 只有 200000（按字符会放行，然后在「没有时间轴」那关报另一句话）。
+    // brief 硬口径第 4 条与实现注释（manual_lyrics.dart:27-28）都明写这是**字节**闸；
+    // 真实链路上 GBK 歌词一个汉字两字节，写成字符数会把上限放宽约一倍。
+    test('512KB 是字节闸：中文内容按 UTF-8 字节算，不按字符数', () async {
+      final file = File('${dir.path}/cn.lrc')..writeAsStringSync('汉' * 200000);
+      // 先确认这条用例的前提真的成立（免得将来换成别的编码后它变成恒真）。
+      expect(file.lengthSync(), greaterThan(kMaxLyricsBytes));
+      expect(file.readAsStringSync().length, lessThan(kMaxLyricsBytes));
+
+      final read = await readLyricsFile(file.path, displayName: 'cn.lrc');
+      expect(read.error, '歌词文件过大，已跳过：cn.lrc');
     });
 
     test('读不了 → 拒绝', () async {
@@ -230,6 +270,10 @@ void main() {
       expect(playlist.byId('1')!.lyrics, '');
       final messages = toasts.items.map((e) => e.$1).toList();
       expect(messages.where((m) => m.startsWith('未找到与')).length, 2);
+      // 逐字断言前两条的完整话术，不只断前缀 —— 后半句「同名的曲目，已拒绝替换」
+      // 是用户唯一能看到的「为什么没换上」的说明，必须钉住。
+      expect(messages[0], '未找到与「不存在0.lrc」同名的曲目，已拒绝替换');
+      expect(messages[1], '未找到与「不存在1.lrc」同名的曲目，已拒绝替换');
       expect(messages.last, '另有 2 个歌词文件没有找到对应曲目');
       // 配对失败与汇总都是 info 级、6000ms（React 传的是 'info'）。
       expect(toasts.items.last.$2, 6000);
