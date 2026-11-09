@@ -417,3 +417,56 @@ M2 拆成两段执行，各一次闸口与整分支复核（2026-11-07 用户确
 ## 19. 明确不做的事
 
 不新增原版没有的控件、状态或页面；不因宽度不够就删图标/文案来凑；不把频谱做成假的律动；不把 Node 代理进程带进 Flutter 工程；不改动 React 侧任何源码（除本文档所在目录之外）；不在设计未确认前写任何 Dart 代码。
+
+---
+
+## 20. M2a 落地记录（2026-11-09）
+
+> 计划 `docs/superpowers/plans/2026-11-07-flutter-m2a-lyrics-bilingual.md` 的 20 个任务
+> 全部落地；验收记录见 `flutter-app/docs/M2A-ACCEPTANCE.md`（四条闸口尾行、产物字节数、
+> 三条真实上游探测、未验项）。本段只记「落了什么、与 React 差在哪、为什么」。
+
+**新增**（`flutter-app/` 下）：`lib/core/name_split.dart`；`lib/lyrics/` 下
+`lrc_parser.dart` / `query.dart` / `opencc/{trie,dicts,converter}.dart` / `upstream.dart` /
+`lyrics_cache.dart` / `lyrics_source.dart` / `translate_lang.dart` / `translate_align.dart` /
+`netease_match.dart` / `translate_cache.dart` / `translate_source.dart` / `manual_lyrics.dart`；
+`lib/state/{lyrics_state,bilingual_state,lyrics_page_controller}.dart`；
+`lib/ui/{lyrics_view,lyrics_status,bilingual_toggle,swipe_to_switch,lyrics_page}.dart`；
+`tool/{gen_opencc_dicts,opencc_oracle}.mjs`、`test/fixtures/opencc_golden.json`、
+`third_party/{opencc-js-LICENSE.txt,opencc-LICENSE.txt}`，以及 20 个测试文件。
+
+**修改**：`lib/main.dart` / `lib/app.dart`（装配歌词与双语状态、缓存目录、切歌联动、
+provider 注册、L/Esc 回调）、`lib/theme/app_tokens.dart`（`tint1`）、
+`lib/playback/play_error.dart` / `lib/core/file_picking.dart` /
+`lib/library/import_service.dart` / `lib/state/library_state.dart`（`.lrc` 分流与批量落库）、
+`lib/ui/{stage,shell,home_page}.dart` / `lib/core/shortcuts.dart`、
+`lib/playback/transport_controller.dart` / `lib/state/toast_state.dart`
+（`ToastSink.error` 加可选 `durationMs`，10 个实现点同步）。
+
+**四处有意差异**（相对 React **工作区现状**）：
+
+1. **拓扑与韧性合并**：React 的 Vite 中间件代理**不移植**，Dart 直连上游（spec §18 已实测
+   这套朴素头可直连）。于是代理那一侧的「2~5 路 job 并行 + 等全部结束按 job 顺序裁决 +
+   四类错误分类 + 过期缓存回退」由 `lib/lyrics/lyrics_source.dart` 自己承担，与客户端那一侧
+   的「冷却闸 + 退避 + 自动重试文案」合并在同一条链里。歌词 `get` 12s / `search` 26s /
+   总预算 60s；译文 8s / 2 次 / 固定 400ms / 只重试 timeout+unreachable / 不读 Retry-After。
+2. **无离线预判**：`isOnline` 恒 true（Flutter 没有平台 API、本段不引依赖），离线分支保留
+   且可注入，生产上离线只会走真实的 `unreachable` 错误，不会说「当前离线」。
+3. **无 `unavailable` 档**：直连无代理，枚举与话术保留以便对照，但实现永不产出它。
+4. **批量落库**：`ManualLyrics.apply` 不落库，整批结束后由
+   `LibraryState.applyLyricsFiles` 统一 `persist() + _changed()`（React 是逐条 persist）；
+   用户可见行为一致，一批几十个文件省下几十次整库重写。
+
+**OpenCC 纯 Dart 移植**：码位 Trie + IDS 步长 + 两级转换 + `toSimplified`（FIFO 64 缓存
+与「妳 / 甚么」后处理），不引依赖、不启动 Node。词典由 `tool/gen_opencc_dicts.mjs` 从
+`node_modules/opencc-js` 生成，`tool/opencc_oracle.mjs` 产出 32 条 Node 黄金样本；许可全文
+在 `third_party/opencc-js-LICENSE.txt`（MIT）与 `third_party/opencc-LICENSE.txt`
+（Apache-2.0）。**R14 裁定**：`loadDictGroup` 的实际优先级是「数组里靠前的词典赢」
+（upstream `arr.slice().reverse().forEach(loadDict)` + `addWord` 后写覆盖），与计划散文写的
+相反；实现忠于 upstream，词典按短语在前、单字在后的原顺序传入。
+
+**验收**：`flutter analyze` → `No issues found!`；`flutter test` → `+787: All tests passed!`；
+`build windows --debug` → `light_music.exe` 1,031,680 bytes；`build apk --debug` →
+`app-debug.apk` 216,730,493 bytes（均为 2026-11-09 现场采集）。三条真实上游探测全 200
+（LRCLIB get 19.1s / 网易 search 0.76s / 网易 lyric 0.36s）。**Windows 真机在线歌词 +
+双语全链路与 Android 真机歌词网络未验**，如实记在验收文档 C 节，不冒充通过。
