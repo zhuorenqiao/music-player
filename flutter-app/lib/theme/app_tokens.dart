@@ -39,6 +39,7 @@ class AppTokens {
     required this.barB,
     required this.progressTrack,
     required this.sliderThumb,
+    required this.tint1,
     required this.accentSoft,
     required this.accentLine,
     required this.dangerSoft,
@@ -132,6 +133,13 @@ class AppTokens {
   /// M3 加浅色那套时这里才跟着翻（终审 minor 1）。
   final Color sliderThumb;
 
+  /// `--tint-1: rgba(255, 255, 255, 0.04)`
+  ///
+  /// 最淡的一层白：双语开关的「关」态底色用它（`.lyrics-bilingual` 的
+  /// `background: var(--tint-1)`，app.css:3104）。和 [progressTrack]（`--tint-3`）
+  /// 是同一族的三档之一，M3 加浅色那套时两张表一起翻。
+  final Color tint1;
+
   /// `--accent-soft`
   final Color accentSoft;
 
@@ -182,6 +190,7 @@ class AppTokens {
     barB: Color(0xF7090C11), // rgba(9, 12, 17, 0.97)
     progressTrack: Color(0x1CFFFFFF), // --tint-3: rgba(255, 255, 255, 0.11)
     sliderThumb: Color(0xFFFFFFFF), // #ffffff（滑杆圆点底）
+    tint1: Color(0x0AFFFFFF), // --tint-1: rgba(255, 255, 255, 0.04)
     accentSoft: Color(0x242EE6A8), // rgba(46, 230, 168, 0.14)
     accentLine: Color(0x522EE6A8), // rgba(46, 230, 168, 0.32)
     dangerSoft: Color(0x1FFF6B81), // rgba(255, 107, 129, 0.12)
