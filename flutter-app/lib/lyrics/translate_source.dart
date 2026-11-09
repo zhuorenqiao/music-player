@@ -142,7 +142,9 @@ class TranslateSource implements TranslationFetcher {
           status: cached.status,
           translatedLyrics: cached.translated,
           originalLyrics: cached.original,
-          source: cached.source,
+          // 与下面「新结果」那条同口径：只有 ok 才带 source。索引层缺省给的
+          // '网易云译文库' 是 TranslationRecord 的字段默认值，不是结果语义。
+          source: cached.isOk ? cached.source : '',
           reason: cached.reason,
         );
       }

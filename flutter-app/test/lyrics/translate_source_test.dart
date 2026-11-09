@@ -431,6 +431,9 @@ void main() {
     ).fetch(title: 'Yesterday', artist: 'The Beatles', duration: 125);
     expect(result.status, 'not-found');
     expect(result.reason, 'no-translation');
+    // not-found 不带 source —— 与「新结果」那条路径同口径（那里显式给 ''）；
+    // 索引记录自己的 source 默认值是 '网易云译文库'，不能漏到结果里。
+    expect(result.source, '');
     expect(client.calls, isEmpty);
   });
 }
