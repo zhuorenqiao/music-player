@@ -286,19 +286,12 @@ class LyricsState extends ChangeNotifier {
             : (track.lyrics.isNotEmpty ? _kStatusSynced : _kStatusPlain),
         showRetry: false,
       );
-      // 纯文本后台升级（文件头第 4 条）。条件里没有 force：原版这条分支在
-      // force 下也照样受 upgradedRef 约束（lyrics.tsx:335-336）。
-      if (track.lyrics.isEmpty &&
-          track.lyricsPlain.isNotEmpty &&
-          track.lyricsSource != 'manual' &&
-          !_upgraded.contains(track.id) &&
-          _isOnline()) {
-        _pending = _upgradePlain(
-          track: track,
-          generation: generation,
-          cancel: cancel,
-        );
-      }
+      // 纯文本后台升级（文件头第 4 条）。
+      _pending = _maybeUpgrade(
+        track: track,
+        generation: generation,
+        cancel: cancel,
+      );
       return;
     }
 
@@ -377,15 +370,30 @@ class LyricsState extends ChangeNotifier {
       return;
     }
     if (_isStale(generation)) return;
-    _applyMatchResult(track: track, result: result, generation: generation);
+    final upgrade = _applyMatchResult(
+      track: track,
+      result: result,
+      generation: generation,
+      cancel: cancel,
+    );
+    // 匹配只拿到纯文本时，React 的 effect 会因为 track.lyricsPlain 变了而重跑，
+    // 重跑正好满足升级条件、紧接着发起升级（lyrics.tsx:324-336，依赖数组见 :473）。
+    // 差异 2 说「写回后直接重算、等价于重跑 effect」，那就得把整段 effect 体重新
+    // 求值 —— 不只是派生值。这里把升级接在本轮 Future 上，settle() 才等得到它。
+    if (upgrade != null) await upgrade;
   }
 
   /// 匹配结果 → 状态（表里「→ ok / not-found / aborted / 其它」四行）。
-  void _applyMatchResult({
+  ///
+  /// 返回写回纯文本后要做的后台升级（没有就返回 null）—— 由 [_match] await，
+  /// 好让 [settle] 覆盖它。
+  Future<void>? _applyMatchResult({
     required Track track,
     required LyricsMatch result,
     required int generation,
+    required CancelToken cancel,
   }) {
+    Future<void>? upgrade;
     if (result.status == 'ok' &&
         (result.synced.isNotEmpty || result.plain.isNotEmpty)) {
       // 请求期间用户可能手动导入了 .lrc：手动优先级最高，绝不覆盖
@@ -404,6 +412,12 @@ class LyricsState extends ChangeNotifier {
         _syncKey(track);
         _recomputeLyrics();
         _notifyChanged();
+        // 等价于 effect 重跑：写回的是纯文本才会命中升级分支。
+        upgrade = _maybeUpgrade(
+          track: track,
+          generation: generation,
+          cancel: cancel,
+        );
       } else {
         // 没写回（manual / 已有歌词）：派生值仍重算一次，以反映请求期间的变化。
         _recomputeLyrics();
@@ -414,7 +428,7 @@ class LyricsState extends ChangeNotifier {
         status: track.lyrics.isNotEmpty ? _kStatusSynced : _kStatusPlain,
         showRetry: false,
       );
-      return;
+      return upgrade;
     }
 
     if (result.status == 'not-found') {
@@ -424,11 +438,11 @@ class LyricsState extends ChangeNotifier {
         status: '未找到「${track.title}」的歌词',
         showRetry: true,
       );
-      return;
+      return null;
     }
 
     // aborted：什么都不做 —— 不改状态、不通知、不弹错（lyrics.tsx:438-440）。
-    if (result.status == 'aborted') return;
+    if (result.status == 'aborted') return null;
 
     // 其它一律按失败处理。
     final message = result.message.isNotEmpty ? result.message : _kStatusFailed;
@@ -445,6 +459,7 @@ class LyricsState extends ChangeNotifier {
       _setStatus('$message${_autoRetrySuffix(_autoRetryDelay)}');
       unawaited(_scheduleAutoRetry(generation: generation));
     }
+    return null;
   }
 
   /// 25 秒后若仍是最新请求就重跑一轮（lyrics.tsx:452-456）。detached。
@@ -460,6 +475,29 @@ class LyricsState extends ChangeNotifier {
     await _delay(_slowHintDelay);
     if (_isStale(generation)) return;
     _setStatus(_kStatusSlow);
+  }
+
+  /// 纯文本 → 带时间轴的后台升级的入口守卫；不该升级就返回 null。
+  ///
+  /// 条件逐条对译 lyrics.tsx:335-336：无 lyrics、有 plain、非 manual、本会话未
+  /// 升级过、在线。**没有 force**：原版这条分支在用户点过「重试」后也照样受
+  /// upgradedRef 约束 —— retry() 已经把该 id 从集合里删掉，那就是「重试要再试
+  /// 一次升级」，与 force 无关。
+  Future<void>? _maybeUpgrade({
+    required Track track,
+    required int generation,
+    required CancelToken cancel,
+  }) {
+    if (track.lyrics.isNotEmpty) return null;
+    if (track.lyricsPlain.isEmpty) return null;
+    if (track.lyricsSource == 'manual') return null;
+    if (_upgraded.contains(track.id)) return null;
+    if (!_isOnline()) return null;
+    return _upgradePlain(
+      track: track,
+      generation: generation,
+      cancel: cancel,
+    );
   }
 
   /// 纯文本 → 带时间轴的后台升级（lyrics.tsx:330-377）。
