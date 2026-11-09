@@ -31,6 +31,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import '../metadata/audio_tags.dart';
 import '../metadata/byte_reader.dart';
 import '../metadata/cover_image.dart';
+import '../lyrics/manual_lyrics.dart';
+import '../playback/play_error.dart' show extensionOf, isLyricsExtension;
 import '../playback/playlist.dart';
 import '../playback/track.dart';
 import '../playback/track_handle.dart';
@@ -105,10 +107,18 @@ class ImportService {
     this.coverDirectory,
     this.durationProbe,
     this.onImported,
+    this.manualLyrics,
   });
 
   final Playlist playlist;
   final ToastSink toasts;
+
+  /// 手动 `.lrc` 的应用器（T12）。没给就退回「`.lrc` 与其它非音频一样被拒绝」。
+  ///
+  /// 由装配层（`main.dart` 的 `buildBootstrap`，T15）构造并传入，**不要**在本类
+  /// 里自己 new 一个：调用方（`LibraryState.applyLyricsFiles`）也要用它，两边
+  /// 必须**同一个实例**，否则「谁改了哪个对象」分不清。
+  final ManualLyrics? manualLyrics;
 
   /// 内嵌封面落盘器。与 [coverDirectory] 同时给了才会写。
   final CoverImageWriter? covers;
@@ -142,7 +152,43 @@ class ImportService {
   /// 白名单外的一律拒绝**并点名**（有上限，见 [_maxNamedRejections]），
   /// 其余立刻入列；标签 / 时长在后台补。
   /// 同一个文件重复导入不会变成两条记录：已在列表里的只交回 id，不重建。
+  ///
+  /// `.lrc` 在分区**之前**就被挑出去交给 [manualLyrics]（`src/state/library.tsx:116-117`
+  /// 的 `lyricsFiles` / `mediaFiles` 两分）：它们既不算拒绝、也不算新增，
+  /// 不进 `ImportResult` 的任何计数 —— 歌词文件不是「不支持的音频」，
+  /// 也不是「加进来的曲目」。挑出去这一步必须早于 [partitionByExtension]，
+  /// 否则 `.lrc` 会先落进 `rejected`、再被 `_announceRejections` 报一句
+  /// 「不支持的文件格式」，而那正是 T12 要消掉的误报。
+  ///
+  /// **挂歌词排在音频入列之后**，对齐 `library.tsx:170-181`。原版那句注释写得很
+  /// 明白：`.lrc` 要放在音频入列（并纠正名字）之后再挂，「否则同名歌词配不到刚
+  /// 加进来的曲目上」。反过来（先挂歌词）就会让同一批里的音频永远配不上自己的
+  /// 歌词文件。
+  ///
+  /// 没有配 [manualLyrics] 时（本任务之前的装配、若干测试）`.lrc` 退回原样：
+  /// 仍算拒绝，行为与从前一字不差。
   Future<ImportResult> importPaths(List<String> paths) async {
+    if (paths.isEmpty) return const ImportResult();
+    final manual = manualLyrics;
+    if (manual == null) return _importMedia(paths);
+    final lyricsPaths = <String>[];
+    final mediaPaths = <String>[];
+    for (final path in paths) {
+      (isLyricsExtension(extensionOf(path)) ? lyricsPaths : mediaPaths)
+          .add(path);
+    }
+    // 音频那半照原流程走（含拒绝提示与入列），歌词那半等到它之后。
+    final result = mediaPaths.isEmpty
+        ? const ImportResult()
+        : await _importMedia(mediaPaths);
+    // 只拖了歌词文件时也要挂（原版 `library.tsx:123-129`：不该被当成
+    // 「没有可导入的文件」）；一批只有音频时这里自然什么都不做。
+    if (lyricsPaths.isNotEmpty) await manual.apply(lyricsPaths);
+    return result;
+  }
+
+  /// 音频那半的导入流程（[importPaths] 分流之后的正体）。
+  Future<ImportResult> _importMedia(List<String> paths) async {
     if (paths.isEmpty) return const ImportResult();
     final partition = partitionByExtension(paths);
     _announceRejections(partition.rejected);

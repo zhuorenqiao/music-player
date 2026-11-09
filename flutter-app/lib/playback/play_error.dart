@@ -49,6 +49,20 @@ bool isSupportedExtension(String name) {
   return value.isNotEmpty && kAudioExtensions.contains(value);
 }
 
+/// 歌词文件扩展名（spec §11 手动 `.lrc`）。
+///
+/// **只用于导入分流，不参与「能不能播」**：`.lrc` 永远不该进
+/// [kAudioExtensions] —— 那个集合是播放预校验与目录扫描的白名单，混进来
+/// 会让歌词文件被当曲目入列（没声音、时长永远 NaN）。
+const Set<String> kLyricsExtensions = {'lrc'};
+
+/// 这个扩展名是不是歌词文件。大小写不敏感（选择器给的可能是 `.LRC`）。
+///
+/// 入参是**裸扩展名**（不含点），来自 [extensionOf] 或路径切分；
+/// 与 [isSupportedExtension] 不同，这里不剥前导点，保持调用方口径单一。
+bool isLyricsExtension(String extension) =>
+    kLyricsExtensions.contains(extension.toLowerCase());
+
 /// 取路径的最后一段扩展名（不含点、小写）；没有扩展名时返回空串。
 String extensionOf(String path) {
   final at = path.lastIndexOf('.');

@@ -45,7 +45,7 @@ class RecordingToasts implements ToastSink {
   void info(String message) => show(message);
 
   @override
-  void error(String message) {
+  void error(String message, {int durationMs = 3200}) {
     errors.add(message);
     show(message);
   }

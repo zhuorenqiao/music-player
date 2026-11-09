@@ -23,7 +23,7 @@ class _NoToast implements ToastSink {
   @override
   void info(String message) {}
   @override
-  void error(String message) {}
+  void error(String message, {int durationMs = 3200}) {}
 }
 
 /// 广播流是异步投递：等两轮事件循环，让

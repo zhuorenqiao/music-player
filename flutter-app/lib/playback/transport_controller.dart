@@ -38,7 +38,14 @@ abstract class RecentRecorder {
 abstract class ToastSink {
   void show(String message, {String key = '', int durationMs = 3200});
   void info(String message);
-  void error(String message);
+
+  /// 失败类提示。
+  ///
+  /// [durationMs] 是 T12 加的可选时长：手动 `.lrc` 链路的四处提示在原版里都传
+  /// 6000（`src/state/library.tsx:76/85/101/106`），比默认的 3200 长一倍 ——
+  /// 文件名配对失败时用户要读完一整句才知道是哪个文件没配上。
+  /// 已有调用点一行都不用改（默认值保持 3200）。
+  void error(String message, {int durationMs = 3200});
 }
 
 /// 取消一次已排的延时任务；幂等，重复调用无害。

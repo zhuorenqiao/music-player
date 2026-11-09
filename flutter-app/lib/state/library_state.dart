@@ -16,6 +16,7 @@ import '../core/app_prefs.dart';
 import '../core/storage_keys.dart';
 import '../library/import_service.dart';
 import '../library/library_repository.dart';
+import '../lyrics/manual_lyrics.dart';
 import '../playback/play_mode.dart';
 import '../playback/playlist.dart';
 import '../playback/track.dart';
@@ -354,6 +355,30 @@ class LibraryState extends ChangeNotifier {
     return result.added;
   }
 
+  /// 挂一批用户手动挑的 `.lrc`，返回配上几首（T12）。
+  ///
+  /// 对应 `src/state/library.tsx:69-108` 的 `applyLyricsFiles`。与 React 的
+  /// **唯一有意差异**是落库次数：React 在循环里每成功一条 `refresh(); persist();`，
+  /// 这里由 [ManualLyrics.apply] 改完活对象、整批结束后**统一落一次**。
+  /// 用户可见行为一致（提示照样逐条发），一批几十个文件却省下几十次整库重写。
+  ///
+  /// **落库时机**：`apply` 内部不落库（它拿不到 repo），所以必须在它 `await`
+  /// 返回之后、`matched > 0` 时由这里补上 —— 少了这一次，手动歌词只活在内存里，
+  /// 重启就退回「没有歌词」。`matched == 0`（全是坏文件 / 全没配上）时不落库：
+  /// 内存里什么都没有变，整库重写一遍纯属白费。
+  Future<int> applyLyricsFiles(List<String> paths) async {
+    final manual = importer.manualLyrics;
+    // 没装配（本任务之前的 main.dart、若干测试）时安静地什么都不做：
+    // 界面上的「导入歌词」入口在那之前也不会出现。
+    if (manual == null || paths.isEmpty) return 0;
+    final result = await manual.apply(paths);
+    if (result.matched > 0) {
+      await persist();
+      _changed();
+    }
+    return result.matched;
+  }
+
   /// 只换当前曲目（不自动播放，播放与否归 PlayerState）。
   Future<void> setCurrent(String id) async {
     playlist.setCurrentById(id);
@@ -512,5 +537,5 @@ class _SilentToasts implements ToastSink {
   void info(String message) {}
 
   @override
-  void error(String message) {}
+  void error(String message, {int durationMs = 3200}) {}
 }

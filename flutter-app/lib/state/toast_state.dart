@@ -102,9 +102,12 @@ class ToastState extends ChangeNotifier implements ToastSink {
   void info(String message) => _emit(message, ToastKind.info);
 
   /// 失败类提示：固定带 `error:<文案>` 的 key，同一条错误不会叠多行。
+  ///
+  /// [durationMs] 是 T12 加的可选时长（手动 `.lrc` 链路在原版里传 6000）；
+  /// 默认 3200 保住既有调用点。
   @override
-  void error(String message) =>
-      _emit(message, ToastKind.error, key: 'error:$message');
+  void error(String message, {int durationMs = kToastDefaultDurationMs}) =>
+      _emit(message, ToastKind.error, key: 'error:$message', durationMs: durationMs);
 
   void success(String message) => _emit(message, ToastKind.success);
 

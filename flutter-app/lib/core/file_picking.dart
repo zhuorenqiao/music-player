@@ -9,18 +9,22 @@
 // 导入服务对空结果与不支持的格式另有自己的处理。
 import 'package:file_picker/file_picker.dart';
 
-import '../playback/play_error.dart' show kAudioExtensions;
+import '../playback/play_error.dart' show kAudioExtensions, kLyricsExtensions;
 
-/// 多选音频文件，返回真实文件系统路径。
+/// 多选音频文件（以及手动歌词 `.lrc`），返回真实文件系统路径。
 ///
-/// 扩展名白名单直接取 [kAudioExtensions]（与原版一致）；Android 上选择器
-/// 可能给缓存副本的路径，那也照用 —— 导入本来就要复制 / 落库。
+/// 扩展名白名单是音频白名单 + [kLyricsExtensions]：手动 `.lrc` 走的就是这个
+/// 选择器（T12），用户一次挑一堆「歌 + 对应歌词」时不必开两次对话框。
+/// 挑进来的 `.lrc` 由 `ImportService.importPaths` 分流到手动歌词那一路，
+/// **不**会进播放列表 —— 白名单放宽不等于播放白名单放宽。
+/// Android 上选择器可能给缓存副本的路径，那也照用 —— 导入本来就要复制 / 落库。
 /// 取消或平台报错时返回空列表。
 Future<List<String>> pickAudioFiles() async {
   try {
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: kAudioExtensions.toList()..sort(),
+      allowedExtensions: [...kAudioExtensions, ...kLyricsExtensions].toList()
+        ..sort(),
     );
     final paths = <String>[];
     for (final file in files) {

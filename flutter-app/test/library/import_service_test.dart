@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/library/duration_probe.dart';
 import 'package:light_music/library/import_service.dart';
+import 'package:light_music/lyrics/manual_lyrics.dart';
 import 'package:light_music/metadata/cover_image.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
@@ -37,7 +38,7 @@ class RecordingToasts implements ToastSink {
   void info(String message) => show(message);
 
   @override
-  void error(String message) {
+  void error(String message, {int durationMs = 3200}) {
     errors.add(message);
     show(message);
   }
@@ -828,5 +829,109 @@ void main() {
       0,
       reason: '两条路都挡在探针之前（R7 的守卫 + I1 的谓词），一次也不许白等 3 秒',
     );
+  });
+
+  // -- T12：同一个批次里的 .lrc 走手动歌词 -------------------------------------
+  //
+  // 钉三件事：**不计数**（既不算拒绝也不算新增）、**真的挂上了**、以及
+  // 挂歌词发生在**音频入列之后**（原版 library.tsx:170-181 的顺序；反过来
+  // 同一批里的音频就永远配不上自己的歌词）。第三条靠「本批新入列的音频被配上」
+  // 这一条事实钉住 —— 先挂歌词时列表里还没有这首曲目。
+
+  test('同一个导入批次里的 .lrc 走手动歌词，不计入拒绝也不计入新增', () async {
+    final playlist = Playlist(
+      tracks: [
+        Track(
+          id: '1',
+          src: '/m/陈奕迅 - 十年.flac',
+          title: '十年',
+          artist: '陈奕迅',
+          isLocal: true,
+        ),
+      ],
+    );
+    final toasts = RecordingToasts();
+    final dir = await Directory.systemTemp.createTemp('mix-');
+    addTearDown(() => dir.delete(recursive: true));
+    final audio = File('${dir.path}/陈奕迅 - 孤勇者.flac')
+      ..writeAsBytesSync(const []);
+    final lrc = File('${dir.path}/陈奕迅 - 十年.lrc')
+      ..writeAsStringSync('[00:01]甲');
+
+    final service = ImportService(
+      playlist: playlist,
+      toasts: toasts,
+      manualLyrics: ManualLyrics(playlist: playlist, toasts: toasts),
+    );
+    final result = await service.importPaths([audio.path, lrc.path]);
+
+    expect(result.rejected, 0);
+    expect(result.added, 1);
+    expect(playlist.byId('1')!.lyricsSource, 'manual');
+    expect(playlist.byId('1')!.lyrics, '[00:01]甲');
+  });
+
+  test('.lrc 不会变成一条曲目，也不许报「不支持的文件格式」', () async {
+    final playlist = Playlist(tracks: const []);
+    final toasts = RecordingToasts();
+    final dir = await Directory.systemTemp.createTemp('only-lrc-');
+    addTearDown(() => dir.delete(recursive: true));
+    final lrc = File('${dir.path}/十年.lrc')..writeAsStringSync('[00:01]甲');
+
+    final service = ImportService(
+      playlist: playlist,
+      toasts: toasts,
+      manualLyrics: ManualLyrics(playlist: playlist, toasts: toasts),
+    );
+    final result = await service.importPaths([lrc.path]);
+
+    expect(result.added, 0);
+    expect(result.rejected, 0);
+    expect(result.rejectedNames, isEmpty);
+    expect(playlist.size, 0, reason: '.lrc 是歌词，不是曲目');
+    // 列表里没有同名曲目 → 只发一句「未找到…」，绝不是「不支持的文件格式」。
+    expect(toasts.errors, isEmpty);
+    expect(toasts.messages, ['未找到与「十年.lrc」同名的曲目，已拒绝替换']);
+  });
+
+  test('没装配 manualLyrics 时 .lrc 退回原样：仍算拒绝', () async {
+    // 兼容性钉：T12 之前的装配（以及本文件上面那些老用例）不该因为这次改动
+    // 而悄悄改变行为 —— 没有手动歌词器时，`.lrc` 与其他非音频文件等价。
+    final playlist = Playlist(tracks: const []);
+    final toasts = RecordingToasts();
+    final service = ImportService(playlist: playlist, toasts: toasts);
+
+    final result = await service.importPaths(['/m/a.flac', '/m/c.lrc']);
+
+    expect(result.added, 1);
+    expect(result.rejected, 1);
+    expect(result.rejectedNames, ['c.lrc']);
+    expect(toasts.errors, isEmpty);
+  });
+
+  test('音频入列之后才挂歌词（与 React 同序），本批新曲目也能配上', () async {
+    final playlist = Playlist(tracks: const []);
+    final toasts = RecordingToasts();
+    final dir = await Directory.systemTemp.createTemp('order-');
+    addTearDown(() => dir.delete(recursive: true));
+    // 空字节的假音频：入列按文件名拆出「孤勇者 / 陈奕迅」。
+    final audio = File('${dir.path}/陈奕迅 - 孤勇者.flac')
+      ..writeAsBytesSync(const []);
+    final lrc = File('${dir.path}/陈奕迅 - 孤勇者.lrc')
+      ..writeAsStringSync('[00:01]甲\n[00:02]乙');
+
+    final service = ImportService(
+      playlist: playlist,
+      toasts: toasts,
+      manualLyrics: ManualLyrics(playlist: playlist, toasts: toasts),
+    );
+    // 歌词文件排在前面交给 importPaths：分流之后仍必须先入列音频再挂歌词。
+    await service.importPaths([lrc.path, audio.path]);
+
+    // 本批新入列的曲目被配上了 —— 先挂歌词的实现会在这里拿到空歌词。
+    final added = playlist.tracks.single;
+    expect(added.title, '孤勇者');
+    expect(added.lyrics, '[00:01]甲\n[00:02]乙');
+    expect(added.lyricsSource, 'manual');
   });
 }

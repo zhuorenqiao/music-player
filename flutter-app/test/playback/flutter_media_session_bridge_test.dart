@@ -30,7 +30,7 @@ class _NoToast implements ToastSink {
   @override
   void info(String message) {}
   @override
-  void error(String message) {}
+  void error(String message, {int durationMs = 3200}) {}
 }
 
 /// 只管「会话生命周期 + 保活开关」的平台替身。

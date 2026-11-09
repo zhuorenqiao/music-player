@@ -389,5 +389,5 @@ class _NoToasts implements ToastSink {
   void info(String message) {}
 
   @override
-  void error(String message) {}
+  void error(String message, {int durationMs = 3200}) {}
 }
