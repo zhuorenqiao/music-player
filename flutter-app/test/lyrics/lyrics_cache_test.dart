@@ -42,12 +42,17 @@ void main() {
       expect(read.source, '缓存');
     });
 
-    test('命中 TTL 30 天：第 30 天仍命中，第 31 天失效', () async {
+    test('命中 TTL 30 天：第 30 天仍命中，第 31 天失效且过期条目留在原地', () async {
       await cache.write('k', hit);
       now = now.add(const Duration(days: 30));
       expect(await cache.read('k'), isNotNull);
       now = now.add(const Duration(days: 1, seconds: 1));
       expect(await cache.read('k'), isNull);
+      // 过期只返回 null、不删条目，且读操作不改写 prefs（淘汰只发生在写入时）。
+      final afterExpiry = jsonDecode(
+        (await prefs.readString(LyricsIndexCache.prefsKey))!,
+      ) as Map;
+      expect(afterExpiry.containsKey('k'), isTrue);
     });
 
     test('未命中 TTL 3 天', () async {
@@ -93,9 +98,11 @@ void main() {
       expect(raw.containsKey('k129'), isTrue);
     });
 
-    test('脏 JSON 当空表，不抛', () async {
+    test('脏 JSON 当空表，不抛；脏值不被读操作清理', () async {
       await prefs.writeString(LyricsIndexCache.prefsKey, '{not json');
       expect(await cache.read('k'), isNull);
+      // 读不自愈：脏值原样留在 prefs 里（换成 AppPrefs.readJson 会在解析失败时删键）。
+      expect(await prefs.readString(LyricsIndexCache.prefsKey), '{not json');
       await cache.write('k', hit);
       expect((await cache.read('k'))!.isOk, isTrue);
     });
