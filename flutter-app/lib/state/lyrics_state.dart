@@ -207,8 +207,12 @@ class LyricsState extends ChangeNotifier {
   void attach(Track? track) {
     // 幂等：同一个对象 + 同样的歌词字段，说明这次触发没带来任何新信息。
     // 真实装配里 view 变化（进度、音量…）都会走到这里。
-    if (track != null &&
-        identical(track, _attachedTrack) &&
+    //
+    // 没有曲目（null）也要幂等：装配层在没有当前曲目时同样每帧调进来，重复走
+    // _restart 会白白 ++世代、取消令牌并再通知一次。
+    if (track == null) {
+      if (_attachedTrack == null && _track == null) return;
+    } else if (identical(track, _attachedTrack) &&
         _trackKey(track) == _attachKey) {
       return;
     }
