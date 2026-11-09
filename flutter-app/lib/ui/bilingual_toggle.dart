@@ -40,6 +40,15 @@ const double _kPillRadius = 999;
 ///
 /// [tooltip] 进无障碍 hint（不是 [Tooltip] 气泡）：原版把四档说明写在 `title`
 /// 里当读屏提示，鼠标悬停的气泡反而不是重点。空串表示没有额外说明。
+///
+/// ⚠️ **调用方必须自己判 `translatable`**。本组件是纯展示的，**永远不会
+/// return null**：给它一个位置就一定会画出来。原版组件里那句
+/// `if (!translatable) return null`（`src/components/BilingualToggle.tsx`）
+/// 在 Flutter 侧要由调用方写成
+/// `bilingual.translatable ? BilingualToggle(...) : null`，否则中文歌也会
+/// 常驻一个毫无用处的开关。T18 的 `Stage` 与 T19 的 `LyricsPage` 都要照此写
+/// （`BilingualState.translatable` 是 `_lyrics.translatable` 的直接转发，
+/// 不要在这里重算）。T16 的 brief 没有明确要求这条门禁，特此钉住。
 class BilingualToggle extends StatelessWidget {
   const BilingualToggle({
     required this.enabled,

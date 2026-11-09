@@ -178,25 +178,22 @@ class _Spinner extends StatefulWidget {
 
 class _SpinnerState extends State<_Spinner>
     with SingleTickerProviderStateMixin {
-  AnimationController? _controller;
+  late final AnimationController _controller;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // 减少动态效果：不建控制器，直接用 0 相位的那一帧（亮弧停在正上方）。
-    if (MediaQuery.disableAnimationsOf(context)) {
-      _controller?.dispose();
-      _controller = null;
-    } else {
-      // 只在首次进到「有动画」时建；didChangeDependencies 会因主题等变化重复调用。
-      _controller ??= AnimationController(vsync: this, duration: _kSpinPeriod)
-        ..repeat();
-    }
+  void initState() {
+    super.initState();
+    // 控制器**只建一次**：SingleTickerProviderStateMixin 只允许一个 ticker
+    // 存活过一次，dispose 之后再 ??= 重建会触发 assert「can only be used as a
+    // TickerProvider once」——「减少动态效果」从开切回关就是这条路径。
+    // 因此减少动态效果不再销毁控制器，只在 build 里不读它的 value（见下）。
+    _controller = AnimationController(vsync: this, duration: _kSpinPeriod)
+      ..repeat();
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
@@ -206,12 +203,13 @@ class _SpinnerState extends State<_Spinner>
       size: const Size.square(_kSpinnerSize),
       painter: _RingPainter(track: widget.trackColor, head: widget.headColor),
     );
-    final controller = _controller;
-    if (controller == null) return ring;
+    // 减少动态效果：亮弧停在正上方（0 相位），不走动画。控制器仍在跑，但
+    // 不订阅它就不会重建 —— 与 transport.dart 的 reduced-motion 一节同口径。
+    if (MediaQuery.disableAnimationsOf(context)) return ring;
     return AnimatedBuilder(
-      animation: controller,
+      animation: _controller,
       builder: (context, child) => Transform.rotate(
-        angle: 2 * math.pi * controller.value,
+        angle: 2 * math.pi * _controller.value,
         child: child,
       ),
       child: ring,

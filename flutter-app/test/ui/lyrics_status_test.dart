@@ -43,6 +43,25 @@ void main() {
     )));
     expect(find.text('重试'), findsNothing);
   });
+
+  testWidgets('减少动态效果来回切换不重建 ticker（I1 回归）', (tester) async {
+    // 复现 rev-t16 的 I1：_SpinnerState 原先在 didChangeDependencies 里
+    // dispose + ??= 重建 AnimationController，而 SingleTickerProviderStateMixin
+    // 只允许一个 ticker 存活过一次 —— 「关掉减少动态效果」那一帧会抛
+    // 「can only be used as a TickerProvider once」。
+    Widget build(bool disable) => MediaQuery(
+      data: MediaQueryData(disableAnimations: disable),
+      child: wrap(const LyricsStatusLine(
+        status: '正在按曲名与歌手匹配歌词…', loading: true, failed: false, showRetry: false, onRetry: _noop,
+      )),
+    );
+    for (final disable in [false, true, false, true, false]) {
+      await tester.pumpWidget(build(disable));
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'disableAnimations=$disable');
+      expect(find.byKey(const Key('lyrics-status-spinner')), findsOneWidget);
+    }
+  });
 }
 
 void _noop() {}
