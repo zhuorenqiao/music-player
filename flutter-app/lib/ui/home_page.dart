@@ -12,8 +12,10 @@ import 'package:provider/provider.dart';
 
 import '../core/file_picking.dart';
 import '../state/library_state.dart';
+import '../state/lyrics_page_controller.dart';
 import '../theme/app_tokens.dart';
 import 'header.dart';
+import 'lyrics_page.dart';
 import 'panel.dart';
 import 'shell.dart';
 import 'stage.dart';
@@ -28,6 +30,9 @@ class HomePage extends StatelessWidget {
     // 抽屉的动作要落在同一份曲库状态上；先取出来，回调触发时再 await，
     // 不在 await 之后碰 context。
     final library = context.read<LibraryState>();
+    // 歌词页开合（T18 的控制器）：开着时把整块内容区换成 [LyricsPage]，
+    // 头部与控制条两档都留着（见 [HomeLayout.overlay] 的注释）。
+    final page = context.watch<LyricsPageController>();
     return Scaffold(
       backgroundColor: tokens.bg,
       // `body::before`：一整面对角渐变，不参与滚动
@@ -48,6 +53,7 @@ class HomePage extends StatelessWidget {
           stage: const Stage(), // T26 起是真的播放卡
           panel: const Panel(), // T28 起是真的播放列表 / 最近面板
           transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
+          overlay: page.isOpen ? const LyricsPage() : null,
         ),
       ),
     );

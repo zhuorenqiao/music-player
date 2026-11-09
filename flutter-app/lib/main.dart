@@ -29,10 +29,17 @@ import 'package:path_provider/path_provider.dart';
 import 'app.dart';
 import 'core/app_prefs.dart';
 import 'core/platform_services.dart';
+import 'core/storage_keys.dart';
 import 'library/duration_probe.dart';
 import 'library/import_service.dart';
 import 'library/library_repository.dart';
 import 'library/recent_store.dart';
+import 'lyrics/lyrics_cache.dart';
+import 'lyrics/lyrics_source.dart';
+import 'lyrics/manual_lyrics.dart';
+import 'lyrics/translate_cache.dart';
+import 'lyrics/translate_source.dart';
+import 'lyrics/upstream.dart';
 import 'metadata/cover_image.dart';
 import 'playback/audio_driver.dart';
 import 'playback/audio_player.dart';
@@ -42,6 +49,9 @@ import 'playback/media_session_bridge.dart';
 import 'playback/playlist.dart';
 import 'playback/transport_controller.dart';
 import 'state/library_state.dart';
+import 'state/bilingual_state.dart';
+import 'state/lyrics_page_controller.dart';
+import 'state/lyrics_state.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
 import 'state/toast_state.dart';
@@ -68,6 +78,10 @@ Future<void> main() async {
     dataDirectory: support.path,
     driver: MediaKitDriver(),
     bridge: FlutterMediaSessionBridge(),
+    // 生产上才真的用 Future.delayed 排 4s 慢提示 / 25s 自动重试。
+    // buildBootstrap 的默认是不排 Timer 的挂起延时（见参数注释），因为所有
+    // testWidgets 都跑在 FakeAsync 里，收尾时要求「没有 pending Timer」。
+    lyricsDelay: Future.delayed,
   );
   runApp(LightMusicApp(bootstrap: bootstrap));
 }
@@ -93,6 +107,19 @@ Future<AppBootstrap> buildBootstrap({
   Duration mediaSessionAttachTimeout = kMediaSessionAttachTimeout,
   Future<double> Function(String source)? durationOpener,
   Future<void> Function()? durationOpenerClose,
+  // T15：歌词 / 译文链路的可注入接缝。生产不传，走真实上游与双层缓存；
+  // 测试传假替身，避免打网络（见 test/state/lyrics_wiring_test.dart）。
+  LyricsMatcher? lyricsMatcher,
+  TranslationFetcher? translationFetcher,
+  bool? bilingualEnabled,
+  String? lyricsCacheDirectory,
+  String? translateCacheDirectory,
+  // 歌词状态机的两个 detached 延时（4s 慢提示 / 25s 自动重试）。
+  // 生产入口 `main()` 显式传 `Future.delayed`；**默认**是一个永不完成的
+  // Completer（挂起的 async，不是 Timer）—— 所有 testWidgets 都跑在 FakeAsync
+  // 里，收尾断言 `!timersPending`，默认排真 Timer 会让整份集成测试红。
+  // 注入本参数即可在测试里精确控制这两个延时（见 lyrics_wiring_test.dart）。
+  Future<void> Function(Duration)? lyricsDelay,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -116,17 +143,25 @@ Future<AppBootstrap> buildBootstrap({
     timeoutMs: kDurationProbeTimeoutMs,
     closeOpener: durationOpenerClose ?? probeOpener?.dispose,
   );
+  // 手动 `.lrc` 的应用器（T12）。必须在 ImportService 之前建：ImportService
+  // 与 LibraryState.applyLyricsFiles 要**共用同一个实例**（后者读的就是
+  // `importer.manualLyrics`），各自 new 一份会让「配对成功」永远落不到库。
+  final manualLyrics = ManualLyrics(playlist: playlist, toasts: toasts);
   final importer = ImportService(
     playlist: playlist,
     toasts: toasts,
     covers: const CoverImageWriter(),
     coverDirectory: '$dataDirectory/covers',
+    manualLyrics: manualLyrics,
     // 交出去的是**带来路**的那条（`probeOutcome`）而不是裸秒数：回填批次
     // 要不要给这条曲目记「已探测」标记，取决于探不出是**超时**还是
     // **这文件真没有时长**（第 3 轮 C1）。两条从前都是 NaN，接错编译不过。
     durationProbe: probe.probeOutcome,
   );
   final recent = RecentState(recentStore);
+  // 全屏歌词页的开合开关（T18）：纯界面态，但要跨「播放卡的点击」与「T19 的
+  // 页面本体 / overlay 槽 / 快捷键」三方共用，所以由组合根持有、经 provider 下发。
+  final lyricsPage = LyricsPageController();
   final library = LibraryState(
     prefs: prefs,
     repo: repository,
@@ -136,6 +171,56 @@ Future<AppBootstrap> buildBootstrap({
     onPlaylistChanged: _playlistChangeHandler(transport, recent),
   );
   final player = PlayerState(prefs: prefs, transport: transport);
+
+  // T15：歌词与双语状态。**顺序承重** —— `library` 必须先建好
+  //（`onChanged` 引用它），`lyrics` 在 `library` 之后、`player.ready()` /
+  // `library.restore()` 之前建；`bilingual` 紧随 `lyrics`（它构造时就
+  // `lyrics.addListener` 并起一轮请求）。
+  // 两条链路各有一个可注入接缝；只有「真的需要连上游」时才用真实源。
+  // `HttpJsonClientImpl` 的真实内核是懒建到第一次 getJson 的（见 upstream.dart
+  // 的说明），所以即便测试注入了假 matcher / fetcher、这里照样可以建它 ——
+  // 装配阶段一个 socket 都不碰，也不会触发 testWidgets 的 HttpClient 警告。
+  final httpClient = HttpJsonClientImpl();
+  final lyricsSource =
+      lyricsMatcher ??
+      LyricsSource(
+        client: httpClient,
+        disk: LyricsDiskCache(
+          directory: lyricsCacheDirectory ?? '$dataDirectory/lyrics',
+        ),
+        index: LyricsIndexCache(prefs),
+        gate: RateLimitGate(),
+      );
+  final translateSource =
+      translationFetcher ??
+      TranslateSource(
+        client: httpClient,
+        disk: TranslationDiskCache(
+          directory: translateCacheDirectory ?? '$dataDirectory/translate',
+        ),
+        index: TranslationIndexCache(prefs),
+      );
+  final lyrics = LyricsState(
+    source: lyricsSource,
+    delay: lyricsDelay ?? _neverFireDelay(),
+    // 匹配成功写回活对象之后落一次库：与 M1 的回填收尾同一条理由 ——
+    // 不落库的话重启就退回「没有歌词」。
+    onChanged: () async => library.persist(),
+  );
+  final bilingual = BilingualState(
+    lyrics: lyrics,
+    source: translateSource,
+    enabled:
+        bilingualEnabled ??
+        (await prefs.readString(StorageKeys.bilingual)) != '0',
+    persistEnabled: (value) =>
+        prefs.writeString(StorageKeys.bilingual, value ? '1' : '0'),
+  );
+  // 切歌联动：`view` 是语义快照（切歌 / 播放 / 损坏…才通知），进度不在里面。
+  // 首次快照可能在 `restore()` 之前就发过了，所以下面还要手动挂一次。
+  void syncLyricsTrack() => lyrics.attach(player.current);
+  player.transport.view.addListener(syncLyricsTrack);
+
   // 停止播放也要落一次盘，而且**当场落完**（终审 R2 + 它的残留）：
   // `stopPlayback` 清掉的是播放指针，而指针就是 prefs 那份 `currentId` 现场的
   // 真相。从暂停态按停止时内核状态本来就没变，一个驱动事件都不会发，
@@ -159,6 +244,9 @@ Future<AppBootstrap> buildBootstrap({
   // 「没读过档」的样子。顺序对了，第一次发布就已经是现场值。
   await player.ready();
   await library.restore();
+  // `view` 的首次快照可能在上面 addListener 之前就发过了，手动补挂一次，
+  // 否则冷启动还原出来的当前曲目会一直挂着「没有歌词」。
+  syncLyricsTrack();
 
   // 最近播放后还原（只读 prefs，失败也只是一份空历史），再按列表校正失效标记。
   await recent.restore();
@@ -198,7 +286,19 @@ Future<AppBootstrap> buildBootstrap({
     notificationPermission: () =>
         _queryNotificationPermission(queryNotificationPermission),
     durationProbe: probe,
+    lyrics: lyrics,
+    bilingual: bilingual,
+    onLyricsViewChanged: syncLyricsTrack,
+    lyricsPage: lyricsPage,
   );
+}
+
+/// 测试装配的默认延时：一个永不完成的 Completer，`await` 它不会创建 Timer。
+/// [LyricsState] 的两个 detached 回调会永远挂起，不会到点改状态、也不会让
+/// `testWidgets` 收尾时报 pending Timer。生产由 `main()` 传入 [Future.delayed]。
+Future<void> Function(Duration) _neverFireDelay() {
+  final completer = Completer<void>();
+  return (_) => completer.future;
 }
 
 /// 查询通知权限，失败 / 超时按 false（没有通知栏控制）处理，绝不抛出。

@@ -109,9 +109,18 @@ abstract class HttpJsonClient {
 
 /// 生产实现：package:http 直连，单程 timeout 到点归 JsonTimeout，其它异常归 JsonNetwork。
 class HttpJsonClientImpl implements HttpJsonClient {
-  HttpJsonClientImpl({http.Client? inner}) : _inner = inner ?? http.Client();
+  // `http.Client()` 在构造时就会开一个真 HttpClient。组合根装配（T15）在
+  // `buildBootstrap` 里建它，而 testWidgets 跑在 TestWidgetsFlutterBinding 下：
+  // 哪怕一整个测试都注入了假 matcher / fetcher、根本不会发请求，光是构造就
+  // 会触发「provide your own HttpClient implementation」警告，并让框架把所有
+  // 请求统一回 400。所以把真实内核**懒建到第一次 getJson**：生产行为不变
+  //（第一次请求照样开），启动装配与测试则一个 socket 都不碰。
+  HttpJsonClientImpl({http.Client? inner}) : _explicitInner = inner;
 
-  final http.Client _inner;
+  final http.Client? _explicitInner;
+  http.Client? _lazyInner;
+
+  http.Client get _inner => _explicitInner ?? (_lazyInner ??= http.Client());
 
   @override
   Future<JsonOutcome> getJson(

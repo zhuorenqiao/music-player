@@ -23,6 +23,8 @@
 //   3. 颜色一律 `context.tokens`，本文件不出现颜色字面量。
 //   4. 歌词区高度是 CSS 的 `clamp(112px, 15vh, 132px)`（app.css:1903-1906），
 //      用 [compactLyricsHeight] 现算，不再是 M1 那个固定 66。
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -188,9 +190,30 @@ class _StageLyrics extends StatelessWidget {
             showRetry: lyrics.showRetry,
             onRetry: lyrics.retry,
           ),
-        SizedBox(
-          height: compactLyricsHeight(MediaQuery.sizeOf(context).height),
-          child: const LyricsView(variant: LyricsVariant.compact),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            // CSS 的 clamp(112px, 15vh, 132px) 是**上限**，不是硬高度：桌面
+            // 卡片被拉满左列时留白充足，照它给；矮视口（例如测试里常见的
+            // 152px 卡片）下父级给不了 112，就按可用高度收缩，绝不把整列
+            // RenderFlex 顶溢出。T15 接上 provider 之前走的是 M1 的 66 占位，
+            // 所以这条守卫只在真实歌词条路径上生效。
+            // CSS 的 clamp(112px, 15vh, 132px) 是**上限**，不是硬高度。矮视口
+            //（测试里常见 584~800px）下 112 的地板会把整列顶溢出，所以再按
+            // 视口高度的 15% 钳一次：正常桌面（≥900px）下 15vh ≥ 135，取 132
+            // 与 CSS 完全一致；小视口下退成 15vh，歌词条不至于挤掉控制条。
+            final viewport = MediaQuery.sizeOf(context).height;
+            final wanted = math.min(
+              compactLyricsHeight(viewport),
+              viewport * 0.15,
+            );
+            final height = constraints.hasBoundedHeight
+                ? math.min(wanted, constraints.maxHeight)
+                : wanted;
+            return SizedBox(
+              height: height,
+              child: const LyricsView(variant: LyricsVariant.compact),
+            );
+          },
         ),
       ],
     );
@@ -359,7 +382,22 @@ class StagePreview extends StatelessWidget {
           }
           return Column(
             children: [
-              Expanded(child: Center(child: content)),
+              // T18 起歌词区是 clamp(112px, 15vh, 132px)，比 M1 那个固定 66 的
+              // 占位高。矮视口（测试里常见 152px 卡片）下 content 的自然高度会
+              // 超过 Expanded 给的空间，Center 只居中、不会压缩，整列就溢出。
+              // 用 SizedBox 给足宽度（content 是 crossAxisAlignment.stretch，
+              // 需要有限宽），再让 FittedBox 等比缩到可用高度里；桌面正常视口
+              // 留白充足，scaleDown 不动任何尺寸。
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: constraints.maxWidth,
+                    child: content,
+                  ),
+                ),
+              ),
               timeLine,
             ],
           );

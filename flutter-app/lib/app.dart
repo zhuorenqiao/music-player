@@ -20,6 +20,9 @@ import 'playback/media_session_bridge.dart' show MediaSessionCoordinator;
 import 'playback/playlist.dart';
 import 'playback/transport_controller.dart';
 import 'state/library_state.dart';
+import 'state/bilingual_state.dart';
+import 'state/lyrics_page_controller.dart';
+import 'state/lyrics_state.dart';
 import 'state/panel_controller.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
@@ -43,7 +46,14 @@ class AppBootstrap {
     required this.notificationGranted,
     required this.notificationPermission,
     this.durationProbe,
-  });
+    required this.lyrics,
+    required this.bilingual,
+    required this.onLyricsViewChanged,
+    LyricsPageController? lyricsPage,
+  }) : // 全屏歌词页的开合开关（T18 建、T19 接页面本体）。
+       // 可空入参 + 在这里兜底建：`buildBootstrap` 传它（Stage 与 T19 的页面 /
+       // 快捷键要共用同一份），测试里直接 new `AppBootstrap` 的路径也不必改。
+       lyricsPage = lyricsPage ?? LyricsPageController();
 
   final AppPrefs prefs;
   final LibraryRepository repository;
@@ -81,18 +91,37 @@ class AppBootstrap {
   /// 现在由 [dispose] 关掉，[LightMusicApp] 卸载时调用。
   final DurationProbe? durationProbe;
 
+  /// 歌词状态机（T13）。播放卡与歌词页共读它；匹配成功会经 `onChanged` 落库。
+  final LyricsState lyrics;
+
+  /// 双语状态机（T14）。转发 `lyrics.translatable`，自己管译文与三条生命周期规则。
+  final BilingualState bilingual;
+
+  /// `buildBootstrap` 挂在 `player.transport.view` 上的那个回调引用。
+  /// [dispose] 要用**同一个函数对象**才能 `removeListener` 掉，不能另写一份闭包。
+  final VoidCallback onLyricsViewChanged;
+
+  /// 全屏歌词页的开合开关（T18 建、T19 消费）。
+  ///
+  /// **不是** `LyricsState` 的一部分：播放卡（T18）负责 `open()`，页面本体与
+  /// overlay 槽（T19）负责 `close()` / 读 [LyricsPageController.isOpen]，
+  /// 快捷键层再做 `toggle()`。三方读同一个 flag，所以只能有一份实例，归组合根。
+  final LyricsPageController lyricsPage;
+
   /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
   Playlist get playlist => library.playlist;
   TransportController get transport => player.transport;
   ImportService get importer => library.importer;
   RecentStore get recentStore => recent.store;
 
-  /// 释放组合根自己持有的原生资源。幂等，且绝不抛。
+  /// 释放组合根自己持有的原生资源与监听器。幂等，且绝不抛。
   ///
-  /// 只管时长探测的内核：四个状态层与 [TransportController] 由各自的宿主
-  /// （provider / 测试的 `addTearDown`）负责，这里不越权去 dispose 它们，
-  /// 否则应用退出时会出现「先关掉播放器再关掉监听它的界面」这种顺序问题。
+  /// 只管时长探测的内核与切歌联动的监听：四个状态层与
+  /// [TransportController] 由各自的宿主（provider / 测试的 `addTearDown`）负责，
+  /// 这里不越权去 dispose 它们，否则应用退出时会出现「先关掉播放器再关掉监听
+  /// 它的界面」这种顺序问题。
   Future<void> dispose() async {
+    player.transport.view.removeListener(onLyricsViewChanged);
     await durationProbe?.close();
   }
 }
@@ -130,6 +159,14 @@ class _LightMusicAppState extends State<LightMusicApp> {
         ChangeNotifierProvider<PlayerState>.value(value: bootstrap.player),
         ChangeNotifierProvider<RecentState>.value(value: bootstrap.recent),
         ChangeNotifierProvider<ToastState>.value(value: bootstrap.toasts),
+        // T15：歌词与双语状态。`.value` 由组合根持有，应用生命周期内常驻。
+        ChangeNotifierProvider<LyricsState>.value(value: bootstrap.lyrics),
+        ChangeNotifierProvider<BilingualState>.value(value: bootstrap.bilingual),
+        // 全屏歌词页的开合开关（T18）：播放卡的点击与 T19 的页面本体 / overlay
+        // 槽 / 快捷键读同一份，登记在路由之上。
+        ChangeNotifierProvider<LyricsPageController>.value(
+          value: bootstrap.lyricsPage,
+        ),
         // 面板的选中 tab 是纯界面态：不属于组合根，界面装配时建即可。
         // 放在路由之上，T29 的弹层复用同一份。
         ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
@@ -175,6 +212,12 @@ class _LightMusicAppState extends State<LightMusicApp> {
                 unawaited(player.next());
               case 'playPrev':
                 unawaited(player.previous());
+              // T19：L 开 / 关全屏歌词页；Esc 只在开着时才关（原版
+              // `src/App.tsx:1595` 的 Escape 分支同样是「有层才关」）。
+              case 'toggleLyricsPage':
+                bootstrap.lyricsPage.toggle();
+              case 'closeOverlay':
+                if (bootstrap.lyricsPage.isOpen) bootstrap.lyricsPage.close();
             }
           },
           child: const HomePage(),
