@@ -149,6 +149,16 @@ class LyricsState extends ChangeNotifier {
   /// 对译 React 的 requestId（lyrics.tsx:109 的 useRef，:394 / :404 / :413 三处比对）。
   int _generation = 0;
 
+  /// 本轮匹配的令牌：响应一落地就 +1，把 4 秒慢提示作废。
+  ///
+  /// **世代不够用**：`_generation` 只在 [_restart] 里自增，而一次匹配正常返回
+  /// ok / not-found / error 并不会重开一轮 —— 缓存命中时几十毫秒就落地、世代没变，
+  /// 于是 4 秒后慢提示照样 `_setStatus`，把已经落地的最终文案覆盖掉。
+  /// React 那边有**两道**闸：`clearTimeout(slowHint)`（`.then` 首行 :412、`.catch`
+  /// 首行 :459）是第一道，`requestId` 比对（:404）只是第二道。这里用匹配令牌补上
+  /// 第一道：响应（或异常）落地时 [_matchSeq] 自增，仍在飞的慢提示就不再是「最新」。
+  int _matchSeq = 0;
+
   /// 当前这轮的取消令牌：重跑前 cancel 上一次。
   CancelToken? _cancel;
 
@@ -160,6 +170,15 @@ class LyricsState extends ChangeNotifier {
   ///
   /// 真实装配里 view 每次变化都会调 attach，同一首歌会反复进来几十次；没有它
   /// 就会重跑匹配、重复落库。写回活对象后由 [_syncKey] 同步刷新。
+  ///
+  /// **键里没有 `duration`（已知限制，故意保留）**：本地曲目时长还没探到时
+  /// `_run` 会停在第 4 行（loading /「正在读取音频信息…」），而探针把
+  /// `track.duration` 填上之后装配层再 attach 同一个对象时，键没变、对象也同一
+  /// → 这里直接早退，状态**不会**从 loading 走出去。React 侧是同一个洞
+  /// （`lyrics.tsx:473` 的依赖数组里没有 `duration`），所以这是 parity 保留。
+  /// T15 装配时若要这条路径真的能前进，必须让键能变（例如把 duration 拼进
+  /// 幂等键，或由装配层在时长探到后换一个新 Track 对象），否则界面会永久停在
+  /// 「正在读取音频信息…」。
   String? _attachKey;
   Track? _attachedTrack;
 
@@ -348,13 +367,15 @@ class LyricsState extends ChangeNotifier {
     // 慢提示：4 秒后仍是最新请求才换说法（lyrics.tsx:402-407）。detached ——
     // 它不阻塞 settle()，也不影响匹配本身。**必须同步起算**：它是「匹配已经
     // 开始」的计时，不该等到下一个微任务。
-    unawaited(_slowHint(generation: generation));
+    final seq = ++_matchSeq;
+    unawaited(_slowHint(generation: generation, seq: seq));
 
-    // 真正发请求前先让出一个微任务：React 那边整个 effect 体（含 matchLyrics
-    // 调用）是在 render commit **之后**才跑的，从来不在调用方的同步栈里发请求。
-    // Dart 侧 attach 是同步调用，少了这一让，「attach 之后才注入的假源 / 才接好
-    // 的落库回调」就全都赶不上第一轮匹配。代价只是晚一个微任务，且世代已在
-    // _restart 里推进，让出期间切歌照样作废旧这一轮。
+    // 真正发请求前先让出一个微任务：brief 自带的测试骨架把 `matcher.handler`
+    // 放在 `attach()` **之后**才赋值（brief 的「未找到」「成功」「纯文本」等用例
+    // 都是这个写法），而 attach 是同步调用；不让出的话第一轮匹配会在 handler
+    // 还是 null 时就发出去。React 那边整个 effect 体本来就在 render commit
+    // **之后**跑，从来不在调用方同步栈里发请求，所以这一让也只是把时序摆回原样。
+    // 代价只是晚一个微任务；世代已在 _restart 里推进，让出期间切歌照样作废旧这一轮。
     await Future<void>.value();
     if (_isStale(generation)) return;
 
@@ -372,6 +393,12 @@ class LyricsState extends ChangeNotifier {
       _recomputeLyrics();
       _apply(state: LyricsLoad.error, status: _kStatusFailed, showRetry: true);
       return;
+    } finally {
+      // 响应（或异常）一落地，4 秒慢提示就不该再出现：对译 lyrics.tsx:412 / :459
+      // 那两句 clearTimeout。只按世代判不够 —— 缓存命中时几十毫秒就返回，世代根本
+      // 没变。**只包住 await _source.match**：升级（lyrics.tsx:356-375）是另一条
+      // 链路，不延长慢提示的生命。
+      if (seq == _matchSeq) _matchSeq += 1;
     }
     if (_isStale(generation)) return;
     final upgrade = _applyMatchResult(
@@ -475,9 +502,13 @@ class LyricsState extends ChangeNotifier {
   }
 
   /// 4 秒慢提示（lyrics.tsx:403-406）。detached。
-  Future<void> _slowHint({required int generation}) async {
+  ///
+  /// 两道闸都要过：世代没过期（没切歌 / 没 retry），**且**这一轮匹配的令牌还是
+  /// 最新的（响应还没落地）。后者对译 React 的 `clearTimeout(slowHint)`，只靠
+  /// 世代挡不住「匹配已在 4 秒内正常返回」这条主路径。
+  Future<void> _slowHint({required int generation, required int seq}) async {
     await _delay(_slowHintDelay);
-    if (_isStale(generation)) return;
+    if (_isStale(generation) || seq != _matchSeq) return;
     _setStatus(_kStatusSlow);
   }
 

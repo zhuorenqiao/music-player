@@ -14,7 +14,14 @@ class FakeMatcher implements LyricsMatcher {
   @override
   Future<LyricsMatch> match(LyricsQuery query, {CancelToken? cancel, bool useCache = true}) {
     calls.add((query: query, useCache: useCache));
-    return handler!(query, useCache);
+    // 显式炸而不是 `handler!` 的 NPE：状态机的 `catch (_)` 会把任何异常吞成
+    // `LyricsLoad.error`，忘了设 handler 的用例就会以「状态像 error」的样子静默
+    // 通过（复审 M5）。抛一个说得清的错误，让这种笔误立刻暴露。
+    final h = handler;
+    if (h == null) {
+      throw StateError('FakeMatcher.handler 未设置：这个用例忘了编排匹配结果');
+    }
+    return h(query, useCache);
   }
 }
 
@@ -263,5 +270,67 @@ void main() {
     expect(en.translatable, isTrue);
     final empty = build()..attach(track());
     expect(empty.translatable, isFalse);
+  });
+
+  // ---- fix round 1（复审 I1 / M2 / M3 的回归用例） ----------------------
+
+  test('匹配成功后推进 4 秒，状态行仍是最终文案（慢提示必须已作废）', () async {
+    matcher.handler = (q, useCache) async => okSynced;
+    final t = track();
+    final state = build()..attach(t);
+    await state.settle();
+    expect(state.status, '歌词自动匹配自 LRCLIB线上库');
+
+    // 匹配几十毫秒就落地、世代没变；慢提示若只按世代判定，这里必然被覆盖。
+    await delay.fire(const Duration(seconds: 4));
+    expect(state.status, '歌词自动匹配自 LRCLIB线上库');
+    expect(state.state, LyricsLoad.ready);
+  });
+
+  test('未找到落地后推进 4 秒，仍是「未找到…」而不是慢提示', () async {
+    matcher.handler = (q, useCache) async => const LyricsMatch(status: 'not-found');
+    final state = build()..attach(track(title: 'Yesterday'));
+    await state.settle();
+    expect(state.status, '未找到「Yesterday」的歌词');
+
+    await delay.fire(const Duration(seconds: 4));
+    expect(state.status, '未找到「Yesterday」的歌词');
+    expect(state.showRetry, isTrue);
+  });
+
+  test('首次匹配只拿到纯文本 → 写回后立刻走一次后台升级', () async {
+    final t = track();
+    var call = 0;
+    matcher.handler = (q, useCache) async {
+      call += 1;
+      // 1 = 主匹配；2 = 升级的查缓存段；3 = 升级的绕缓存段。
+      // 前两段都只给纯文本，逼它走到第二段，两段升级路径才都被钉住。
+      return call < 3 ? const LyricsMatch(status: 'ok', plain: '甲') : okSynced;
+    };
+    final state = build()..attach(t);
+    await state.settle();
+
+    expect(matcher.calls.length, 3);
+    expect(matcher.calls[1].useCache, isTrue);
+    expect(matcher.calls[2].useCache, isFalse);
+    expect(t.lyrics, '[00:01]甲\n[00:05]乙');
+    expect(t.lyricsPlain, '');
+    expect(state.state, LyricsLoad.ready);
+    expect(state.status, '歌词自动匹配自 LRCLIB线上库');
+  });
+
+  test('先有曲目再 attach(null)：真的走回 idle 分支', () async {
+    final t = track(lyrics: '[00:01]甲', lyricsSource: 'auto');
+    final state = build()..attach(t);
+    expect(state.state, LyricsLoad.ready);
+
+    // 先挂一首再清空 —— 否则首次 attach(null) 会被幂等早退吃掉，
+    // `_run` 里 track == null 那条分支就没人验了（复审 M2）。
+    state.attach(null);
+    expect(state.state, LyricsLoad.idle);
+    expect(state.status, '');
+    expect(state.showRetry, isFalse);
+    expect(state.track, isNull);
+    expect(state.cues, isEmpty);
   });
 }
