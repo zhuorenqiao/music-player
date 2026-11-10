@@ -128,7 +128,7 @@ void main() {
         themeState: theme,
       ),
     );
-    addTearDown(bootstrap!.player.dispose);
+    addTearDown(bootstrap.player.dispose);
 
     await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
     await tester.pump();
@@ -138,7 +138,7 @@ void main() {
     expect(tokens.name, 'mint-light', reason: '默认 mode=color → 浅色薄荷');
 
     // 切到深色蓝：token 表换、accent 变。
-    bootstrap!.theme.setMode(ThemeModeSetting.dark);
+    bootstrap.theme.setMode(ThemeModeSetting.dark);
     bootstrap.theme.setColor(ThemeColorSetting.blue);
     await tester.pumpAndSettle();
 
