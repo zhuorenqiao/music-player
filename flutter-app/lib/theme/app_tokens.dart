@@ -47,6 +47,7 @@ class AppTokens {
     required this.shadowCard,
     required this.shadowBar,
     required this.glassBlurSigma,
+    required this.lightboxScrim,
   });
 
   /// 主题标识，仅用于日志 / 调试与测试断言。
@@ -161,6 +162,10 @@ class AppTokens {
   /// 毛玻璃强度：CSS 里底栏是 `backdrop-filter: blur(20px)`。
   final double glassBlurSigma;
 
+  /// 封面放大层的遮罩色（M2b T11）：app.css:3664 的
+  /// `background: rgba(4, 8, 12, 0.86)`。浅色主题翻表是 M3 的事。
+  final Color lightboxScrim;
+
   /// 深色薄荷：`:root` 的默认值。
   static const AppTokens dark = AppTokens(
     name: 'mint-dark',
@@ -212,6 +217,7 @@ class AppTokens {
       ),
     ],
     glassBlurSigma: 20,
+    lightboxScrim: Color(0xDB04080C), // rgba(4, 8, 12, 0.86)
   );
 
   /// 明暗由页面底色推导：M3 往表里加浅色那套时，装配逻辑不用跟着改。

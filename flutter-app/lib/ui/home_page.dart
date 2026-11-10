@@ -11,9 +11,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/file_picking.dart';
+import '../state/cover_state.dart';
 import '../state/library_state.dart';
+import '../state/lightbox_controller.dart';
 import '../state/lyrics_page_controller.dart';
 import '../theme/app_tokens.dart';
+import 'cover_lightbox.dart';
 import 'header.dart';
 import 'lyrics_page.dart';
 import 'panel.dart';
@@ -33,6 +36,12 @@ class HomePage extends StatelessWidget {
     // 歌词页开合（T18 的控制器）：开着时把整块内容区换成 [LyricsPage]，
     // 头部与控制条两档都留着（见 [HomeLayout.overlay] 的注释）。
     final page = context.watch<LyricsPageController>();
+    // 灯箱开合（M2b T9/T11）：叠在**最顶层**（歌词页保持其下渲染 ——
+    // App.tsx:1707 的 lyricsPage 与 :1406 的 Lightbox 是两层独立结构）。
+    final lightbox = context.watch<LightboxController>();
+    // 封面 resolver：Stage/Panel 内部各自 watch；这里只需保证 CoverState
+    // 在 provider 之上（已由 app.dart 注册），本层无需读取。
+    context.watch<CoverState>();
     return Scaffold(
       backgroundColor: tokens.bg,
       // `body::before`：一整面对角渐变，不参与滚动
@@ -44,16 +53,26 @@ class HomePage extends StatelessWidget {
             colors: [tokens.bgGradA, tokens.bgGradB],
           ),
         ),
-        child: HomeLayout(
-          header: AppHeader(
-            onAddFiles: () => _addFiles(library),
-            onAddFolder: () => _addFolder(library),
-            onClearPlaylist: library.clearPlaylist,
-          ),
-          stage: const Stage(), // T26 起是真的播放卡
-          panel: const Panel(), // T28 起是真的播放列表 / 最近面板
-          transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
-          overlay: page.isOpen ? const LyricsPage() : null,
+        child: Stack(
+          children: [
+            HomeLayout(
+              header: AppHeader(
+                onAddFiles: () => _addFiles(library),
+                onAddFolder: () => _addFolder(library),
+                onClearPlaylist: library.clearPlaylist,
+              ),
+              stage: const Stage(), // T26 起是真的播放卡
+              panel: const Panel(), // T28 起是真的播放列表 / 最近面板
+              transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
+              overlay: page.isOpen ? const LyricsPage() : null,
+            ),
+            // 放大层（M2b T11）：全屏 Stack 顶层；关闭走 controller.close
+            //（焦点归还给封面热区，T11 的入口接线）。
+            if (lightbox.isOpen)
+              Positioned.fill(
+                child: CoverLightbox(onClose: lightbox.close),
+              ),
+          ],
         ),
       ),
     );

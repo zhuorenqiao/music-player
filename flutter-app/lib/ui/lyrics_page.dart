@@ -45,6 +45,7 @@ import '../playback/track.dart';
 import '../state/bilingual_state.dart';
 import '../state/cover_state.dart';
 import '../state/lyrics_page_controller.dart';
+import '../state/lightbox_controller.dart';
 import '../state/lyrics_state.dart';
 import '../theme/app_tokens.dart';
 import 'bilingual_toggle.dart';
@@ -292,6 +293,9 @@ class _LyricsPageState extends State<LyricsPage> {
             coverPath: displayPath,
             fallbackArtist: track?.artist ?? '',
             fallbackTitle: track?.title ?? '',
+            // M2b T11：原版封面外壳是按钮（art-btn，App.tsx:1121-1137），
+            // 点它开灯箱；控制器缺省（纯展示测试）时传 null 不参与竞技场。
+            onOpenLightbox: context.read<LightboxController?>()?.open,
           ),
         ),
       ],
@@ -457,16 +461,14 @@ class _BackButton extends StatelessWidget {
   }
 }
 
-/// 右栏：封面（静态；灯箱入口由 T11 接 —— App.tsx:1121-1137 的 `art-btn`）+
-/// 来源脚注。
-///
-/// M2a 时「点它留空」；M2b T10 先把封面**源**换成 resolver（四级兜底），
-/// 可点性留给 T11 的灯箱接线。
+/// 右栏：封面（原版外壳是按钮 —— 点它开灯箱，App.tsx:1121-1137 的
+/// `art-btn`；[onOpenLightbox] 为 null 时保持 M2a 的不可点容器）+ 来源脚注。
 class _ArtColumn extends StatelessWidget {
   const _ArtColumn({
     required this.coverPath,
     this.fallbackArtist = '',
     this.fallbackTitle = '',
+    this.onOpenLightbox,
   });
 
   final String coverPath;
@@ -474,6 +476,9 @@ class _ArtColumn extends StatelessWidget {
   /// 生成卡派生字段（M2b T10）：无封面文件时碟面画生成卡。
   final String fallbackArtist;
   final String fallbackTitle;
+
+  /// 点封面开灯箱（M2b T11）；null = 不可点（纯展示测试的退路）。
+  final VoidCallback? onOpenLightbox;
 
   @override
   Widget build(BuildContext context) {
@@ -484,7 +489,7 @@ class _ArtColumn extends StatelessWidget {
           final size = constraints.maxWidth.isFinite
               ? constraints.maxWidth
               : _kCoverMaxWidth;
-          return SizedBox(
+          final disc = SizedBox(
             key: const Key('lyrics-page-cover'),
             width: size,
             height: size,
@@ -495,6 +500,19 @@ class _ArtColumn extends StatelessWidget {
               spinning: false,
               fallbackArtist: fallbackArtist,
               fallbackTitle: fallbackTitle,
+            ),
+          );
+          if (onOpenLightbox == null) return disc;
+          return Semantics(
+            button: true,
+            label: '放大封面图片',
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onOpenLightbox,
+              child: Focus(
+                canRequestFocus: true,
+                child: disc,
+              ),
             ),
           );
         },

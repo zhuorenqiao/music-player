@@ -186,7 +186,18 @@ void main() {
 
   test('默认开启：键从未写过时是开；显式写 0 才是关', () async {
     final dir = await _tempDir();
-    addTearDown(() => dir.delete(recursive: true));
+    // M2b T8 起 buildBootstrap 会建 CoverState：teardown 容忍句柄迟关
+    //（errno 32），与上方 T8 裁定的那条 teardown 同款。
+    addTearDown(() async {
+      try {
+        await dir.delete(recursive: true);
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        try {
+          await dir.delete(recursive: true);
+        } catch (_) {}
+      }
+    });
     final prefs = AppPrefs.inMemory();
     final bootstrap = await buildBootstrap(
       prefs: prefs,

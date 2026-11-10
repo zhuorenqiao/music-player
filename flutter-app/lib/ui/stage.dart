@@ -33,6 +33,7 @@ import '../core/breakpoints.dart';
 import '../core/format_time.dart';
 import '../state/bilingual_state.dart';
 import '../state/cover_state.dart';
+import '../state/lightbox_controller.dart';
 import '../state/lyrics_page_controller.dart';
 import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
@@ -302,8 +303,11 @@ class StagePreview extends StatelessWidget {
       label: broken ? '$title（无法播放）封面' : '$title 封面',
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        // M2b：打开封面灯箱（原版 stage__cover-wrap 的点击）
-        onTap: () {},
+        // M2b T11：打开封面灯箱（原版 stage__cover-wrap 的点击，
+        // App.tsx:430-433 —— stopPropagation 防止冒泡成「进歌词页」；
+        // 这里封面热区与曲目区热区本来就是两个 GestureDetector，天然不冒泡）。
+        // 控制器没注册（部分纯展示测试）时点了不做事 —— watch<T?>() 容错。
+        onTap: context.read<LightboxController?>()?.open,
         child: CoverDisc(
           coverPath: coverPath,
           size: coverSize,
