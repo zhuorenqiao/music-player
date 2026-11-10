@@ -32,6 +32,7 @@ import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
 import 'package:light_music/state/toast_state.dart';
+import 'package:light_music/theme/theme_state.dart';
 import 'package:light_music/ui/panel.dart';
 
 /// 一曲 226 秒：两条 = 452 秒 = `07:32`，统计行用例按这个值断言。
@@ -94,6 +95,8 @@ class PanelHarness {
       diskStore: CoverDiskStore(directory: _directory.path),
       artistImageDirectory: _directory.path,
     );
+    // M3 T7：面板的卡面 alpha 走 glassLevel——外观状态机同场注册。
+    theme = ThemeState.unloaded();
   }
 
   /// 面板内容区的高度。非 tall 时由外层约束（测试里是 700）决定。
@@ -113,6 +116,7 @@ class PanelHarness {
   late final PlayerState player;
   late final RecentState recent;
   late final CoverState cover;
+  late final ThemeState theme;
 
   /// 假播放器本体（只覆写两条 getter），用 [PlayerState] 的静态类型拿不到。
   late final _HarnessPlayer _harnessPlayer;
@@ -126,6 +130,7 @@ class PanelHarness {
       ChangeNotifierProvider<PlayerState>.value(value: player),
       ChangeNotifierProvider<RecentState>.value(value: recent),
       ChangeNotifierProvider<CoverState>.value(value: cover),
+      ChangeNotifierProvider<ThemeState>.value(value: theme),
       ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
     ],
     child: SizedBox(height: tall ? 700 : null, child: const Panel()),
@@ -136,6 +141,7 @@ class PanelHarness {
     library.dispose();
     recent.dispose();
     cover.dispose();
+    theme.dispose();
     toasts.dispose();
     if (_directory.existsSync()) {
       _directory.deleteSync(recursive: true);

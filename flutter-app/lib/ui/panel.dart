@@ -40,6 +40,7 @@ import '../state/panel_controller.dart';
 import '../state/player_state.dart';
 import '../state/recent_state.dart';
 import '../theme/app_tokens.dart';
+import '../theme/theme_state.dart';
 import 'autoplay_gate.dart';
 import 'empty_state.dart';
 import 'recent_row.dart';
@@ -114,6 +115,10 @@ class Panel extends StatelessWidget {
       const _StatsRow(),
       ?notice,
     ];
+    // M3 T7：面板卡面 alpha 按 glassLevel 缩放（.panel 与 .player 同一套）。
+    final glass = context.watch<ThemeState>().glassLevel;
+    final scaledA = tokens.panelA.withValues(alpha: tokens.panelA.a * glass);
+    final scaledB = tokens.panelB.withValues(alpha: tokens.panelB.a * glass);
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kRadiusXl),
@@ -122,7 +127,7 @@ class Panel extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [tokens.panelA, tokens.panelB],
+          colors: [scaledA, scaledB],
         ),
       ),
       padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),

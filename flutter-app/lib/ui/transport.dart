@@ -31,7 +31,9 @@ import '../playback/transport_controller.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
 import 'autoplay_gate.dart';
+import 'glass_control.dart';
 import 'library_sheet.dart';
+import 'lyric_color_button.dart';
 import 'progress_slider.dart';
 import 'volume_slider.dart';
 
@@ -202,7 +204,15 @@ class TransportBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             // 拉伸：控制行的 space-between 要的是整行宽度，不是按钮自身宽度
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [progress, const SizedBox(height: _barVerticalGap), controls],
+            children: [
+              // M3 T7：进度行上方的「transport__wave」行——左端 T（歌词高亮色）
+              // 与水滴（卡面透明/磨砂）。WaveStrip 是 T11/T12 的活，本行先留槽。
+              const _WaveRow(),
+              const SizedBox(height: 6),
+              progress,
+              const SizedBox(height: _barVerticalGap),
+              controls,
+            ],
           ),
         ),
       ),
@@ -210,9 +220,27 @@ class TransportBar extends StatelessWidget {
   }
 }
 
+/// 进度行上方那条（App.tsx:973-977 的 transport__wave 对译）：
+/// 左端 T（歌词高亮色，T12）与水滴（卡面透明/磨砂，T7）。
+/// WaveStrip 挂在两者之后（T11）；**首页该行 WaveStrip 隐藏**
+///（app.css:1111），本行先只摆 T 与水滴两个钮。
+class _WaveRow extends StatelessWidget {
+  const _WaveRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Row(
+      children: [
+        LyricColorButton(),
+        SizedBox(width: 8),
+        GlassControl(),
+      ],
+    );
+  }
+}
+
 /// 控制行：桌面四钮 + 音量，窄屏五钮等距。
-class _ControlsRow extends StatelessWidget {
-  const _ControlsRow({
+class _ControlsRow extends StatelessWidget {  const _ControlsRow({
     required this.desktop,
     required this.playing,
     required this.loading,

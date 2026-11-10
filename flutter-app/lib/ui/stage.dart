@@ -35,6 +35,8 @@ import '../state/bilingual_state.dart';
 import '../state/cover_state.dart';
 import '../state/lightbox_controller.dart';
 import '../state/lyrics_page_controller.dart';
+import '../theme/theme_state.dart';
+import 'glass_frost.dart';
 import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
@@ -124,6 +126,9 @@ class Stage extends StatelessWidget {
       // 点曲目区任意留白进歌词页（原版 `App.tsx:410-421` 的 onStageClick）。
       // 没有控制器时给 null，`StagePreview` 退回 M1 的空实现。
       onOpenLyrics: page?.open,
+      // M3 T7：卡面透明度（ThemeState 可空 watch——同上四个 provider 的容错
+      // 模式；没有注册时 null → preview 按主题原样画）。
+      glassLevel: context.watch<ThemeState?>()?.glassLevel,
       // 标题行尾部：只有非中文歌词才出「双语」开关（原版组件里那句
       // `if (!translatable) return null`，由调用方判 —— 见 bilingual_toggle.dart）。
       titleTrailing: bilingual != null && bilingual.translatable
@@ -248,6 +253,7 @@ class StagePreview extends StatelessWidget {
     this.lyrics,
     this.titleTrailing,
     this.onOpenLyrics,
+    this.glassLevel,
     super.key,
   });
 
@@ -287,6 +293,10 @@ class StagePreview extends StatelessWidget {
 
   /// 点曲目区进歌词页。null 时保持 M1 的空实现（点了不抛、也不做事）。
   final VoidCallback? onOpenLyrics;
+
+  /// 卡面 alpha 缩放系数（M3 T7，--glass-level）。null = 主题原样（1）——
+  /// 由 [Stage] 从 ThemeState 读出注入；纯展示测试不传即得 M1 观感。
+  final double? glassLevel;
 
   @override
   Widget build(BuildContext context) {
@@ -382,16 +392,24 @@ class StagePreview extends StatelessWidget {
       totalFromKernel: totalFromKernel,
     );
 
-    return Container(
+    // M3 T7：卡面 alpha 按 glassLevel 缩放（--glass-level；1 = 主题原样，
+    // 0 = 全透）。frostLevel>0 时整卡包进磨砂玻璃层。
+    // glassLevel 由**调用方**注入（[Stage] 从 ThemeState 读；纯展示的
+    // StagePreview 缺省 1——保持「无 provider 也能画」的既有契约）。
+    final glass = glassLevel ?? 1.0;
+    final scaledA = tokens.cardA.withValues(alpha: tokens.cardA.a * glass);
+    final scaledB = tokens.cardB.withValues(alpha: tokens.cardB.a * glass);
+
+    final Widget card = Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kRadiusXl),
         border: Border.all(color: tokens.border),
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [tokens.cardA, tokens.cardB],
+          colors: [scaledA, scaledB],
         ),
-        boxShadow: tokens.shadowCard,
+        boxShadow: glass > 0 ? tokens.shadowCard : null,
       ),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
       child: LayoutBuilder(
@@ -427,6 +445,15 @@ class StagePreview extends StatelessWidget {
           );
         },
       ),
+    );
+
+    // M3 T7：磨砂层包住整卡（frost==0 时 GlassFrostLayer 原样返回）。
+    // frostLevel 从 Stage 的 ThemeState 读取（可空容错），经参数注入。
+    final frost = context.watch<ThemeState?>()?.frostLevel ?? 0.0;
+    return GlassFrostLayer(
+      coverPath: coverPath,
+      frostLevel: frost,
+      child: card,
     );
   }
 

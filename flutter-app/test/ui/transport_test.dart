@@ -20,6 +20,7 @@ import 'package:light_music/state/library_state.dart';
 import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
+import 'package:light_music/theme/theme_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/ui/panel.dart';
@@ -388,6 +389,8 @@ void main() {
         ChangeNotifierProvider<RecentState>.value(value: harness.recent),
         // M2b T10：面板的封面 resolver 也要在位（弹层里的 Panel 会 watch）。
         ChangeNotifierProvider<CoverState>.value(value: harness.cover),
+        // M3 T7：面板的 glassLevel 走 ThemeState。
+        ChangeNotifierProvider<ThemeState>.value(value: harness.theme),
         ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
       ],
     );
