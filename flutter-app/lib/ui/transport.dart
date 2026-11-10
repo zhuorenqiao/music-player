@@ -27,8 +27,12 @@ import 'package:provider/provider.dart';
 
 import '../core/breakpoints.dart';
 import '../playback/play_mode.dart';
+import '../playback/track.dart';
 import '../playback/transport_controller.dart';
+import '../state/lyrics_page_controller.dart';
 import '../state/player_state.dart';
+import 'wave_strip.dart';
+import '../wave/spectrum_pipeline.dart';
 import '../theme/app_tokens.dart';
 import 'autoplay_gate.dart';
 import 'glass_control.dart';
@@ -100,6 +104,11 @@ class TransportBar extends StatelessWidget {
       return _chrome(
         tokens: tokens,
         desktop: desktop,
+        showWaveStrip: false,
+        frameTable: null,
+        waveTrack: null,
+        wavePlaying: playing,
+        wavePosition: positionSeconds,
         progress: ProgressSlider(
           position: positionSeconds,
           buffered: bufferedSeconds,
@@ -119,9 +128,17 @@ class TransportBar extends StatelessWidget {
       );
     }
     final player = context.read<PlayerState>();
+    // M3 T11：歌词页开着时 WaveStrip 显示在 transport 行（app.css:3926），
+    // 首页隐藏（:1111）；帧表由组合根经 SpectrumPipeline 异步预填（T15 接）。
+    final inLyricsPage = context.watch<LyricsPageController?>()?.isOpen ?? false;
     return _chrome(
       tokens: tokens,
       desktop: desktop,
+      showWaveStrip: inLyricsPage,
+      frameTable: null,
+      waveTrack: player.current,
+      wavePlaying: player.view.value.playing,
+      wavePosition: player.position.value,
       // 进度行只挂 position：缓冲值在重建时顺带读一次，不单独订阅。
       progress: ValueListenableBuilder<double>(
         valueListenable: player.position,
@@ -167,6 +184,11 @@ class TransportBar extends StatelessWidget {
   Widget _chrome({
     required AppTokens tokens,
     required bool desktop,
+    required bool showWaveStrip,
+    required SpectrumFrameTable? frameTable,
+    required Track? waveTrack,
+    required bool wavePlaying,
+    required double wavePosition,
     required Widget progress,
     required Widget controls,
   }) {
@@ -205,9 +227,9 @@ class TransportBar extends StatelessWidget {
             // 拉伸：控制行的 space-between 要的是整行宽度，不是按钮自身宽度
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // M3 T7：进度行上方的「transport__wave」行——左端 T（歌词高亮色）
-              // 与水滴（卡面透明/磨砂）。WaveStrip 是 T11/T12 的活，本行先留槽。
-              const _WaveRow(),
+              // M3 T11：进度行上方的「transport__wave」行——左端 T（歌词高
+              // 亮色）与水滴（卡面透明/磨砂），其后 WaveStrip（歌词页显示）。
+              _WaveRow(showWaveStrip: showWaveStrip, frameTable: frameTable, track: waveTrack, playing: wavePlaying, positionSeconds: wavePosition),
               const SizedBox(height: 6),
               progress,
               const SizedBox(height: _barVerticalGap),
@@ -221,19 +243,41 @@ class TransportBar extends StatelessWidget {
 }
 
 /// 进度行上方那条（App.tsx:973-977 的 transport__wave 对译）：
-/// 左端 T（歌词高亮色，T12）与水滴（卡面透明/磨砂，T7）。
-/// WaveStrip 挂在两者之后（T11）；**首页该行 WaveStrip 隐藏**
-///（app.css:1111），本行先只摆 T 与水滴两个钮。
+/// 左端 T（歌词高亮色，T12）与水滴（卡面透明/磨砂，T7），其后是 WaveStrip。
+/// **首页该行 WaveStrip 隐藏**（app.css:1111），[showWaveStrip] 只在歌词页为真。
 class _WaveRow extends StatelessWidget {
-  const _WaveRow();
+  const _WaveRow({
+    required this.showWaveStrip,
+    required this.frameTable,
+    required this.track,
+    required this.playing,
+    required this.positionSeconds,
+  });
+
+  final bool showWaveStrip;
+  final SpectrumFrameTable? frameTable;
+  final Track? track;
+  final bool playing;
+  final double positionSeconds;
 
   @override
   Widget build(BuildContext context) {
-    return const Row(
+    return Row(
       children: [
-        LyricColorButton(),
-        SizedBox(width: 8),
-        GlassControl(),
+        const LyricColorButton(),
+        const SizedBox(width: 8),
+        const GlassControl(),
+        if (showWaveStrip) ...[
+          const SizedBox(width: 10),
+          Expanded(
+            child: WaveStrip(
+              frameTable: frameTable,
+              track: track,
+              playing: playing,
+              positionSeconds: positionSeconds,
+            ),
+          ),
+        ],
       ],
     );
   }

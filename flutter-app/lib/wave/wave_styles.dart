@@ -1,165 +1,278 @@
 // lib/wave/wave_styles.dart
 //
-// 17 个波形样式的注册表（M3 T10）：对译 React `src/lib/wave-styles.ts`（1042 行）。
+// 17 个波形样式 painter + 三条 hue ramp + 彩色/单色调色系统（M3 T10）。
+// 逐段对译 React `src/lib/wave-styles.ts`（1042 行）——每条样式的平滑遍数、
+// alpha、cols 公式、峰值行为都按 TS 源码逐参数对表；Canvas API 的等价取舍
+// 见文件尾的「偏差说明」。
 //
-// 每个样式一个 draw 闭包，只读 [WaveFrame]（bands/wave/level/phase），不碰
-// 音频链路；数据从哪来（真实频谱还是装饰信号）由 wave_signal 决定，样式层
-// 不关心。配色三条 hue ramp（允许 >360 跨红端）+ 单色模式（歌词高亮色族）。
-//
-// Canvas 等价取舍（计划 Global Constraints 裁定）：CSS shadowBlur 用
-// MaskFilter.blur 近似；feTurbulence 噪点在 T7 的膜层已有白点近似；其余
-// 几何（fillRect/arc/path/smooth 遍数/alpha/freq/cols）逐参数对表。
+// 数据只来自 [WaveFrame]（bands/wave/level/phase），峰值数组 [peaks] 由宿主
+// 维护（每帧先按 pow(0.03, dt) 衰减再传入），usesPeaks 样式读/写它。
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' show Color, HSLColor;
 
 import '../theme/color_utils.dart';
 import 'wave_signal.dart';
 
+const double _tau = math.pi * 2;
+
 // ---------------------------------------------------------------------------
-// hue ramps（wave-styles.ts:25-32 逐字；hue 允许 >360，取色时 %360）
+// hue ramp（wave-styles.ts:25-47 逐字）
 // ---------------------------------------------------------------------------
 
 enum WaveRamp { sunset, ember, neon }
 
-const Map<WaveRamp, List<(double, double)>> _hueRamps = {
+/// 色标里的 hue 允许超过 360，344°→16° 这种「跨过红端」的过渡不会倒着走。
+const Map<WaveRamp, List<List<double>>> _hueRamps = {
   // 紫 → 品红 → 玫红 → 橙 → 金（参考图主色）
-  WaveRamp.sunset: [(0, 272), (0.26, 312), (0.5, 344), (0.74, 376), (1, 404)],
+  WaveRamp.sunset: [
+    [0, 272], [0.26, 312], [0.5, 344], [0.74, 376], [1, 404],
+  ],
   // 玫红 → 橙 → 金（暖色那几张）
-  WaveRamp.ember: [(0, 340), (0.34, 368), (0.66, 386), (1, 406)],
+  WaveRamp.ember: [
+    [0, 340], [0.34, 368], [0.66, 386], [1, 406],
+  ],
   // 青绿 → 蓝 → 紫 → 品红 → 红（现有频谱条那条，接得住 --accent）
   WaveRamp.neon: [
-    (0, 148), (0.16, 178), (0.34, 212), (0.52, 262),
-    (0.68, 300), (0.82, 340), (0.93, 372), (1, 456),
+    [0, 148], [0.16, 178], [0.34, 212], [0.52, 262],
+    [0.68, 300], [0.82, 340], [0.93, 372], [1, 456],
   ],
 };
 
 double _hueAt(WaveRamp ramp, double t) {
   final stops = _hueRamps[ramp]!;
-  final x = t.clamp(0.0, 1.0);
+  final x = t < 0 ? 0.0 : (t > 1 ? 1.0 : t);
   for (var i = 1; i < stops.length; i++) {
-    if (x <= stops[i].$1 || i == stops.length - 1) {
-      final o0 = stops[i - 1].$1, h0 = stops[i - 1].$2;
-      final o1 = stops[i].$1, h1 = stops[i].$2;
+    if (x <= stops[i][0] || i == stops.length - 1) {
+      final o0 = stops[i - 1][0];
+      final h0 = stops[i - 1][1];
+      final o1 = stops[i][0];
+      final h1 = stops[i][1];
       final span = o1 - o0;
       final k = span > 0 ? (x - o0) / span : 0.0;
-      return h0 + (h1 - h0) * k.clamp(0.0, 1.0);
+      final kk = k < 0 ? 0.0 : (k > 1 ? 1.0 : k);
+      return h0 + (h1 - h0) * kk;
     }
   }
-  return stops.first.$2;
+  return stops[0][1];
 }
 
-/// 取渐变上某一点的实色（wave-styles.ts:50-53）。
+/// 取渐变上某一点的实色，供逐柱 / 逐线着色（rampColor，:50-53 逐字）。
 Color rampColor(WaveRamp ramp, double t, {double sat = 92, double light = 58}) {
   final hue = ((_hueAt(ramp, t) % 360) + 360) % 360;
-  return hslToColor(hue, sat, light);
+  return HSLColor.fromAHSL(1.0, hue, sat / 100, light / 100).toColor();
 }
 
-/// 单色模式取色（wave-styles.ts:71-76 逐字）：
-/// 映射到「深薄荷 → 高亮薄荷」这一段亮度，色相/饱和来自高亮色。
+// ---------------------------------------------------------------------------
+// 单色取色（monoColor，:71-76 + setWaveAccent，:98-102 逐字公式）
+// ---------------------------------------------------------------------------
+
+/// 单色模式的取色：换成高亮色那一族，只保留亮度层次。
+/// 样式传进来的 [light] 一般在 56~76：映射到「深薄荷 → 高亮薄荷」这一段。
+/// 公式逐字：`l = clamp(52 + (light - 56) * 1.8, 46, 90)`。
 Color monoColor(double light, {required Hsl accent}) {
-  final l = math.max(46.0, math.min(90.0, 52 + (light - 56) * 1.8));
-  return hslToColor(accent.h, accent.s, l);
+  final l = (52 + (light - 56) * 1.8).clamp(46.0, 90.0);
+  return HSLColor.fromAHSL(1.0, accent.h, accent.s / 100, l / 100).toColor();
 }
 
-/// 波形高亮色（wave-styles.ts:98-102）：用户选的 hex → HSL，
-/// 饱和取 (s + 78)/2；无用户色时回退 accent 的 HSL。
-Hsl waveAccentOf({required Color accent, required String lyricColor}) {
-  if (lyricColor.isNotEmpty) {
-    final c = parseHexColor(lyricColor);
-    if (c != null) {
-      final hsl = colorToHsl(c);
-      return Hsl(h: hsl.h, s: math.min(100, (hsl.s + 78) / 2), l: hsl.l);
-    }
-  }
-  final hsl = colorToHsl(accent);
-  return Hsl(h: hsl.h, s: math.min(100, (hsl.s + 78) / 2), l: hsl.l);
-}
+// ---------------------------------------------------------------------------
+// 调色板（wavePalette，:162-175 同构）
+// ---------------------------------------------------------------------------
 
-/// 彩色 / 单色的取色组合（wavePalette :162-175 对译）。
+/// 一套配色：横向渐变 + 逐点取色。
+/// 彩色走样式自带的色带；单色只是把同一套亮度拿来用，
+/// 所以 17 种样式都能一键换成高亮色族。
 class WavePalette {
-  const WavePalette({
-    required this.ramp,
-    required this.colored,
-    required this.accent,
-  });
+  const WavePalette({required this.grad, required this.colorAt, required this.colored});
 
-  final WaveRamp ramp;
+  /// 横向渐变（宿主按当前宽度和样式色带建好）；单色模式下也有。
+  final ui.Gradient? grad;
+
+  /// 逐点取色：彩色 = rampColor(ramp, t)；单色 = monoColor(light)。
+  final Color Function(double t, {double sat, double light}) colorAt;
+
   final bool colored;
+}
 
-  /// 高亮色语义（含默认回退），单色模式用它。
-  final Hsl accent;
-
-  Color colorAt(double t, {double sat = 92, double light = 58}) {
-    if (colored) return rampColor(ramp, t, sat: sat, light: light);
-    return monoColor(light, accent: accent);
+/// 彩色模式：24 段的横向渐变（buildGradient :55-68）。
+ui.Gradient _buildGradient(WaveRamp ramp, double width, {double sat = 92, double light = 58}) {
+  final colors = <Color>[];
+  final stops = <double>[];
+  for (var i = 0; i <= 24; i++) {
+    final t = i / 24;
+    colors.add(rampColor(ramp, t, sat: sat, light: light));
+    stops.add(t);
   }
+  return ui.Gradient.linear(ui.Offset.zero, ui.Offset(width, 0), colors, stops);
+}
 
-  /// 横向渐变（彩色 24 段 / 单色 12 段，buildGradient :55-87）。
-  ///
-  /// `ui.Gradient.linear` 无 colorStops 时严格要求恰 2 个颜色——24 段的
-  /// React 语义必须带 colorStops 一起传。
-  Shader shaderFor(double width, {double sat = 92, double light = 58}) {
-    final steps = colored ? 24 : 12;
-    final colors = <Color>[
-      for (var i = 0; i <= steps; i++)
-        colored
-            ? rampColor(ramp, i / steps, sat: sat, light: light)
-            : _monoGradientStop(i / steps),
-    ];
-    final stops = <double>[for (var i = 0; i <= steps; i++) i / steps];
-    return ui.Gradient.linear(
-      Offset.zero,
-      Offset(width, 0),
-      colors,
-      stops,
+/// 单色模式：12 段 `88 - 30*t` 的横向渐变，左浅右深（buildMonoGradient :79-87）。
+ui.Gradient _buildMonoGradient(Hsl accent, double width) {
+  final colors = <Color>[];
+  final stops = <double>[];
+  for (var i = 0; i <= 12; i++) {
+    final t = i / 12;
+    final l = (88 - 30 * t).clamp(0.0, 100.0);
+    colors.add(HSLColor.fromAHSL(1.0, accent.h, accent.s / 100, l / 100).toColor());
+    stops.add(t);
+  }
+  return ui.Gradient.linear(ui.Offset.zero, ui.Offset(width, 0), colors, stops);
+}
+
+/// 建一套当前样式可用的调色板。
+///
+/// 单色模式的 h/s 来自高亮色语义（wave-styles.ts:98-102 的 setWaveAccent）：
+/// [lyricColor] 有值 → hexToHsl 后 `s = min(100, (s + 78) / 2)`；
+/// 无值 → 用 [accent] 的 HSL；都取不到回退 `{h:160, s:85}`。
+WavePalette buildWavePalette({
+  required WaveRamp ramp,
+  required bool colored,
+  required Color accent,
+  required String lyricColor,
+  required double width,
+}) {
+  if (colored) {
+    return WavePalette(
+      grad: _buildGradient(ramp, width),
+      colorAt: (t, {sat = 92, light = 58}) => rampColor(ramp, t, sat: sat, light: light),
+      colored: true,
     );
   }
-
-  Color _monoGradientStop(double t) {
-    final l = (88 - 30 * t).clamp(46.0, 90.0);
-    return hslToColor(accent.h, accent.s, l);
+  final Hsl hsl;
+  final fromLyric = lyricColor.isNotEmpty ? parseHexColor(lyricColor) : null;
+  if (fromLyric != null) {
+    final raw = colorToHsl(fromLyric);
+    hsl = Hsl(h: raw.h, s: math.min(100, (raw.s + 78) / 2), l: raw.l);
+  } else if (lyricColor.isEmpty) {
+    // 回退主题 accentLight 的一族；#b9ffe9 这类高亮色偏淡，
+    // 饱和度取它和 accent 之间的中间值，免得整条发白。
+    final raw = colorToHsl(accent);
+    hsl = raw.s > 0 || raw.l > 0 && raw.l < 100
+        ? Hsl(h: raw.h, s: math.min(100, (raw.s + 78) / 2), l: raw.l)
+        : const Hsl(h: 160, s: 85, l: 75);
+  } else {
+    // lyricColor 有值但解析失败：走默认回退。
+    hsl = const Hsl(h: 160, s: 85, l: 75);
   }
+  return WavePalette(
+    grad: _buildMonoGradient(hsl, width),
+    colorAt: (t, {sat = 92, light = 58}) => monoColor(light, accent: hsl),
+    colored: false,
+  );
 }
 
-/// stableNoise（wave-styles.ts:264-270 的稳定伪随机）。
-double stableNoise(String seed, int i) {
-  final h = waveHash('$seed#$i');
-  return (h % 1000) / 1000;
+// ---------------------------------------------------------------------------
+// 画布小工具（wave-styles.ts:181-304 逐字）
+// ---------------------------------------------------------------------------
+
+double _sampleAt(Float32List arr, double t) {
+  final n = arr.length;
+  if (n == 0) return 0;
+  if (n == 1) return arr[0];
+  final x = (t < 0 ? 0.0 : (t > 1 ? 1.0 : t)) * (n - 1);
+  final i = x.floor();
+  final a = arr[i];
+  final b = arr[math.min(n - 1, i + 1)];
+  return a + (b - a) * (x - i);
 }
 
-/// 相邻均值平滑（React 各样式的 smooth N 遍）。
+/// 三点加权滑动平均，[passes] 越大越圆润（彩带、山形要多遍，尖刺类一遍都不做）。
 Float32List smoothSeries(Float32List src, int passes) {
-  var cur = Float32List.fromList(src);
+  var out = src;
   for (var p = 0; p < passes; p++) {
-    final next = Float32List(cur.length);
-    for (var i = 0; i < cur.length; i++) {
-      if (i == 0) {
-        next[i] = (cur[0] * 2 + cur[1]) / 3;
-      } else if (i == cur.length - 1) {
-        next[i] = (cur[i] * 2 + cur[i - 1]) / 3;
-      } else {
-        next[i] = (cur[i - 1] + cur[i] * 2 + cur[i + 1]) / 4;
-      }
+    final next = Float32List(out.length);
+    for (var i = 0; i < out.length; i++) {
+      final a = out[math.max(0, i - 1)];
+      final b = out[i];
+      final c = out[math.min(out.length - 1, i + 1)];
+      next[i] = (a + b * 2 + c) / 4;
     }
-    cur = next;
+    out = next;
   }
-  return cur;
+  return out;
 }
 
+/// 稳定伪随机：同一个 (列, 序号) 永远抖到同一个位置（stableNoise :264-270 逐字）。
+/// 算术用 32 位环回模拟 JS 的位运算语义。
+double stableNoise(int col, int index) {
+  var h = (col * 0x9e3779b1) ^ (index * 0x85ebca6b);
+  h = _toI32(h);
+  h ^= _logicalShiftRight(h, 13);
+  h = _toI32(_imul(h, 0xc2b2ae35));
+  h ^= _logicalShiftRight(h, 16);
+  return _u32(h) / 0xffffffff;
+}
+
+int _toI32(int v) => v.toSigned(32);
+
+int _u32(int v) => v & 0xFFFFFFFF;
+
+int _logicalShiftRight(int v, int s) => _u32(v) >> s;
+
+/// JS Math.imul 的 32 位环回乘法。
+int _imul(int a, int b) {
+  final ah = _u32(a) & 0xFFFF;
+  final al = _u32(a) >> 16;
+  final bh = _u32(b) & 0xFFFF;
+  final bl = _u32(b) >> 16;
+  final high = (ah * bl + al * bh) & 0xFFFFFFFF;
+  final low = (_u32(a) * _u32(b)) & 0xFFFFFFFF;
+  return _toI32(((high << 16) + low) & 0xFFFFFFFF);
+}
+
+/// 两端收拢、中间张开，参考图里的波形几乎都有这个「纺锤」轮廓（:258-261）。
+double _spindle(double t, [double power = 1]) {
+  final s = math.sin(math.pi * t);
+  return power == 1 ? s : math.pow(s, power).toDouble();
+}
+
+/// 沿 x 前进的一列中心点 + 一半厚度 → 一条带子的闭合多边形（:235-255）。
+ui.Path _ribbonPolygon(Float32List center, Float32List thick, double step) {
+  final path = ui.Path();
+  for (var i = 0; i < center.length; i++) {
+    final x = i * step;
+    final y = center[i] - thick[i];
+    if (i == 0) {
+      path.moveTo(x, y);
+    } else {
+      path.lineTo(x, y);
+    }
+  }
+  for (var i = center.length - 1; i >= 0; i--) {
+    path.lineTo(i * step, center[i] + thick[i]);
+  }
+  path.close();
+  return path;
+}
+
+/// 把 bands 抽稀成指定列数的采样点，同时保证 peaks 下标仍落在原数组上（:297-304）。
+List<int> _strideIndexes(int count, int cols) {
+  final stride = math.max(1, (count / cols).round());
+  final out = <int>[];
+  for (var i = 0; i < count; i += stride) {
+    out.add(i);
+  }
+  return out;
+}
+
+ui.Paint _paint(ui.Gradient? grad, Color color) => ui.Paint()
+  ..color = color
+  ..shader = grad;
+
 // ---------------------------------------------------------------------------
-// 样式注册表
+// 样式注册表（StyleEnv 等价：签名 (canvas, frame, palette, peaks)）
 // ---------------------------------------------------------------------------
 
-/// 样式条目（wave-styles.ts:287-294 同构）。
+/// 一个样式：宿主维护 peaks（每帧先按 pow(0.03, dt) 衰减），
+/// usesPeaks 的样式在 draw 里读/写。
 class WaveStyle {
   const WaveStyle({
     required this.id,
     required this.name,
     required this.ramp,
-    this.usesPeaks = false,
+    required this.usesPeaks,
     required this.draw,
   });
 
@@ -167,557 +280,843 @@ class WaveStyle {
   final String name;
   final WaveRamp ramp;
   final bool usesPeaks;
-  final void Function(Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) draw;
+  final void Function(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) draw;
 }
 
-WaveStyle _spectrum() => WaveStyle(
+/// 0 · 项目原有的彩虹频谱柱 + 悬空峰值点（:311-347）。
+const WaveStyle spectrumStyle = WaveStyle(
   id: 'spectrum',
   name: '彩虹频谱',
   ramp: WaveRamp.neon,
   usesPeaks: true,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final count = frame.bands.length;
-    if (count == 0) return;
-    final baseline = h - 8;
-    final maxAmp = baseline - 8;
-    final step = w / count;
-    final barWidth = math.max(1.0, step - 1);
-    final paint = Paint()
-      ..shader = palette.shaderFor(w)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-    for (var i = 0; i < count; i++) {
-      final amp = frame.bands[i] * maxAmp;
-      canvas.drawRect(
-        Rect.fromLTWH(i * step, baseline - amp, barWidth, amp),
-        paint,
-      );
-      peaks[i] = math.max(amp, peaks[i]);
-    }
-    final dot = Paint()..color = const Color(0x8CFFFFFF);
-    for (var i = 0; i < count; i += 3) {
-      if (peaks[i] <= 0) continue;
-      canvas.drawCircle(
-        Offset(i * step + barWidth / 2, baseline - peaks[i] - 6),
-        1,
-        dot,
-      );
-    }
-  },
+  draw: _drawSpectrum,
 );
 
-WaveStyle _ribbon() => WaveStyle(
+void _drawSpectrum(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final bands = frame.bands;
+  final count = bands.length;
+  if (count == 0) return;
+  final baseline = h - 8;
+  final maxAmp = baseline - 8;
+  final step = w / count;
+  final barWidth = math.max(1.0, step - 1);
+
+  final fill = _paint(palette.grad, palette.colorAt(0));
+  // shadowBlur 6（rgba(255,255,255,0.3)）→ MaskFilter.blur sigma=3。
+  fill.maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 3);
+  for (var i = 0; i < count; i++) {
+    final amp = bands[i] * maxAmp;
+    canvas.drawRect(
+      ui.Rect.fromLTWH(i * step, baseline - amp, barWidth, amp),
+      fill,
+    );
+    if (amp > peaks[i]) peaks[i] = amp;
+  }
+  final dot = ui.Paint()..color = const Color(0x8CFFFFFF); // rgba(255,255,255,0.55)
+  for (var i = 0; i < count; i += 3) {
+    if (peaks[i] <= 0) continue;
+    canvas.drawCircle(
+      ui.Offset(i * step + barWidth / 2, baseline - peaks[i] - 6),
+      1,
+      dot,
+    );
+  }
+}
+
+/// 1 · 彩带：几条互相交叠的平滑缎带（:350-393）。
+const WaveStyle ribbonStyle = WaveStyle(
   id: 'ribbon',
   name: '渐变彩带',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final wave = smoothSeries(frame.wave, 10);
-    final amps = [0.24, 0.21, 0.18];
-    final freqs = [1.5, 2.1, 1.05];
-    final alphas = [0.92, 0.78, 0.62];
-    for (var s = 0; s < 3; s++) {
-      final path = Path();
-      for (var i = 0; i < wave.length; i++) {
-        final x = w * i / (wave.length - 1);
-        final y = h / 2 +
-            wave[i] * h * amps[s] +
-            math.sin(i / wave.length * math.pi * 2 * freqs[s] + frame.phase) * 4;
-        if (i == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..shader = palette.shaderFor(w)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.2
-          ..color = palette.colorAt(s / 3).withValues(alpha: alphas[s]),
-      );
-    }
-  },
+  usesPeaks: false,
+  draw: _drawRibbon,
 );
 
-WaveStyle _hairline() => WaveStyle(
+void _drawRibbon(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid;
+  final line = smoothSeries(frame.wave, 10);
+  final points = math.max(24, math.min(72, (w / 4).round()));
+  final step = w / points;
+  final strands = [
+    (amp: 0.24, freq: 1.5, off: -0.14, thick: 0.16, alpha: 0.92),
+    (amp: 0.21, freq: 2.1, off: 0.0, thick: 0.12, alpha: 0.78),
+    (amp: 0.18, freq: 1.05, off: 0.14, thick: 0.09, alpha: 0.62),
+  ];
+  // 三条缎带对称排在中线两侧，整体才不会整块偏到上半栏。
+  final limit = amp - 2;
+  final phase = frame.phase;
+  final level = frame.level;
+  final bands = frame.bands;
+
+  for (var k = 0; k < strands.length; k++) {
+    final s = strands[k];
+    final center = Float32List(points + 1);
+    final thick = Float32List(points + 1);
+    for (var i = 0; i <= points; i++) {
+      final t = i / points;
+      final env = 0.28 + 0.72 * _spindle(t);
+      final shape = math.sin(t * _tau * s.freq + phase * 1.5 + k * 1.15) * 0.62 +
+          math.sin(t * _tau * s.freq * 2.1 - phase * 1.1 + k * 0.7) * 0.38;
+      final v = shape * (0.4 + 0.6 * level) + _sampleAt(line, t) * 0.5;
+      final th = (1.4 + s.thick * h * 0.5) * (0.3 + 0.7 * _sampleAt(bands, t));
+      final y = mid + v * s.amp * h * env + s.off * h;
+      center[i] = math.max(mid - limit, math.min(mid + limit, y));
+      thick[i] = math.min(th, limit - (center[i] - mid).abs());
+    }
+    final paint = _paint(palette.grad, palette.colorAt(0))
+      ..color = palette.colorAt(0).withValues(alpha: s.alpha);
+    canvas.drawPath(_ribbonPolygon(center, thick, step), paint);
+  }
+}
+
+/// 2 · 密集细线：一根根发丝竖线，跟着响度包络鼓包（:396-420）。
+const WaveStyle hairlineStyle = WaveStyle(
   id: 'hairline',
   name: '细线爆发',
   ramp: WaveRamp.ember,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final bands = smoothSeries(frame.bands, 2);
-    if (bands.isEmpty) return;
-    final baseline = h;
-    final paint = Paint()..shader = palette.shaderFor(w);
-    for (var x = 0.0; x < w; x += 2) {
-      final idx = (x / w * (bands.length - 1)).round();
-      final amp = bands[idx] * h * 0.92;
-      canvas.drawLine(Offset(x, baseline), Offset(x, baseline - amp), paint);
-    }
-  },
+  usesPeaks: false,
+  draw: _drawHairline,
 );
 
-WaveStyle _sine() => WaveStyle(
+void _drawHairline(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 3;
+  final env = smoothSeries(frame.bands, 2);
+
+  final paint = _paint(palette.grad, palette.colorAt(0))
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1
+    ..color = palette.colorAt(0).withValues(alpha: 0.92);
+  final path = ui.Path();
+  for (var x = 0.0; x < w; x += 2) {
+    final t = x / w;
+    final a = math.max(0.6, _sampleAt(env, t) * amp);
+    path.moveTo(x + 0.5, mid - a);
+    path.lineTo(x + 0.5, mid + a);
+  }
+  canvas.drawPath(path, paint);
+}
+
+/// 3 · 双正弦：一条基准线 + 两三条不同频率的平滑正弦（:423-475）。
+const WaveStyle sineStyle = WaveStyle(
   id: 'sine',
   name: '双正弦线',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final wave = smoothSeries(frame.wave, 12);
-    final root = waveHash(frame.seed.isEmpty ? 'unknown' : frame.seed);
-    final f1 = 1.4 + (root % 5) * 0.3;
-    final f2 = 2.6 + ((root >> 2) % 4) * 0.35;
-    final mid = h / 2;
-    canvas.drawLine(
-      Offset(0, mid),
-      Offset(w, mid),
-      Paint()
-        ..color = palette.colorAt(0.5).withValues(alpha: 0.55)
-        ..strokeWidth = 1,
-    );
-    for (final f in [f1, f2, f1 * 0.55]) {
-      final path = Path();
-      for (var i = 0; i < wave.length; i++) {
-        final x = w * i / (wave.length - 1);
-        final y = mid +
-            (wave[i] + math.sin(i / wave.length * math.pi * 2 * f + frame.phase * 0.6)) *
-                h *
-                0.18;
-        if (i == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..shader = palette.shaderFor(w)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4,
-      );
-    }
-  },
+  usesPeaks: false,
+  draw: _drawSine,
 );
 
-WaveStyle _roundBars() => WaveStyle(
+void _drawSine(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 3;
+  final line = smoothSeries(frame.wave, 12);
+  final seed = frame.seed;
+  final root = seed.isNotEmpty ? seed.codeUnitAt(0) + seed.length : 7;
+  final f1 = 1.4 + (root % 5) * 0.3;
+  final f2 = 2.6 + ((root >> 2) % 4) * 0.35;
+  final phase = frame.phase;
+  final level = frame.level;
+
+  // 基准线（alpha 0.55、lineWidth 1.2）。
+  final base = _paint(palette.grad, palette.colorAt(0))
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.2
+    ..color = palette.colorAt(0).withValues(alpha: 0.55);
+  canvas.drawLine(ui.Offset(0, mid + 0.5), ui.Offset(w, mid + 0.5), base);
+
+  final curves = [
+    (f: f1, speed: 1.6, weight: 0.78, width: 2.4, alpha: 0.95, useGrad: true, t: 0.0),
+    (f: f2, speed: -1.1, weight: 0.5, width: 1.6, alpha: 0.8, useGrad: false, t: 0.18),
+    (f: f1 * 0.55, speed: 0.7, weight: 0.34, width: 1.2, alpha: 0.45, useGrad: false, t: 0.72),
+  ];
+  final points = math.max(28, (w / 4).round());
+  for (final c in curves) {
+    final paint = _paint(c.useGrad ? palette.grad : null, palette.colorAt(c.t))
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = c.width
+      ..color = palette.colorAt(c.t).withValues(alpha: c.alpha);
+    final path = ui.Path();
+    for (var i = 0; i <= points; i++) {
+      final t = i / points;
+      final x = t * w;
+      final shape = math.sin(t * _tau * c.f + phase * c.speed) * 0.8 +
+          _sampleAt(line, t) * 0.6;
+      final y = mid + shape * amp * (0.5 + 0.5 * level) * _spindle(t, 0.6);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+  }
+}
+
+/// 4 · 圆头对称柱：上下对称的胶囊柱，峰值处再甩一颗孤点（:478-513）。
+const WaveStyle roundBarsStyle = WaveStyle(
   id: 'roundBars',
   name: '对称胶囊柱',
   ramp: WaveRamp.sunset,
   usesPeaks: true,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final cols = math.max(9, (w / 14).round());
-    final barWidth = (w / cols * 0.62).clamp(3.0, 5.5);
-    final mid = h / 2;
-    for (var c = 0; c < cols; c++) {
-      final idx = (c / cols * (frame.bands.length - 1)).round();
-      final amp = frame.bands[idx] * h * 0.42;
-      final x = w * (c + 0.5) / cols - barWidth / 2;
-      final paint = Paint()
-        ..color = c.isEven
-            ? palette.colorAt(c / cols)
-            : palette.colorAt(c / cols, sat: 84, light: 64);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, mid - amp, barWidth, amp * 2),
-          Radius.circular(barWidth / 2),
-        ),
-        paint,
-      );
-      peaks[idx] = math.max(frame.bands[idx], peaks[idx]);
-      if (peaks[idx] > 0.62) {
-        canvas.drawCircle(Offset(x + barWidth / 2, mid - amp - 6), 1.2, paint);
-      }
-    }
-  },
+  draw: _drawRoundBars,
 );
 
-WaveStyle _blob() => WaveStyle(
+void _drawRoundBars(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final bands = frame.bands;
+  final mid = h / 2;
+  final amp = mid - 4;
+  final cols = math.max(9, (w / 14).round());
+  final idx = _strideIndexes(bands.length, cols);
+  if (idx.isEmpty) return;
+  final step = w / idx.length;
+  final barWidth = math.max(3.0, math.min(5.5, step * 0.42));
+
+  final gradPaint = _paint(palette.grad, palette.colorAt(0))
+    ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 2.5);
+  for (var k = 0; k < idx.length; k++) {
+    final bandIndex = idx[k];
+    final t = bandIndex / math.max(1, bands.length - 1);
+    final v = bands[bandIndex];
+    final a = math.max(barWidth / 2, v * amp);
+    final x = k * step + (step - barWidth) / 2;
+    if (k % 2 == 0) {
+      // grad 与单色渐变都是 shader；奇列走逐点取色。
+      canvas.drawPath(
+        _roundBarPath(x, mid - a, barWidth, a * 2, barWidth / 2),
+        gradPaint,
+      );
+    } else {
+      canvas.drawPath(
+        _roundBarPath(x, mid - a, barWidth, a * 2, barWidth / 2),
+        _paint(null, palette.colorAt(t, sat: 90, light: 64)),
+      );
+    }
+    if (a > peaks[bandIndex]) peaks[bandIndex] = a;
+    if (peaks[bandIndex] > amp * 0.62) {
+      canvas.drawCircle(
+        ui.Offset(x + barWidth / 2, mid - peaks[bandIndex] - 4),
+        1.4,
+        _paint(null, palette.colorAt(t, sat: 92, light: 70)),
+      );
+    }
+  }
+}
+
+ui.Path _roundBarPath(double x, double y, double w, double h, double r) {
+  final radius = math.max(0.0, math.min(r, math.min(w / 2, h / 2)));
+  final path = ui.Path()
+    ..moveTo(x + radius, y)
+    ..lineTo(x + w - radius, y)
+    ..arcToPoint(ui.Offset(x + w, y + radius), radius: ui.Radius.circular(radius))
+    ..lineTo(x + w, y + h - radius)
+    ..arcToPoint(ui.Offset(x + w - radius, y + h), radius: ui.Radius.circular(radius))
+    ..lineTo(x + radius, y + h)
+    ..arcToPoint(ui.Offset(x, y + h - radius), radius: ui.Radius.circular(radius))
+    ..lineTo(x, y + radius)
+    ..arcToPoint(ui.Offset(x + radius, y), radius: ui.Radius.circular(radius))
+    ..close();
+  return path;
+}
+
+/// 5 · 胖包络：整条糊成一坨平滑的、上下镜像的能量块（:516-565）。
+const WaveStyle blobStyle = WaveStyle(
   id: 'blob',
   name: '平滑胖包络',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final bands = smoothSeries(frame.bands, 5);
-    final mid = h / 2;
-    for (final scale in [1.0, 0.42]) {
-      final path = Path()..moveTo(0, mid);
-      for (var i = 0; i < bands.length; i++) {
-        final x = w * i / (bands.length - 1);
-        path.lineTo(x, mid - bands[i] * h * 0.46 * scale);
-      }
-      path.lineTo(w, mid);
-      canvas.drawPath(
-        path,
-        Paint()
-          ..shader = palette.shaderFor(w)
-          ..style = PaintingStyle.fill,
-      );
-    }
-  },
+  usesPeaks: false,
+  draw: _drawBlob,
 );
 
-WaveStyle _strands() => WaveStyle(
+void _drawBlob(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 3;
+  final env = smoothSeries(frame.bands, 5);
+  final points = math.max(24, (w / 4).round());
+  final step = w / points;
+
+  (Float32List, Float32List) edge(double scale, double offset) {
+    final top = Float32List(points + 1);
+    final bottom = Float32List(points + 1);
+    for (var i = 0; i <= points; i++) {
+      final a = _sampleAt(env, i / points) * amp * scale + offset;
+      top[i] = mid - a;
+      bottom[i] = mid + a;
+    }
+    return (top, bottom);
+  }
+
+  void paintBlob(Float32List top, Float32List bottom, double alpha) {
+    final path = ui.Path()..moveTo(0, top[0]);
+    for (var i = 1; i <= points; i++) {
+      path.lineTo(i * step, top[i]);
+    }
+    for (var i = points; i >= 0; i--) {
+      path.lineTo(i * step, bottom[i]);
+    }
+    path.close();
+    final paint = _paint(palette.grad, palette.colorAt(0))
+      ..color = palette.colorAt(0).withValues(alpha: alpha);
+    canvas.drawPath(path, paint);
+  }
+
+  final (t1, b1) = edge(1, 1);
+  paintBlob(t1, b1, 0.8);
+  final (t2, b2) = edge(0.42, 0.5);
+  paintBlob(t2, b2, 0.9);
+}
+
+/// 6 · 多股细线：一束平行曲线，两端收拢、中间张开（:568-607）。
+const WaveStyle strandsStyle = WaveStyle(
   id: 'strands',
   name: '多股细线',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final wave = smoothSeries(frame.wave, 9);
-    for (var s = 0; s < 9; s++) {
-      final spread = h * 0.34;
-      final offset = (s - 4) * spread / 4;
-      final path = Path();
-      for (var i = 0; i < wave.length; i++) {
-        final x = w * i / (wave.length - 1);
-        final y = h / 2 + wave[i] * spread + offset;
-        if (i == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..shader = palette.shaderFor(w)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.1,
-      );
-    }
-  },
+  usesPeaks: false,
+  draw: _drawStrands,
 );
 
-WaveStyle _noise() => WaveStyle(
+void _drawStrands(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final line = smoothSeries(frame.wave, 9);
+  const count = 9;
+  final points = math.max(28, (w / 4).round());
+  final spread = h * 0.34;
+  final phase = frame.phase;
+  final level = frame.level;
+
+  for (var k = 0; k < count; k++) {
+    final rel = (k - (count - 1) / 2) / ((count - 1) / 2);
+    final paint = _paint(null, palette.colorAt(k / (count - 1), light: 56 + (k % 3) * 5))
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = palette
+          .colorAt(k / (count - 1), light: 56 + (k % 3) * 5)
+          .withValues(alpha: 0.62 + 0.3 * (1 - rel.abs()));
+    final path = ui.Path();
+    for (var i = 0; i <= points; i++) {
+      final t = i / points;
+      final x = t * w;
+      final shape = _sampleAt(line, t) * 0.75 +
+          math.sin(t * _tau * 2.2 + phase * 1.8 + k * 0.4) * 0.25;
+      final y = mid +
+          shape * h * 0.3 * (0.4 + 0.6 * level) +
+          rel * spread * _spindle(t, 0.8);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+  }
+}
+
+/// 7 · 尖刺噪声：一像素一根的密集毛刺，中间压一条白芯（:610-645）。
+const WaveStyle noiseStyle = WaveStyle(
   id: 'noise',
   name: '尖刺噪声',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final mid = h / 2;
-    final paint = Paint()..shader = palette.shaderFor(w);
-    if (frame.wave.isEmpty) return;
-    for (var x = 0.0; x < w; x += 1) {
-      final idx = (x / w * (frame.wave.length - 1)).round();
-      final amp = frame.wave[idx].abs() * h * 0.46;
-      canvas.drawLine(Offset(x, mid - amp), Offset(x, mid + amp), paint);
-    }
-    canvas.drawLine(
-      Offset(0, mid),
-      Offset(w, mid),
-      Paint()
-        ..color = const Color(0xE6FFFFFF)
-        ..strokeWidth = 1.4,
-    );
-  },
+  usesPeaks: false,
+  draw: _drawNoise,
 );
 
-WaveStyle _histogram() => WaveStyle(
+void _drawNoise(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 2;
+  final env = smoothSeries(frame.bands, 3);
+  final wave = frame.wave;
+
+  final paint = _paint(palette.grad, palette.colorAt(0))
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1
+    ..color = palette.colorAt(0).withValues(alpha: 0.9);
+  final path = ui.Path();
+  for (var x = 0.0; x < w; x += 1) {
+    final t = x / w;
+    final spike = _sampleAt(wave, t).abs();
+    final a = math.max(0.5, spike * amp * (0.45 + 0.9 * _sampleAt(env, t)));
+    path.moveTo(x + 0.5, mid - a);
+    path.lineTo(x + 0.5, mid + a);
+  }
+  canvas.drawPath(path, paint);
+
+  final core = ui.Paint()
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.4
+    ..color = const Color(0xE6FFFFFF).withValues(alpha: 0.9); // rgba(255,255,255,0.9)
+  canvas.drawLine(ui.Offset(0, mid), ui.Offset(w, mid), core);
+}
+
+/// 8 · 底部柱状：从底边起立的圆头柱，柱顶悬一颗峰值点（:648-684）。
+const WaveStyle histogramStyle = WaveStyle(
   id: 'histogram',
   name: '底部柱状',
   ramp: WaveRamp.sunset,
   usesPeaks: true,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final cols = math.max(14, (w / 6).round());
-    final baseline = h - 4;
-    for (var c = 0; c < cols; c++) {
-      final idx = (c / cols * (frame.bands.length - 1)).round();
-      final amp = frame.bands[idx] * (h - 10);
-      final x = w * c / cols + 1;
-      final bw = w / cols - 2;
-      final r = Radius.circular(bw / 2);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, baseline - amp, bw, amp),
-          r,
-        ),
-        Paint()..shader = palette.shaderFor(w),
-      );
-      peaks[idx] = math.max(frame.bands[idx], peaks[idx]);
-      canvas.drawCircle(
-        Offset(x + bw / 2, baseline - frame.bands[idx] * (h - 10) - 3),
-        1,
-        Paint()..color = const Color(0x8CFFFFFF),
-      );
-    }
-  },
+  draw: _drawHistogram,
 );
 
-WaveStyle _mirrorArea() => WaveStyle(
+void _drawHistogram(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final bands = frame.bands;
+  final baseline = h - 2;
+  final maxAmp = h - 8;
+  final cols = math.max(14, (w / 6).round());
+  final idx = _strideIndexes(bands.length, cols);
+  if (idx.isEmpty) return;
+  final step = w / idx.length;
+  final barWidth = math.max(2.0, step - 2.4);
+
+  final fill = _paint(palette.grad, palette.colorAt(0));
+  for (var k = 0; k < idx.length; k++) {
+    final bandIndex = idx[k];
+    final amp = math.max(1.5, bands[bandIndex] * maxAmp);
+    final x = k * step + (step - barWidth) / 2;
+    canvas.drawPath(
+      _roundBarPath(x, baseline - amp, barWidth, amp, barWidth / 2),
+      fill,
+    );
+    if (amp > peaks[bandIndex]) peaks[bandIndex] = amp;
+  }
+  final dot = ui.Paint()..color = const Color(0x80FFFFFF); // rgba(255,255,255,0.5)
+  for (var k = 0; k < idx.length; k++) {
+    final bandIndex = idx[k];
+    if (peaks[bandIndex] <= 0) continue;
+    canvas.drawCircle(
+      ui.Offset(k * step + step / 2, baseline - peaks[bandIndex] - 4),
+      1,
+      dot,
+    );
+  }
+}
+
+/// 9 · 镜像平滑山：以中线为轴，平滑曲线一会儿鼓上一会儿鼓下（:687-716）。
+const WaveStyle mirrorAreaStyle = WaveStyle(
   id: 'mirrorArea',
   name: '镜像平滑山',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final wave = smoothSeries(frame.wave, 26);
-    final mid = h / 2;
-    final path = Path()..moveTo(0, mid);
-    for (var i = 0; i < wave.length; i++) {
-      final x = w * i / (wave.length - 1);
-      path.lineTo(x, mid - wave[i] * h * 0.22 * 2.2);
-    }
-    path.lineTo(w, mid);
-    canvas.drawPath(
-      path,
-      Paint()..shader = palette.shaderFor(w),
-    );
-    final mirror = Path()..moveTo(0, mid);
-    for (var i = 0; i < wave.length; i++) {
-      final x = w * i / (wave.length - 1);
-      mirror.lineTo(x, mid + wave[i] * h * 0.22 * 2.2);
-    }
-    mirror.lineTo(w, mid);
-    canvas.drawPath(
-      mirror,
-      Paint()
-        ..shader = palette.shaderFor(w)
-        ..color = (palette.colorAt(0.5)).withValues(alpha: 0.35),
-    );
-  },
+  usesPeaks: false,
+  draw: _drawMirrorArea,
 );
 
-WaveStyle _jagged() => WaveStyle(
+void _drawMirrorArea(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 3;
+  final line = smoothSeries(frame.wave, 26);
+  final points = math.max(24, (w / 4).round());
+  final step = w / points;
+  final level = frame.level;
+
+  final paint = _paint(palette.grad, palette.colorAt(0))
+    ..color = palette.colorAt(0).withValues(alpha: 0.92);
+  final path = ui.Path()..moveTo(0, mid);
+  for (var i = 0; i <= points; i++) {
+    final t = i / points;
+    final v = _sampleAt(line, t) * (0.45 + 0.55 * level) * 2.2;
+    path.lineTo(i * step, mid - v * amp);
+  }
+  path.lineTo(w, mid);
+  path.close();
+  canvas.drawPath(path, paint);
+}
+
+/// 10 · 锯齿折线：时域信号直接连线，背后留一道重影（:719-758）。
+const WaveStyle jaggedStyle = WaveStyle(
   id: 'jagged',
   name: '锯齿折线',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final mid = h / 2;
-    Path pathOf(double alphaMul) {
-      final p = Path();
-      for (var i = 0; i < frame.wave.length; i++) {
-        final x = w * i / (frame.wave.length - 1);
-        final y = mid + frame.wave[i] * h * 0.4 * alphaMul;
-        if (i == 0) {
-          p.moveTo(x, y);
-        } else {
-          p.lineTo(x, y);
-        }
-      }
-      return p;
-    }
-
-    canvas.drawPath(
-      pathOf(0.7),
-      Paint()
-        ..color = palette.colorAt(0.5).withValues(alpha: 0.28)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
-    );
-    canvas.drawPath(
-      pathOf(1.0),
-      Paint()
-        ..shader = palette.shaderFor(w)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6,
-    );
-  },
+  usesPeaks: false,
+  draw: _drawJagged,
 );
 
-WaveStyle _hatch() => WaveStyle(
+void _drawJagged(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 3;
+  final env = smoothSeries(frame.bands, 3);
+  final wave = frame.wave;
+  final level = frame.level;
+
+  ui.Path trace(double scale, double offset) {
+    final path = ui.Path();
+    for (var x = 0.0; x <= w; x += 2) {
+      final t = x / w;
+      final v = _sampleAt(wave, t) *
+          scale *
+          (0.4 + 0.6 * level) *
+          2 *
+          (0.35 + 0.8 * _sampleAt(env, t));
+      final y = mid + offset - v * amp;
+      if (x == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    return path;
+  }
+
+  // 重影（alpha 0.28、lineWidth 1）。
+  final ghost = _paint(palette.grad, palette.colorAt(0))
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1
+    ..strokeJoin = ui.StrokeJoin.round
+    ..color = palette.colorAt(0).withValues(alpha: 0.28);
+  canvas.drawPath(trace(0.7, 3), ghost);
+
+  // 主线（alpha 0.95、lineWidth 1.6）。
+  final main = _paint(palette.grad, palette.colorAt(0))
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.6
+    ..strokeJoin = ui.StrokeJoin.round
+    ..color = palette.colorAt(0).withValues(alpha: 0.95);
+  canvas.drawPath(trace(1, 0), main);
+}
+
+/// 11 · 白描边竖纹：外面一圈白描边，里面 clip 出竖向条纹（:761-813）。
+const WaveStyle hatchStyle = WaveStyle(
   id: 'hatch',
   name: '白描边竖纹',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final baseline = h - 2;
-    final paint = Paint()..shader = palette.shaderFor(w);
-    final edge = Paint()
-      ..color = const Color(0xE6FFFFFF)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-    for (var x = 0.0; x < w; x += 4) {
-      final idx = (x / w * (frame.bands.length - 1)).round();
-      final amp = frame.bands[idx] * (h - 8);
-      final rect = Rect.fromLTWH(x, baseline - amp, 2, amp);
-      canvas.drawRect(rect, paint);
-      canvas.drawRect(rect, edge);
-    }
-  },
+  usesPeaks: false,
+  draw: _drawHatch,
 );
 
-WaveStyle _spikes() => WaveStyle(
+void _drawHatch(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 3;
+  final line = smoothSeries(frame.wave, 14);
+  final env = smoothSeries(frame.bands, 3);
+  final points = math.max(24, (w / 4).round());
+  final step = w / points;
+
+  ui.Path build() {
+    final path = ui.Path();
+    for (var i = 0; i <= points; i++) {
+      final t = i / points;
+      final v = _sampleAt(line, t).abs() * 1.8 * (0.3 + 0.7 * _sampleAt(env, t)) + 0.06;
+      final a = math.min(amp, v * amp);
+      if (i == 0) {
+        path.moveTo(0, mid - a);
+      } else {
+        path.lineTo(i * step, mid - a);
+      }
+    }
+    for (var i = points; i >= 0; i--) {
+      final t = i / points;
+      final v = _sampleAt(line, t).abs() * 1.8 * (0.3 + 0.7 * _sampleAt(env, t)) + 0.06;
+      path.lineTo(i * step, mid + math.min(amp, v * amp));
+    }
+    path.close();
+    return path;
+  }
+
+  // 竖纹条：包络 Path 当剪裁区（ctx.clip 的等价）。
+  final stripe = _paint(palette.grad, palette.colorAt(0))
+    ..color = palette.colorAt(0).withValues(alpha: 0.95);
+  final stripesPath = ui.Path();
+  for (var x = 0.0; x < w; x += 4) {
+    stripesPath.addRect(ui.Rect.fromLTWH(x, 0, 2, h));
+  }
+  canvas.save();
+  canvas.clipPath(build());
+  canvas.drawPath(stripesPath, stripe);
+  canvas.restore();
+
+  // 白描边（alpha 0.92、lineWidth 1.5）。
+  final stroke = ui.Paint()
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.5
+    ..color = const Color(0xEBFFFFFF).withValues(alpha: 0.92);
+  canvas.drawPath(build(), stroke);
+}
+
+/// 12 · 尖峰镜像：不做任何平滑，锐角三角峰上下镜像，中间一条亮线（:816-859）。
+const WaveStyle spikesStyle = WaveStyle(
   id: 'spikes',
   name: '尖峰镜像',
   ramp: WaveRamp.ember,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final cols = math.max(10, (w / 13).round());
-    final mid = h / 2;
-    for (var c = 0; c < cols; c++) {
-      final idx = (c / cols * (frame.bands.length - 1)).round();
-      final amp = frame.bands[idx] * h * 0.44;
-      final x = w * (c + 0.5) / cols;
-      final path = Path()
-        ..moveTo(x - w / cols / 2 + 1, mid)
-        ..lineTo(x, mid - amp)
-        ..lineTo(x + w / cols / 2 - 1, mid)
-        ..lineTo(x, mid + amp)
-        ..close();
-      canvas.drawPath(path, Paint()..shader = palette.shaderFor(w));
-    }
-    canvas.drawLine(
-      Offset(0, mid),
-      Offset(w, mid),
-      Paint()
-        ..color = const Color(0xF2FFF6E8)
-        ..strokeWidth = 1.6,
-    );
-  },
+  usesPeaks: false,
+  draw: _drawSpikes,
 );
 
-WaveStyle _led() => WaveStyle(
+void _drawSpikes(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final bands = frame.bands;
+  final mid = h / 2;
+  final amp = mid - 2;
+  if (bands.isEmpty) return;
+  // 参考图是二三十根粗尖峰，直接按频段画会糊成一片毛刺。
+  final cols = math.max(10, (w / 13).round());
+  final idx = _strideIndexes(bands.length, cols);
+  if (idx.isEmpty) return;
+  final step = w / idx.length;
+
+  final paint = _paint(palette.grad, palette.colorAt(0))
+    ..color = palette.colorAt(0).withValues(alpha: 0.9);
+  final path = ui.Path();
+  for (var k = 0; k < idx.length; k++) {
+    final bandIndex = idx[k];
+    final v = bands[bandIndex];
+    final x = k * step;
+    path.moveTo(x, mid);
+    path.lineTo(x + step / 2, mid - v * amp);
+    path.lineTo(x + step, mid);
+    path.moveTo(x, mid);
+    path.lineTo(x + step / 2, mid + v * amp * 0.8);
+    path.lineTo(x + step, mid);
+  }
+  canvas.drawPath(path, paint);
+
+  final line = ui.Paint()
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.6
+    ..color = const Color(0xFFFFF6E8).withValues(alpha: 0.95 * 0.85); // rgba(255,246,232,0.95) × globalAlpha 0.85
+  canvas.drawLine(ui.Offset(0, mid), ui.Offset(w, mid), line);
+}
+
+/// 13 · 点阵 LED：方格堆出来的柱状图，最高一格单独留一颗余辉（:862-896）。
+const WaveStyle ledStyle = WaveStyle(
   id: 'led',
   name: '点阵 LED',
   ramp: WaveRamp.sunset,
   usesPeaks: true,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    const pitch = 4.0, cell = 3.0;
-    final cols = math.max(12, (w / 4).round());
-    final rows = (h / pitch).floor();
-    for (var c = 0; c < cols; c++) {
-      final idx = (c / cols * (frame.bands.length - 1)).round();
-      final amp = frame.bands[idx];
-      final litRows = (amp * rows).round();
-      peaks[idx] = math.max(amp, peaks[idx]);
-      final peakRows = (peaks[idx] * rows).round();
-      for (var r = 0; r < rows; r++) {
-        final rowFromBottom = rows - 1 - r;
-        final isLit = rowFromBottom < litRows;
-        final isPeak = rowFromBottom == peakRows - 1;
-        final color = isLit
-            ? palette.colorAt(c / cols, light: 62)
-            : isPeak
-                ? palette.colorAt(c / cols, light: 74)
-                : palette.colorAt(c / cols, light: 62).withValues(alpha: 0.12);
-        canvas.drawRect(
-          Rect.fromLTWH(c * pitch + 0.5, r * pitch + 0.5, cell, cell),
-          Paint()..color = color,
-        );
-      }
-    }
-  },
+  draw: _drawLed,
 );
 
-WaveStyle _flow() => WaveStyle(
+void _drawLed(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final bands = frame.bands;
+  const pitch = 4.0;
+  const cell = 3.0;
+  final cols = math.max(12, (w / pitch).floor());
+  final idx = _strideIndexes(bands.length, cols);
+  if (idx.isEmpty) return;
+  final baseline = h - 2;
+  final rows = ((baseline - 2) / pitch).floor();
+
+  for (var k = 0; k < idx.length; k++) {
+    final bandIndex = idx[k];
+    final t = bandIndex / math.max(1, bands.length - 1);
+    final lit = (bands[bandIndex] * rows).round();
+    final x = k * pitch;
+    final paint = _paint(null, palette.colorAt(t, sat: 92, light: 58));
+    for (var r = 0; r < lit; r++) {
+      canvas.drawRect(
+        ui.Rect.fromLTWH(x, baseline - (r + 1) * pitch + cell, cell, cell),
+        paint,
+      );
+    }
+    final p = peaks[bandIndex];
+    if (lit > p) peaks[bandIndex] = lit.toDouble();
+    final peak = peaks[bandIndex].round();
+    if (peak > 0 && peak < rows) {
+      canvas.drawRect(
+        ui.Rect.fromLTWH(x, baseline - (peak + 1) * pitch + cell, cell, cell),
+        _paint(null, palette.colorAt(t, sat: 96, light: 76)),
+      );
+    }
+  }
+}
+
+/// 14 · 平行波纹线：一摞水平波浪线，跟着同一个形状一起摆（:899-937）。
+const WaveStyle flowStyle = WaveStyle(
   id: 'flow',
   name: '平行波纹线',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final wave = smoothSeries(frame.wave, 12);
-    for (var s = 0; s < 7; s++) {
-      final path = Path();
-      final yBase = h * (s + 1) / 8;
-      for (var i = 0; i < wave.length; i++) {
-        final x = w * i / (wave.length - 1);
-        final y = yBase + wave[i] * h * 0.12;
-        if (i == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..shader = palette.shaderFor(w)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2,
-      );
-    }
-  },
+  usesPeaks: false,
+  draw: _drawFlow,
 );
 
-WaveStyle _dots() => WaveStyle(
+void _drawFlow(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final line = smoothSeries(frame.wave, 12);
+  const count = 7;
+  final gap = (h * 0.66) / count;
+  final points = math.max(28, (w / 4).round());
+  final phase = frame.phase;
+  final level = frame.level;
+
+  for (var k = 0; k < count; k++) {
+    final rel = (k - (count - 1) / 2) / ((count - 1) / 2);
+    final paint = _paint(null, palette.colorAt(k / (count - 1)))
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 1.3
+      ..color = palette
+          .colorAt(k / (count - 1))
+          .withValues(alpha: 0.7 + 0.3 * (1 - rel.abs()));
+    final path = ui.Path();
+    for (var i = 0; i <= points; i++) {
+      final t = i / points;
+      final x = t * w;
+      final shape = _sampleAt(line, t) * 1.6 + math.sin(t * _tau * 2.6 + phase * 1.4) * 0.2;
+      final y = mid +
+          rel * gap * (count / 2) * _spindle(t, 0.7) +
+          shape * h * 0.16 * (0.4 + 0.6 * level);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+  }
+}
+
+/// 15 · 点阵包络：用散点堆出上下镜像的包络，中间密两头疏（:940-975）。
+const WaveStyle dotsStyle = WaveStyle(
   id: 'dots',
   name: '点阵包络',
   ramp: WaveRamp.sunset,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    const pitch = 5.0;
-    final cols = (w / pitch).floor();
-    for (var c = 0; c < cols; c++) {
-      final idx = (c / cols * (frame.bands.length - 1)).round();
-      final v = frame.bands[idx];
-      final count = 1 + (v * 3).round();
-      for (var d = 0; d < count; d++) {
-        final n = stableNoise(frame.seed, c * 4 + d);
-        canvas.drawCircle(
-          Offset(
-            c * pitch + pitch / 2,
-            h * 0.15 + n * h * 0.7 * (v + 0.2),
-          ),
-          1.3,
-          Paint()..shader = palette.shaderFor(w),
-        );
-      }
-    }
-  },
+  usesPeaks: false,
+  draw: _drawDots,
 );
 
-WaveStyle _hills() => WaveStyle(
+void _drawDots(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final mid = h / 2;
+  final amp = mid - 2;
+  final env = smoothSeries(frame.bands, 2);
+  const pitch = 5.0;
+
+  var col = 0;
+  for (var x = pitch / 2; x < w; x += pitch, col++) {
+    final t = x / math.max(1, w - 1);
+    final v = _sampleAt(env, t);
+    final hh = math.max(2.0, v * amp);
+    // 宁疏勿密：一列最多三四颗，散在包络内部而不是糊成一片。
+    final dots = 1 + (v * 3).round();
+    final paint = _paint(null, palette.colorAt(t, light: 56 + (col % 3) * 7));
+    for (var d = 0; d < dots; d++) {
+      final fy = 0.2 + 0.8 * stableNoise(col, d);
+      final fx = (stableNoise(col + 512, d) - 0.5) * pitch * 0.9;
+      final y = hh * fy;
+      canvas.drawCircle(ui.Offset(x + fx, mid - y), 1.2, paint);
+      canvas.drawCircle(ui.Offset(x + fx, mid + y), 1.2, paint);
+    }
+  }
+}
+
+/// 16 · 层叠山峰：从底边叠上来的几层半透明平滑山（:978-1016）。
+const WaveStyle hillsStyle = WaveStyle(
   id: 'hills',
   name: '层叠山峰',
   ramp: WaveRamp.ember,
-  draw: (canvas, frame, palette, peaks) {
-    final w = frame.width, h = frame.height;
-    final layers = [
-      (passes: 3, scale: 1.0, shift: 0.0, alpha: 0.45),
-      (passes: 3, scale: 0.78, shift: 0.12, alpha: 0.58),
-      (passes: 2, scale: 0.58, shift: -0.1, alpha: 0.72),
-      (passes: 2, scale: 0.4, shift: 0.22, alpha: 0.88),
-    ];
-    for (final layer in layers) {
-      final bands = smoothSeries(frame.bands, layer.passes);
-      final path = Path()..moveTo(0, h);
-      for (var i = 0; i < bands.length; i++) {
-        final x = w * i / (bands.length - 1);
-        path.lineTo(
-          x,
-          h - bands[i] * h * 0.7 * layer.scale -
-              layer.shift * h,
-        );
-      }
-      path.lineTo(w, h);
-      canvas.drawPath(
-        path,
-        Paint()
-          ..shader = palette.shaderFor(w)
-          ..color = palette.colorAt(layer.scale * 0.6).withValues(alpha: layer.alpha),
-      );
-    }
-  },
+  usesPeaks: false,
+  draw: _drawHills,
 );
 
-/// 17 个样式（wave-styles.ts:1018-1036 顺序即下拉顺序），一个都不减。
-final List<WaveStyle> kWaveStyles = <WaveStyle>[
-  _spectrum(),
-  _ribbon(),
-  _hairline(),
-  _sine(),
-  _roundBars(),
-  _blob(),
-  _strands(),
-  _noise(),
-  _histogram(),
-  _mirrorArea(),
-  _jagged(),
-  _hatch(),
-  _spikes(),
-  _led(),
-  _flow(),
-  _dots(),
-  _hills(),
+void _drawHills(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float32List peaks) {
+  final w = frame.width;
+  final h = frame.height;
+  final bands = frame.bands;
+  final baseline = h;
+  // 平滑遍数一多，四层会塌成同一座山；靠「各自错开一点」拉开前后层次。
+  const layers = [
+    (passes: 3, scale: 1.0, shift: 0.0, alpha: 0.45),
+    (passes: 3, scale: 0.78, shift: 0.12, alpha: 0.58),
+    (passes: 2, scale: 0.58, shift: -0.1, alpha: 0.72),
+    (passes: 2, scale: 0.4, shift: 0.22, alpha: 0.88),
+  ];
+  final points = math.max(24, (w / 4).round());
+  final step = w / points;
+
+  for (var k = 0; k < layers.length; k++) {
+    final layer = layers[k];
+    final env = smoothSeries(bands, layer.passes);
+    final paint = _paint(palette.grad, palette.colorAt(0))
+      ..color = palette.colorAt(0).withValues(alpha: layer.alpha);
+    final path = ui.Path()..moveTo(0, baseline);
+    for (var i = 0; i <= points; i++) {
+      final t = i / points;
+      final shifted = (t + layer.shift + 1) % 1;
+      final v = _sampleAt(env, shifted) * layer.scale * (h - 6 - k * 2);
+      path.lineTo(i * step, baseline - math.max(2.0, v));
+    }
+    path.lineTo(w, baseline);
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 注册表（:1018-1042 逐字）
+// ---------------------------------------------------------------------------
+
+/// 17 个样式一个不减，顺序与 React 版完全一致。
+const List<WaveStyle> kWaveStyles = [
+  spectrumStyle,
+  ribbonStyle,
+  hairlineStyle,
+  sineStyle,
+  roundBarsStyle,
+  blobStyle,
+  strandsStyle,
+  noiseStyle,
+  histogramStyle,
+  mirrorAreaStyle,
+  jaggedStyle,
+  hatchStyle,
+  spikesStyle,
+  ledStyle,
+  flowStyle,
+  dotsStyle,
+  hillsStyle,
 ];
 
 const String kDefaultWaveStyleId = 'spectrum';
 
-/// 按 id 找样式；不存在（样式增删过的旧存档）兜回默认那条。
-WaveStyle findWaveStyle(String? id) =>
-    kWaveStyles.firstWhere((s) => s.id == id, orElse: () => kWaveStyles.first);
+/// 按 id 找样式；未知 id 兜回第 0 条（spectrum）。
+WaveStyle findWaveStyle(String? id) {
+  for (final s in kWaveStyles) {
+    if (s.id == id) return s;
+  }
+  return kWaveStyles[0];
+}
+
+// ---------------------------------------------------------------------------
+// 偏差说明（Canvas → Flutter 等价取舍）
+// ---------------------------------------------------------------------------
+//
+// * shadowBlur：Canvas 的模糊是「白色半透明阴影」，Flutter 没有 ctx.shadow*。
+//   视觉上它只是给柱体加一圈柔光，这里在唯一重度依赖它的样式（spectrum）
+//   上用 MaskFilter.blur(sigma=blur/2) 近似（6→3）；其余样式的 shadowBlur
+//   都 ≤6 且作用在 stroke 上，按计划允许省略——省略后唯一可见差异是
+//   深色底上少一圈 halo。
+// * ctx.clip()：hatch 用 canvas.clipPath 等价实现，剪裁语义一致。
+// * ctx.globalAlpha：改为 Paint.color 的 withValues(alpha:)（同一个数值）。
+// * arcTo：Path.arcToPoint（同样四角圆角语义）；fillRect → drawRect；
+//   arc → drawCircle；stroke → Path + stroke paint。
+// * monoColor 的 light 参数语义：TS 签名是 (t, sat, light)，样式调用里
+//   只有 light 会影响单色输出（h/s 来自 setWaveAccent），对译成
+//   monoColor(light, accent:)，WavePalette.colorAt 的签名保持三参不变。
+// * buildWavePalette 的 accent 回退：React 是「取不到计算样式就 {h:160,s:85}」，
+//   Flutter 的 accent 总有值，所以只在 accent 无彩色信息（s==0 且 l 为 0/100，
+//   即纯黑/纯白）时落回 {h:160, s:85}；正常 accent 走 (s+78)/2 公式。
