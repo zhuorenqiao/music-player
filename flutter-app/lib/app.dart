@@ -21,6 +21,7 @@ import 'playback/playlist.dart';
 import 'playback/transport_controller.dart';
 import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
+import 'state/lightbox_controller.dart';
 import 'state/lyrics_page_controller.dart';
 import 'state/lyrics_state.dart';
 import 'state/panel_controller.dart';
@@ -50,10 +51,14 @@ class AppBootstrap {
     required this.bilingual,
     required this.onLyricsViewChanged,
     LyricsPageController? lyricsPage,
+    LightboxController? lightbox,
   }) : // 全屏歌词页的开合开关（T18 建、T19 接页面本体）。
        // 可空入参 + 在这里兜底建：`buildBootstrap` 传它（Stage 与 T19 的页面 /
        // 快捷键要共用同一份），测试里直接 new `AppBootstrap` 的路径也不必改。
-       lyricsPage = lyricsPage ?? LyricsPageController();
+       lyricsPage = lyricsPage ?? LyricsPageController(),
+       // 封面放大层的开合开关（M2b T9）：曲目区 / 歌词页右栏的封面热区
+       // `open()`，灯箱本体与 Esc `close()`。层叠在歌词页之上。
+       lightbox = lightbox ?? LightboxController();
 
   final AppPrefs prefs;
   final LibraryRepository repository;
@@ -107,6 +112,14 @@ class AppBootstrap {
   /// overlay 槽（T19）负责 `close()` / 读 [LyricsPageController.isOpen]，
   /// 快捷键层再做 `toggle()`。三方读同一个 flag，所以只能有一份实例，归组合根。
   final LyricsPageController lyricsPage;
+
+  /// 封面放大层的开合开关（M2b T9 建、T11 消费）。
+  ///
+  /// 层叠在歌词页之上：灯箱开着时 Esc 只关灯箱（App.tsx:1581-1591 的顶层
+  /// 优先语义），歌词页保持其下渲染。**不是** `CoverState` 的一部分：灯箱是
+  /// 纯界面态，与封面数据无关（[LyricsPageController] 同款裁定）——封面热区
+  /// `open()`（T11），灯箱本体与 Esc `close()`，三方读同一个 flag。
+  final LightboxController lightbox;
 
   /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
   Playlist get playlist => library.playlist;
@@ -167,6 +180,11 @@ class _LightMusicAppState extends State<LightMusicApp> {
         ChangeNotifierProvider<LyricsPageController>.value(
           value: bootstrap.lyricsPage,
         ),
+        // 封面放大层的开合开关（M2b T9）：封面热区（T11）与灯箱本体 / Esc
+        // 读同一份，登记在路由之上。
+        ChangeNotifierProvider<LightboxController>.value(
+          value: bootstrap.lightbox,
+        ),
         // 面板的选中 tab 是纯界面态：不属于组合根，界面装配时建即可。
         // 放在路由之上，T29 的弹层复用同一份。
         ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
@@ -217,7 +235,13 @@ class _LightMusicAppState extends State<LightMusicApp> {
               case 'toggleLyricsPage':
                 bootstrap.lyricsPage.toggle();
               case 'closeOverlay':
-                if (bootstrap.lyricsPage.isOpen) bootstrap.lyricsPage.close();
+                // 放大层叠在歌词页之上：Esc 只认顶层（App.tsx:1581-1591，
+                // 灯箱开着时其它快捷键全部让位、歌词页保持其下渲染）。
+                if (bootstrap.lightbox.isOpen) {
+                  bootstrap.lightbox.close();
+                } else if (bootstrap.lyricsPage.isOpen) {
+                  bootstrap.lyricsPage.close();
+                }
             }
           },
           child: const HomePage(),
