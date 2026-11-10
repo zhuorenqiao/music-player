@@ -34,6 +34,8 @@ class TrackRow extends StatelessWidget {
     required this.onPlay,
     required this.onRemove,
     this.coverPath = '',
+    this.coverArtist = '',
+    this.coverTitle = '',
     super.key,
   });
 
@@ -60,6 +62,10 @@ class TrackRow extends StatelessWidget {
 
   /// 封面文件绝对路径；空串表示没有封面。
   final String coverPath;
+
+  /// 生成卡派生字段（M2b T10）：无内嵌/在线封面时缩略图画生成卡。
+  final String coverArtist;
+  final String coverTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -106,6 +112,8 @@ class TrackRow extends StatelessWidget {
                       key: const Key('track-thumb'),
                       path: coverPath,
                       size: kTrackThumb,
+                      fallbackArtist: coverArtist,
+                      fallbackTitle: coverTitle,
                     ),
                     const SizedBox(width: 11),
                     Expanded(

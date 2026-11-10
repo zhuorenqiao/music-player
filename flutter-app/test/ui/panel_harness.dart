@@ -15,14 +15,18 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:light_music/core/app_prefs.dart';
+import 'package:light_music/cover/cover_disk_cache.dart';
+import 'package:light_music/cover/cover_source.dart';
 import 'package:light_music/library/import_service.dart';
 import 'package:light_music/library/library_repository.dart';
 import 'package:light_music/library/recent_store.dart';
+import 'package:light_music/lyrics/upstream.dart';
 import 'package:light_music/playback/audio_driver.dart';
 import 'package:light_music/playback/audio_player.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
 import 'package:light_music/playback/transport_controller.dart';
+import 'package:light_music/state/cover_state.dart';
 import 'package:light_music/state/library_state.dart';
 import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
@@ -82,6 +86,14 @@ class PanelHarness {
     if (recentCount > 0) {
       unawaited(recent.refresh(const <String>{}));
     }
+    // M2b T10：面板的封面显示层。真 CoverState + 恒打不通的假网络替身
+    //（面板用例不验封面匹配，只验 resolver 的第 1 级内嵌路径与生成卡）。
+    cover = CoverState(
+      json: const _NoJson(),
+      bytes: const _NoBytes(),
+      diskStore: CoverDiskStore(directory: _directory.path),
+      artistImageDirectory: _directory.path,
+    );
   }
 
   /// 面板内容区的高度。非 tall 时由外层约束（测试里是 700）决定。
@@ -100,6 +112,7 @@ class PanelHarness {
   late final LibraryState library;
   late final PlayerState player;
   late final RecentState recent;
+  late final CoverState cover;
 
   /// 假播放器本体（只覆写两条 getter），用 [PlayerState] 的静态类型拿不到。
   late final _HarnessPlayer _harnessPlayer;
@@ -112,6 +125,7 @@ class PanelHarness {
       ChangeNotifierProvider<LibraryState>.value(value: library),
       ChangeNotifierProvider<PlayerState>.value(value: player),
       ChangeNotifierProvider<RecentState>.value(value: recent),
+      ChangeNotifierProvider<CoverState>.value(value: cover),
       ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
     ],
     child: SizedBox(height: tall ? 700 : null, child: const Panel()),
@@ -121,11 +135,37 @@ class PanelHarness {
     player.dispose();
     library.dispose();
     recent.dispose();
+    cover.dispose();
     toasts.dispose();
     if (_directory.existsSync()) {
       _directory.deleteSync(recursive: true);
     }
   }
+}
+
+/// 面板用例不碰网络：json / bytes 一被问就回失败（面板只读 resolver 的
+/// 内存值，这两个替身根本不会被触发）。
+class _NoJson implements HttpJsonClient {
+  const _NoJson();
+
+  @override
+  Future<JsonOutcome> getJson(
+    Uri url, {
+    required Duration timeout,
+    required Map<String, String> headers,
+  }) async =>
+      const JsonNetwork();
+}
+
+class _NoBytes implements ImageBytesClient {
+  const _NoBytes();
+
+  @override
+  Future<ImageBytesOutcome> getBytes(
+    Uri url, {
+    required Duration timeout,
+  }) async =>
+      const ImageBytesNetwork();
 }
 
 /// 只覆写两条提示 getter 的播放器：其余行为全是真 [PlayerState]。

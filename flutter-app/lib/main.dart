@@ -48,6 +48,11 @@ import 'playback/media_kit_driver.dart';
 import 'playback/media_session_bridge.dart';
 import 'playback/playlist.dart';
 import 'playback/transport_controller.dart';
+import 'playback/track.dart';
+import 'cover/artist_image.dart';
+import 'cover/cover_disk_cache.dart';
+import 'cover/cover_source.dart';
+import 'state/cover_state.dart';
 import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
 import 'state/lyrics_page_controller.dart';
@@ -120,6 +125,18 @@ Future<AppBootstrap> buildBootstrap({
   // 里，收尾断言 `!timersPending`，默认排真 Timer 会让整份集成测试红。
   // 注入本参数即可在测试里精确控制这两个延时（见 lyrics_wiring_test.dart）。
   Future<void> Function(Duration)? lyricsDelay,
+  // M2b T8：封面链路的可注入接缝。生产不传，走真 CoverSource（两区直连
+  // iTunes + 维基写真 + 双层缓存）；测试传假替身，绝不打网络。注入点模式
+  // 与 lyricsMatcher / translationFetcher 相同（:110-122 的现成模板）。
+  HttpJsonClient? coverJsonClient,
+  ImageBytesClient? coverBytesClient,
+  CoverState? coverState,
+  String? coverCacheDirectory,
+  // 预取节流（封面 400ms / 歌词 350ms 各一次延时语义不同，共用一个接缝即可
+  // —— 生产传 Future.delayed；测试默认永不完成，同 lyricsDelay 的防
+  // pending-Timer 手法）。
+  Future<void> Function(Duration)? prefetchDelay,
+  Future<int> Function(List<Track>, {String? currentId})? lyricsPrefetchRun,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -221,6 +238,39 @@ Future<AppBootstrap> buildBootstrap({
   void syncLyricsTrack() => lyrics.attach(player.current);
   player.transport.view.addListener(syncLyricsTrack);
 
+  // M2b T8：封面显示层。与歌词层同一条「json 客户端共用 + 目录分层」思路：
+  //   * json 客户端复用 [httpClient]（iTunes / 维基的 JSON 查询）；
+  //   * 图字节走独立的 [ImageBytesClientImpl]（懒建内核，测试装配不碰 socket）；
+  //   * 在线封面落 `$dataDirectory/covers-net/`（与内嵌封面的 covers/ 并列，
+  //     语义不同：内嵌是「文件里带的」，covers-net 是「联网找回来的」，都可
+  //     随时删除重建）；
+  //   * 持久索引用 React 版的裸键（cover-cache / artist-image.v1）。
+  final cover = coverState ??
+      CoverState(
+        json: coverJsonClient ?? httpClient,
+        bytes: coverBytesClient ?? ImageBytesClientImpl(),
+        diskStore: CoverDiskStore(
+          directory: coverCacheDirectory ?? '$dataDirectory/covers-net',
+        ),
+        artistImageDirectory:
+            coverCacheDirectory ?? '$dataDirectory/covers-net',
+        coverIndex: CoverIndexCache(prefs),
+        artistIndex: ArtistIndexCache(prefs),
+        sleep: prefetchDelay ?? _neverFireDelay(),
+      );
+  // 切歌联动（当前曲目在线匹配）：与 syncLyricsTrack 同一个事件源。
+  void syncCoverTrack() {
+    final track = player.current;
+    if (track == null) return;
+    cover.matchFor(
+      (title: track.title, artist: track.artist, duration: track.duration),
+      trackId: track.id,
+      cover: track.cover,
+    );
+  }
+
+  player.transport.view.addListener(syncCoverTrack);
+
   // 停止播放也要落一次盘，而且**当场落完**（终审 R2 + 它的残留）：
   // `stopPlayback` 清掉的是播放指针，而指针就是 prefs 那份 `currentId` 现场的
   // 真相。从暂停态按停止时内核状态本来就没变，一个驱动事件都不会发，
@@ -249,8 +299,35 @@ Future<AppBootstrap> buildBootstrap({
   syncLyricsTrack();
 
   // 最近播放后还原（只读 prefs，失败也只是一份空历史），再按列表校正失效标记。
+  // 最近播放后还原（只读 prefs，失败也只是一份空历史），再按列表校正失效标记。
   await recent.restore();
   await recent.refresh(library.tracks.map((track) => track.id).toSet());
+
+  // M2b T8：启动后的后台预取。**必须等标签纠正/时长补探完成再发**
+  //（player.tsx:582-584 的 tagsDone 对译）：否则拿反着的歌手/曲名去查，
+  // 白跑一轮还写进缓存。`restore()` 末尾经 _flushAfterEnrichment 排了
+  // rehydrateIncomplete，其 Future 在 LibraryState.enrichmentSettled 上；
+  // 预取一律不阻塞启动（unawaited），但内部仍等 enrichment 落定。
+  unawaited(() async {
+    await library.enrichmentSettled;
+    // 封面预取（covers.tsx:162-176）：跳过内嵌/已匹配的，400ms 串行。
+    await cover.prefetchCovers(<CoverPrefetchItem>[
+      for (final track in library.playlist.tracks)
+        (
+          title: track.title,
+          artist: track.artist,
+          duration: track.duration,
+          trackId: track.id,
+        ),
+    ]);
+    // 歌词预取（M2a 漏项补齐，lyrics-prefetch.ts 全文对译）：350ms 串行，
+    // 完成后统一落库一次（M2a 批量落库同款裁定）。
+    await (lyricsPrefetchRun ?? _noopLyricsPrefetch)(
+      library.playlist.tracks,
+      currentId: player.current?.id,
+    );
+    await library.persist();
+  }());
 
   // 媒体会话最后挂：此时列表与当前曲目都已就位，首次快照就是真实状态。
   //
@@ -290,8 +367,14 @@ Future<AppBootstrap> buildBootstrap({
     bilingual: bilingual,
     onLyricsViewChanged: syncLyricsTrack,
     lyricsPage: lyricsPage,
+    cover: cover,
+    onCoverViewChanged: syncCoverTrack,
   );
 }
+
+/// 未注入歌词预取时（既有测试不关心它）的空实现：立即返回 0 条。
+Future<int> Function(List<Track>, {String? currentId}) _noopLyricsPrefetch =
+    (tracks, {currentId}) async => 0;
 
 /// 测试装配的默认延时：一个永不完成的 Completer，`await` 它不会创建 Timer。
 /// [LyricsState] 的两个 detached 回调会永远挂起，不会到点改状态、也不会让

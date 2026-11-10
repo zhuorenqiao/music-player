@@ -203,7 +203,19 @@ void main() {
     final offPrefs = AppPrefs.inMemory();
     await offPrefs.writeString(StorageKeys.bilingual, '0');
     final dir2 = await _tempDir();
-    addTearDown(() => dir2.delete(recursive: true));
+    // M2b T8 起 buildBootstrap 会建 CoverState（它可能持有懒建内核与文件
+    // 句柄）：teardown 容忍 errno 32（句柄迟关）——T6 的 cover_state_test
+    // 同款处理，首次删除失败等一拍再试。
+    addTearDown(() async {
+      try {
+        await dir2.delete(recursive: true);
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        try {
+          await dir2.delete(recursive: true);
+        } catch (_) {}
+      }
+    });
     final off = await buildBootstrap(
       prefs: offPrefs,
       dataDirectory: dir2.path,

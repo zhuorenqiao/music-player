@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/playback/play_mode.dart';
 import 'package:light_music/playback/playlist.dart';
+import 'package:light_music/state/cover_state.dart';
 import 'package:light_music/state/library_state.dart';
 import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
@@ -385,6 +386,8 @@ void main() {
         ChangeNotifierProvider<LibraryState>.value(value: harness.library),
         ChangeNotifierProvider<PlayerState>.value(value: harness.player),
         ChangeNotifierProvider<RecentState>.value(value: harness.recent),
+        // M2b T10：面板的封面 resolver 也要在位（弹层里的 Panel 会 watch）。
+        ChangeNotifierProvider<CoverState>.value(value: harness.cover),
         ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
       ],
     );

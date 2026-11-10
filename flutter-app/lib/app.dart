@@ -12,6 +12,8 @@ import 'package:provider/provider.dart';
 
 import 'core/app_prefs.dart';
 import 'core/shortcuts.dart';
+import 'cover/cover_disk_cache.dart';
+import 'cover/cover_source.dart';
 import 'library/duration_probe.dart';
 import 'library/import_service.dart';
 import 'library/library_repository.dart';
@@ -21,6 +23,7 @@ import 'playback/playlist.dart';
 import 'playback/transport_controller.dart';
 import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
+import 'state/cover_state.dart';
 import 'state/lightbox_controller.dart';
 import 'state/lyrics_page_controller.dart';
 import 'state/lyrics_state.dart';
@@ -28,6 +31,7 @@ import 'state/panel_controller.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
 import 'state/toast_state.dart';
+import 'lyrics/upstream.dart' show HttpJsonClient, HttpJsonClientImpl;
 import 'theme/app_theme.dart';
 import 'theme/app_tokens.dart';
 import 'ui/autoplay_gate.dart';
@@ -52,13 +56,29 @@ class AppBootstrap {
     required this.onLyricsViewChanged,
     LyricsPageController? lyricsPage,
     LightboxController? lightbox,
+    CoverState? cover,
+    VoidCallback? onCoverViewChanged,
   }) : // 全屏歌词页的开合开关（T18 建、T19 接页面本体）。
        // 可空入参 + 在这里兜底建：`buildBootstrap` 传它（Stage 与 T19 的页面 /
        // 快捷键要共用同一份），测试里直接 new `AppBootstrap` 的路径也不必改。
        lyricsPage = lyricsPage ?? LyricsPageController(),
        // 封面放大层的开合开关（M2b T9）：曲目区 / 歌词页右栏的封面热区
        // `open()`，灯箱本体与 Esc `close()`。层叠在歌词页之上。
-       lightbox = lightbox ?? LightboxController();
+       lightbox = lightbox ?? LightboxController(),
+       // 封面显示层（M2b T8/T6）：可空入参 + 兜底建，同 lyricsPage 的模式。
+       // 测试直接 new AppBootstrap 时给一个离线 CoverState（假网络替身由
+       // 测试自己装配；这里兜底只能给真实现的默认构造 —— 它的内核全懒建，
+       // 不发请求就不会碰网络）。onCoverViewChanged 为 null 时兜底 no-op，
+       // dispose 的 removeListener 相应跳过。
+       cover =
+           cover ??
+           CoverState(
+             json: _defaultCoverJson,
+             bytes: ImageBytesClientImpl(),
+             diskStore: CoverDiskStore(directory: ''),
+             artistImageDirectory: '',
+           ),
+       onCoverViewChanged = onCoverViewChanged ?? (() {});
 
   final AppPrefs prefs;
   final LibraryRepository repository;
@@ -121,6 +141,15 @@ class AppBootstrap {
   /// `open()`（T11），灯箱本体与 Esc `close()`，三方读同一个 flag。
   final LightboxController lightbox;
 
+  /// 封面显示层（M2b T6/T8）。resolver（coverForDisplay）、当前曲目在线
+  /// 匹配、写真表与预取调度都在这一层；界面（Stage / Panel / 灯箱）只读它。
+  final CoverState cover;
+
+  /// `buildBootstrap` 挂在 `player.transport.view` 上的封面联动回调引用
+  /// （切歌时对当前曲目 `matchFor`）。[dispose] 用它 removeListener，
+  /// 同 [onLyricsViewChanged] 的「同一个函数对象」要求。
+  final VoidCallback onCoverViewChanged;
+
   /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
   Playlist get playlist => library.playlist;
   TransportController get transport => player.transport;
@@ -135,12 +164,18 @@ class AppBootstrap {
   /// 它的界面」这种顺序问题。
   Future<void> dispose() async {
     player.transport.view.removeListener(onLyricsViewChanged);
+    player.transport.view.removeListener(onCoverViewChanged);
     await durationProbe?.close();
   }
 }
 
 /// 应用根：注册状态层给 provider，再挂主题、提示条与首页。
 ///
+
+/// [CoverState] 兜底构造用的 JSON 客户端：懒建内核的 [HttpJsonClientImpl]。
+/// 只在「直接 new AppBootstrap 的测试路径没传 cover」时用到 —— 不发请求
+/// 就一个 socket 都不开。
+final HttpJsonClient _defaultCoverJson = HttpJsonClientImpl();
 /// `.value` 不接管 dispose —— 这些状态在应用生命周期内常驻。
 /// 之所以是 `StatefulWidget`：组合根自己持有的原生资源（时长探测的独立
 /// `Player`，终审 A2）需要一个明确的释放点，而应用根的卸载就是它。
@@ -175,6 +210,8 @@ class _LightMusicAppState extends State<LightMusicApp> {
         // T15：歌词与双语状态。`.value` 由组合根持有，应用生命周期内常驻。
         ChangeNotifierProvider<LyricsState>.value(value: bootstrap.lyrics),
         ChangeNotifierProvider<BilingualState>.value(value: bootstrap.bilingual),
+        // 封面显示层（M2b T8）：Stage / Panel / 灯箱的 resolver 共读这一份。
+        ChangeNotifierProvider<CoverState>.value(value: bootstrap.cover),
         // 全屏歌词页的开合开关（T18）：播放卡的点击与 T19 的页面本体 / overlay
         // 槽 / 快捷键读同一份，登记在路由之上。
         ChangeNotifierProvider<LyricsPageController>.value(

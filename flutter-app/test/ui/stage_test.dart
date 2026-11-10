@@ -19,6 +19,7 @@ import 'package:light_music/state/player_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/ui/bilingual_toggle.dart';
+import 'package:light_music/ui/generated_cover_view.dart';
 import 'package:light_music/ui/stage.dart';
 import 'package:light_music/ui/swipe_to_switch.dart';
 import 'package:provider/provider.dart';
@@ -85,20 +86,27 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('没有真封面时显示占位碟而不是空白', (tester) async {
+  testWidgets('没有真封面时显示生成卡碟面（M2b T10 的 resolver 第 4 级）', (
+    tester,
+  ) async {
+    // parity 校正（M2b）：M1 时这里是音符占位碟；T10 起无封面但有曲目的
+    // 碟面画**生成卡**（离线、确定性，对译 React coverForDisplay 第 4 级
+    // ——「与其显示一张跟这首歌毫无关系的通用音符图，不如显示一张属于
+    // 这位歌手的图」，generated-cover.js 文件头）。
     await pumpAt(tester, 800, 700, fullStage);
 
-    expect(find.byKey(const Key('cover-placeholder')), findsOneWidget);
+    expect(find.byType(GeneratedCoverView), findsOneWidget);
+    expect(find.byKey(const Key('cover-placeholder')), findsNothing);
   });
 
-  testWidgets('封面文件读不到时同样退回占位碟', (tester) async {
+  testWidgets('封面文件读不到时同样退生成卡（路径失效不抛）', (tester) async {
     await pumpAt(
       tester,
       800,
       700,
       const StagePreview(
         title: 'A',
-        artist: '',
+        artist: '陈奕迅',
         album: '',
         elapsed: '--:--',
         total: '--:--',
@@ -106,6 +114,23 @@ void main() {
       ),
     );
 
+    expect(find.byType(GeneratedCoverView), findsOneWidget);
+  });
+
+  testWidgets('空态（无曲可显示）仍是音符占位碟', (tester) async {
+    // 空态没有歌手信息，生成卡无从派生 —— M1 的占位碟语义保留。
+    await pumpAt(
+      tester,
+      800,
+      700,
+      const StagePreview(
+        title: '未选择曲目',
+        artist: '从播放列表选一首开始',
+        album: '',
+        elapsed: '--:--',
+        total: '--:--',
+      ),
+    );
     expect(find.byKey(const Key('cover-placeholder')), findsOneWidget);
   });
 

@@ -16,11 +16,27 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../cover/generated_cover.dart';
 import '../theme/app_tokens.dart';
+import 'generated_cover_view.dart';
 
-/// 行内缩略图：10 圆角、1px `progressTrack` 描边；没有图就退音符图标。
+/// 行内缩略图：10 圆角、1px `progressTrack` 描边。
+///
+/// 封面源三级（M2b T10）：[path] 文件在 → `Image.file`；不在（或空）→
+/// [fallbackArtist] 非空时画**生成卡**（离线、确定性，同歌手恒同图，
+/// 对译 React `coverForDisplay` 的第 4 级）；再退音符图标（[fallbackArtist]
+/// 为空 = 调用方没给生成卡信息，M1 原行为，测试与旧调用点不受影响）。
+///
+/// 文件可能被清（缓存目录不是数据目录）：先同步判存在，`errorBuilder`
+/// 再兜一道解码失败 —— 路径坏了绝不抛。
 class CoverThumb extends StatelessWidget {
-  const CoverThumb({required this.path, required this.size, super.key});
+  const CoverThumb({
+    required this.path,
+    required this.size,
+    this.fallbackArtist = '',
+    this.fallbackTitle = '',
+    super.key,
+  });
 
   /// 封面文件绝对路径；空串表示没有封面。
   final String path;
@@ -28,10 +44,15 @@ class CoverThumb extends StatelessWidget {
   /// 边长（列表行 44、最近行 40）。
   final double size;
 
+  /// 生成卡派生字段（resolver 第 4 级）；空串 = 不画生成卡，退音符。
+  final String fallbackArtist;
+  final String fallbackTitle;
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     final hasFile = path.isNotEmpty && File(path).existsSync();
+    final useGenerated = !hasFile && fallbackArtist.isNotEmpty;
     final fallback = Icon(
       Icons.music_note,
       size: size * 0.4,
@@ -54,7 +75,12 @@ class CoverThumb extends StatelessWidget {
               gaplessPlayback: true,
               errorBuilder: (imageContext, error, stack) => fallback,
             )
-          : fallback,
+          : useGenerated
+              ? GeneratedCoverView(
+                  spec: generatedCoverSpec(fallbackArtist, fallbackTitle),
+                  size: size,
+                )
+              : fallback,
     );
   }
 }

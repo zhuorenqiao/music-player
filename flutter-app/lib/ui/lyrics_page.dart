@@ -43,6 +43,7 @@ import 'package:provider/provider.dart';
 import '../core/breakpoints.dart';
 import '../playback/track.dart';
 import '../state/bilingual_state.dart';
+import '../state/cover_state.dart';
 import '../state/lyrics_page_controller.dart';
 import '../state/lyrics_state.dart';
 import '../theme/app_tokens.dart';
@@ -262,6 +263,18 @@ class _LyricsPageState extends State<LyricsPage> {
     required BilingualState bilingual,
   }) {
     final artWidth = _coverWidth(MediaQuery.sizeOf(context).width);
+    final track = lyrics.track;
+    // M2b T10：封面源走 resolver（四级兜底；CoverState 可空 watch，同
+    // stage.dart 的容错模式 —— 测试环境没注册时退回 M1 的内嵌路径）。
+    final cover = context.watch<CoverState?>();
+    final displayPath = cover == null || track == null
+        ? (track?.cover ?? '')
+        : cover.coverForDisplay(
+            cover: track.cover,
+            artist: track.artist,
+            title: track.title,
+            trackId: track.id,
+          );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisAlignment: MainAxisAlignment.center,
@@ -275,7 +288,11 @@ class _LyricsPageState extends State<LyricsPage> {
         const SizedBox(width: _kBodyGap),
         SizedBox(
           width: artWidth,
-          child: _ArtColumn(coverPath: lyrics.track?.cover ?? ''),
+          child: _ArtColumn(
+            coverPath: displayPath,
+            fallbackArtist: track?.artist ?? '',
+            fallbackTitle: track?.title ?? '',
+          ),
         ),
       ],
     );
@@ -440,15 +457,23 @@ class _BackButton extends StatelessWidget {
   }
 }
 
-/// 右栏：封面（静态、不可点）+ 来源脚注。
+/// 右栏：封面（静态；灯箱入口由 T11 接 —— App.tsx:1121-1137 的 `art-btn`）+
+/// 来源脚注。
 ///
-/// 原版封面外壳是个 `<button>`（点了放大），M2a **点它留空** —— 灯箱是 M2b
-/// （App.tsx:1121-1137 的 `art-btn` 整段不在本任务范围）。这里用普通容器，
-/// 连热区都不给，免得造成「能点但没反应」的错觉。
+/// M2a 时「点它留空」；M2b T10 先把封面**源**换成 resolver（四级兜底），
+/// 可点性留给 T11 的灯箱接线。
 class _ArtColumn extends StatelessWidget {
-  const _ArtColumn({required this.coverPath});
+  const _ArtColumn({
+    required this.coverPath,
+    this.fallbackArtist = '',
+    this.fallbackTitle = '',
+  });
 
   final String coverPath;
+
+  /// 生成卡派生字段（M2b T10）：无封面文件时碟面画生成卡。
+  final String fallbackArtist;
+  final String fallbackTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -468,6 +493,8 @@ class _ArtColumn extends StatelessWidget {
               coverPath: coverPath,
               size: size,
               spinning: false,
+              fallbackArtist: fallbackArtist,
+              fallbackTitle: fallbackTitle,
             ),
           );
         },

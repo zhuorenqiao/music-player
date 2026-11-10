@@ -14,13 +14,17 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../cover/generated_cover.dart';
 import '../theme/app_tokens.dart';
+import 'generated_cover_view.dart';
 
 class CoverDisc extends StatelessWidget {
   const CoverDisc({
     required this.coverPath,
     required this.size,
     required this.spinning,
+    this.fallbackArtist = '',
+    this.fallbackTitle = '',
     super.key,
   });
 
@@ -33,12 +37,19 @@ class CoverDisc extends StatelessWidget {
   /// 是否在转。M1 恒 false（M3 接旋转动画）。
   final bool spinning;
 
+  /// 生成卡派生字段（M2b T10）：无封面文件时碟面画生成卡（对译 React
+  /// `coverForDisplay` 的第 4 级 —— 同歌手恒同图，离线确定性）。空串 =
+  /// 不画生成卡，退 `_DiscPlaceholder`（空态无曲可显示）。
+  final String fallbackArtist;
+  final String fallbackTitle;
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     // 先同步看一眼文件在不在：封面在缓存目录里，可能被清掉。走 `Image.errorBuilder`
     // 也能兜住，但要多等一帧 IO，首帧会闪一下加载态；同步判定让占位碟立刻到位。
     final hasFile = coverPath.isNotEmpty && File(coverPath).existsSync();
+    final useGenerated = !hasFile && fallbackArtist.isNotEmpty;
     return SizedBox(
       width: size,
       height: size,
@@ -70,7 +81,15 @@ class CoverDisc extends StatelessWidget {
                       errorBuilder: (imageContext, error, stack) =>
                           const _DiscPlaceholder(),
                     )
-                  : const _DiscPlaceholder(),
+                  : useGenerated
+                      ? GeneratedCoverView(
+                          spec: generatedCoverSpec(
+                            fallbackArtist,
+                            fallbackTitle,
+                          ),
+                          size: size,
+                        )
+                      : const _DiscPlaceholder(),
             ),
           ),
         ],

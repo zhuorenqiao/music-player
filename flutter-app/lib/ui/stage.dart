@@ -32,6 +32,7 @@ import 'package:provider/provider.dart';
 import '../core/breakpoints.dart';
 import '../core/format_time.dart';
 import '../state/bilingual_state.dart';
+import '../state/cover_state.dart';
 import '../state/lyrics_page_controller.dart';
 import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
@@ -85,6 +86,7 @@ class Stage extends StatelessWidget {
     final lyricsState = context.watch<LyricsState?>();
     final bilingual = context.watch<BilingualState?>();
     final page = context.read<LyricsPageController?>();
+    final cover = context.watch<CoverState?>();
     final track = player.view.value.current;
     // 总时长的两级取值（终审 minor 3，与 `TransportBar._totalOf` 同一思路）：
     // 标签里有时长就以标签为准（那是权威元数据，内核报的往往晚到），
@@ -106,7 +108,17 @@ class Stage extends StatelessWidget {
       // 标签有时长时不订阅内核那一路：免得内核报的旧值盖掉权威元数据。
       totalFromKernel: labeled == null ? player.duration : null,
       position: player.position,
-      coverPath: track?.cover ?? '',
+      // M2b T10：封面显示源走 resolver（四级兜底 —— 内嵌 → 在线匹配 →
+      // 写真 → 生成卡）。CoverState 是可空 watch（同上三个 provider 的
+      // 容错模式）：T10 之前的测试环境没有注册它时退回 M1 的内嵌路径。
+      coverPath: cover == null || track == null
+          ? (track?.cover ?? '')
+          : cover.coverForDisplay(
+              cover: track.cover,
+              artist: track.artist,
+              title: track.title,
+              trackId: track.id,
+            ),
       broken: track?.broken ?? false,
       // 点曲目区任意留白进歌词页（原版 `App.tsx:410-421` 的 onStageClick）。
       // 没有控制器时给 null，`StagePreview` 退回 M1 的空实现。
@@ -296,6 +308,14 @@ class StagePreview extends StatelessWidget {
           coverPath: coverPath,
           size: coverSize,
           spinning: false, // M1 黑胶静止，旋转在 M3
+          // M2b T10：无封面文件时碟面画生成卡（resolver 第 4 级）。
+          // 空态（曲名/歌手都是占位文案）没有派生源，保留音符占位碟 ——
+          // 生成卡是「属于这位歌手的图」，空态没有歌手。
+          fallbackArtist:
+              artist == kUnknownStageArtist || artist == kIdleStageArtist
+                  ? ''
+                  : artist,
+          fallbackTitle: title == kIdleStageTitle ? '' : title,
         ),
       ),
     );

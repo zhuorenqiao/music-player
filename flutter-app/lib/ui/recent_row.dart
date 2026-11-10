@@ -31,6 +31,7 @@ class RecentRow extends StatelessWidget {
     required this.active,
     required this.onTap,
     this.coverPath = '',
+    this.coverTitle = '',
     super.key,
   });
 
@@ -56,6 +57,9 @@ class RecentRow extends StatelessWidget {
 
   /// 封面文件绝对路径；空串表示没有封面。
   final String coverPath;
+
+  /// 生成卡曲名（M2b T10）：无封面时缩略图画生成卡（歌手字段复用 [artist]）。
+  final String coverTitle;
 
   @override
   Widget build(BuildContext context) {
@@ -95,7 +99,12 @@ class RecentRow extends StatelessWidget {
             ),
             child: Row(
               children: [
-                CoverThumb(path: coverPath, size: 40),
+                CoverThumb(
+                  path: coverPath,
+                  size: 40,
+                  fallbackArtist: artist,
+                  fallbackTitle: coverTitle,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(

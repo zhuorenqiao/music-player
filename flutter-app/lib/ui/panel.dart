@@ -34,6 +34,7 @@ import '../core/breakpoints.dart';
 import '../core/format_time.dart';
 import '../library/recent_store.dart' show formatRelativeTime, kRecentLimit;
 import '../playback/track.dart';
+import '../state/cover_state.dart';
 import '../state/library_state.dart';
 import '../state/panel_controller.dart';
 import '../state/player_state.dart';
@@ -87,11 +88,16 @@ class Panel extends StatelessWidget {
     final body = TickerMode(
       enabled: tickerEnabled,
       child: switch (tab) {
-        PanelTab.playlist => _PlaylistBody(library: library, player: player),
+        PanelTab.playlist => _PlaylistBody(
+          library: library,
+          player: player,
+          cover: context.watch<CoverState>(),
+        ),
         PanelTab.recent => _RecentBody(
           recent: recent,
           library: library,
           player: player,
+          cover: context.watch<CoverState>(),
         ),
       },
     );
@@ -381,10 +387,15 @@ class _StatsRow extends StatelessWidget {
 
 /// 播放列表 tab。
 class _PlaylistBody extends StatelessWidget {
-  const _PlaylistBody({required this.library, required this.player});
+  const _PlaylistBody({
+    required this.library,
+    required this.player,
+    required this.cover,
+  });
 
   final LibraryState library;
   final PlayerState player;
+  final CoverState cover;
 
   @override
   Widget build(BuildContext context) {
@@ -416,7 +427,17 @@ class _PlaylistBody extends StatelessWidget {
             title: track.title,
             artistLine: _artistLine(track),
             duration: formatTime(track.duration),
-            coverPath: track.cover,
+            // M2b T10：在线匹配的封面进 resolver（matchedCovers 优先于
+            // 内嵌 cover 是错的 —— 内嵌优先，见 CoverState 的一级判据；
+            // 传内嵌路径进去由 resolver 统一裁）。
+            coverPath: cover.coverForDisplay(
+              cover: track.cover,
+              artist: track.artist,
+              title: track.title,
+              trackId: track.id,
+            ),
+            coverArtist: track.artist,
+            coverTitle: track.title,
             active: library.currentId == track.id,
             playing: player.playing,
             broken: track.broken,
@@ -446,11 +467,13 @@ class _RecentBody extends StatelessWidget {
     required this.recent,
     required this.library,
     required this.player,
+    required this.cover,
   });
 
   final RecentState recent;
   final LibraryState library;
   final PlayerState player;
+  final CoverState cover;
 
   @override
   Widget build(BuildContext context) {
@@ -519,7 +542,15 @@ class _RecentBody extends StatelessWidget {
                       artist: entry.artist,
                       relativeTime: formatRelativeTime(entry.at),
                       duration: formatTime(entry.duration),
-                      coverPath: entry.cover,
+                      // M2b T10：最近条目同走 resolver（最近播放与封面
+                      // 显示层的联动 —— spec §17「最近播放打磨」）。
+                      coverPath: cover.coverForDisplay(
+                        cover: entry.cover,
+                        artist: entry.artist,
+                        title: entry.title,
+                        trackId: entry.id,
+                      ),
+                      coverTitle: entry.title,
                       inPlaylist: entry.inPlaylist,
                       active: library.currentId == entry.id,
                       // 已失效的记录不静默失败：给一条提示，绝不假装播放
