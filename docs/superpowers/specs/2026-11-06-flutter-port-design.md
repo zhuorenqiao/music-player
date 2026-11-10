@@ -470,3 +470,53 @@ provider 注册、L/Esc 回调）、`lib/theme/app_tokens.dart`（`tint1`）、
 `app-debug.apk` 216,730,493 bytes（均为 2026-11-09 现场采集）。三条真实上游探测全 200
 （LRCLIB get 19.1s / 网易 search 0.76s / 网易 lyric 0.36s）。**Windows 真机在线歌词 +
 双语全链路与 Android 真机歌词网络未验**，如实记在验收文档 C 节，不冒充通过。
+
+---
+
+## 21. M2b 落地记录（2026-11-10）
+
+> 计划 `docs/superpowers/plans/2026-11-10-flutter-m2b-cover-lightbox.md` 的 12 个任务
+> 全部落地；验收记录见 `flutter-app/docs/M2B-ACCEPTANCE.md`（四条闸口尾行、三条真实
+> 上游探测、未验项）。本段只记「落了什么、与 React 差在哪、为什么」。
+
+**新增**（`flutter-app/` 下）：`lib/cover/` 下
+`generated_cover.dart`（FNV-1a + Painter）、`itunes_source.dart`（打分 + 两区）、
+`cover_disk_cache.dart`（索引层 + 落盘器）、`cover_source.dart`（取图接缝 + matchCover）、
+`artist_image.dart`（维基写真 + 写真索引）；`lib/state/{cover_state,lightbox_controller}.dart`；
+`lib/ui/{cover_image,generated_cover_view,cover_lightbox}.dart`；`lib/lyrics/lyrics_prefetch.dart`
+（M2a 漏项补齐）；`test/` 下 10 个对应测试文件。
+
+**修改**：`lib/main.dart` / `lib/app.dart`（装配 CoverState、双预取挂载、provider 注册、
+closeOverlay 灯箱分支）、`lib/theme/app_tokens.dart`（`lightboxScrim`）、
+`lib/ui/{vinyl_deck,cover_thumb,track_row,recent_row,panel,stage,lyrics_page,home_page}.dart`
+（六处显示点走 resolver、生成卡碟面、灯箱双入口与顶层挂载）。
+
+**六处有意差异**（相对 React 工作区现状）：
+
+1. **JSONP/代理双通道合并为一级直连**：iTunes Search 的 CORS/JSONP 在原生 HTTP 下
+   不存在；React 服务端的两区查询（CN → 默认区）移进客户端（spec §18 的裁定）。
+2. **在线封面落盘为文件**（`$dataDirectory/covers-net/sha1.jpg`，复用
+   `CoverImageWriter`，PNG 字节 `.jpg` 名的格式契约不变）：显示层全是 `Image.file`，
+   不引网络图加载。
+3. **匹配结果不写 `track.cover`**：进 `CoverState.matchedCovers` 内存表（持久化在
+   索引层）。语义顺序与 React 把结果写 track.cover 等价（内嵌优先、其次在线匹配），
+   但保住 M1 的「cover == 内嵌封面路径」不变量 —— `hasRealCover`、导入回填判重与
+   自愈谓词都压在它上面。
+4. **生成卡 Painter 直绘**而非 SVG data URL：不引 flutter_svg（pubspec 冻结）；派生
+   量（FNV-1a 按 UTF-16 码元、hue/hue2/rotation/柱高公式）与 React 逐位一致，黄金
+   数值用 node 现算钉进用例。
+5. **维基写真 source 文案去掉「，直连」后缀**：只有一条通道，无需区分。
+6. **`DEFAULT_COVER` 不移植**：Flutter 的占位碟即空路径语义（resolver 返回 '' →
+   CoverDisc/CoverThumb 落生成卡或占位碟）。
+
+**M2a 漏项补齐**：歌词后台预取（`lib/lyrics/lyrics_prefetch.dart`，350ms 串行、
+跳过当前曲目/已有歌词/时长未探明的本地曲目、manual 不覆盖）——React 的
+`lyrics-prefetch.ts` 在 M2a 计划里漏排，本段一并落地，落库由装配层统一 persist 一次。
+
+**验收**（2026-11-10 现场采集）：`flutter analyze` → `No issues found!`；
+`flutter test` → `+927: All tests passed!`；`build windows --debug` →
+`light_music.exe` 1,031,680 bytes（flutter_assets 17:57 现场刷新）；`build apk --debug`
+→ `app-debug.apk` 216,824,816 bytes。三条真实上游探测：iTunes CN 200/0.76s
+（resultCount=0，中国区无此曲）、iTunes US 200/0.49s（8 条含 artworkUrl100）、
+Wikipedia zh 连接失败/21.1s（本机 DNS 污染，按预期落生成卡）。
+**Android 真机捏合手势与 Windows 真机完整封面链路未跑**，如实记在验收文档 D 节。
