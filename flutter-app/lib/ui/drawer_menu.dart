@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 
 import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
+import 'theme_drawer.dart' show showThemeDrawer;
 
 /// 抽屉里的一个入口动作。
 typedef MenuAction = Future<void> Function();
@@ -85,6 +86,13 @@ class DrawerMenu extends StatelessWidget {
                       danger: true,
                       onTap: () => _confirmClear(context),
                     ),
+                    _MenuRow(
+                      icon: Icons.colorize_outlined,
+                      label: '换肤',
+                      // 换肤是二级抽屉：先收一级再弹二级（与 LibraryMenu 的
+                      // 二级入口同序）—— 两层叠着会让 Esc/遮罩语义变糊。
+                      onTap: () => _closeAnd(context, () => _openTheme(context)),
+                    ),
                     const SizedBox(height: 6),
                   ],
                 ),
@@ -100,6 +108,14 @@ class DrawerMenu extends StatelessWidget {
   Future<void> _closeAnd(BuildContext context, MenuAction action) {
     _close(context);
     return action();
+  }
+
+  /// 打开换肤二级抽屉（M3 T6）。抽屉收完才弹二级 —— 二级抽屉的遮罩/
+  /// Esc 语义与一级完全同构，叠着就会互相吞。
+  Future<void> _openTheme(BuildContext context) async {
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    if (!context.mounted) return;
+    showThemeDrawer(context);
   }
 
   void _close(BuildContext context) {

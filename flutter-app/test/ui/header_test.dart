@@ -96,7 +96,9 @@ void main() {
     expect(find.text('添加音乐'), findsOneWidget);
     expect(find.text('添加整个文件夹'), findsOneWidget);
     expect(find.text('清空播放列表'), findsOneWidget);
-    expect(find.text('换肤'), findsNothing); // M3 才出现
+    // parity 校正（M3 T6）：换肤二级抽屉落地，一级菜单现在有第四个入口
+    //（LibraryMenu.tsx:104 的「换肤」对译）。
+    expect(find.text('换肤'), findsOneWidget);
     expect(find.textContaining('把音频文件'), findsNothing); // 一级行不带说明
   });
 
