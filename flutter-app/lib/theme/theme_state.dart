@@ -102,7 +102,7 @@ class ThemeState extends ChangeNotifier {
       await _readNumber(StorageKeys.cardTransparency, fallback: 0),
     );
     // frost 老用户迁移（glass.tsx:37-44）：无 cardFrost 键时按透明度回填。
-    final hasFrost = await _prefs.containsKey(StorageKeys.cardFrost);
+    final hasFrost = _prefs.containsKey(StorageKeys.cardFrost);
     _frost = hasFrost
         ? _clamp(await _readNumber(StorageKeys.cardFrost, fallback: 0))
         : _transparency;
