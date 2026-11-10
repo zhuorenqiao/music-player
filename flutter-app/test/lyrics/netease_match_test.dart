@@ -575,6 +575,22 @@ void main() {
       );
     });
 
+    test('拆段的 trim 是 JS 语义：不剥 U+0085（NEL）', () {
+      // JS `head.trim()` 的空白集合 == \s，不含 U+0085；Dart 内建 trim() 认 NEL，
+      // 会把 'ab\u0085' 剥成 'ab' —— 与 JS 不同（node 逐字探针实测 JS 保留 NEL）。
+      // 用与 \s 同集合的正则 trim 后，Dart 输出与 JS 的 codeUnits 逐位一致。
+      final pairs = translatePairs('ab\u0085 - \u0085cd', '');
+      // 变异验证：把实现换回内建 .trim()，这条立即红（剥掉 133）。
+      expect(
+        pairs[1].name.codeUnits,
+        [97, 98, 133],
+        reason: "JS trim 不剥 U+0085：head 应保留 NEL",
+      );
+      expect(pairs[1].artist.codeUnits, [133, 99, 100]);
+      expect(pairs[2].name.codeUnits, [133, 99, 100]);
+      expect(pairs[2].artist.codeUnits, [97, 98, 133]);
+    });
+
     test('按 name|artist 小写去重，保留首次出现的顺序', () {
       // head 与 tail 相同时，第 3 条与第 2 条完全重复 → 去掉
       expect(translatePairs('abcd - abcd', '').length, 2);

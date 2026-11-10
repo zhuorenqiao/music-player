@@ -2015,7 +2015,8 @@ git commit -m "feat(lyrics): 歌词双层缓存，索引短键 + 磁盘长键与
       Duration getTimeout = const Duration(seconds: 12),
       Duration searchTimeout = const Duration(seconds: 26),
       Duration totalBudget = const Duration(seconds: 60),
-      Duration retryAfterCap = const Duration(seconds: 6),
+      // retryAfterCap 已删（2026-11-10，T20 裁定）：6000ms 夹紧在 T6 的客户端
+      // 策略里实施，本参数零消费者，承诺了不存在的可配置性。
       Future<void> Function(Duration)? sleep,
     });
 
@@ -3468,7 +3469,12 @@ void main() {
   });
 
   test('占位歌手（含大小写差异）不参与关键词', () async {
-    final client = FakeNetEase(search: {'Yesterday': [songJson()]});
+    // parity 校正（2026-11-10）：原稿只给 search 不给 lyric，「status 是 ok」
+    // 在正确实现上必红（空 tlyric → not-found）。补上译文响应，其余一字不动。
+    final client = FakeNetEase(
+      search: {'Yesterday': [songJson()]},
+      lyric: {1: {'tlyric': {'lyric': '[00:01]昨天'}}},
+    );
     final result = await sourceWith(client).fetch(title: 'Yesterday', artist: 'Unknown', duration: 125);
     expect(result.status, 'ok');
   });
@@ -3504,7 +3510,13 @@ void main() {
 
   test('某次搜索抛错但后一个候选命中 → 仍成功', () async {
     var call = 0;
-    final client = FakeNetEase(search: {'Yesterday': [songJson()]});
+    // parity 校正（2026-11-10）：原稿只给 search 不给 lyric，命中歌后取 tlyric
+    // 是空表 → not-found + no-translation，「status 是 ok」在正确实现上必红。
+    // 补上译文响应，其余一字不动。
+    final client = FakeNetEase(
+      search: {'Yesterday': [songJson()]},
+      lyric: {1: {'tlyric': {'lyric': '[00:01]昨天'}}},
+    );
     final flaky = _FlakyClient((url) {
       call += 1;
       if (call == 1) return const JsonStatus(500);
@@ -3577,9 +3589,13 @@ void main() {
 
 class _FlakyClient implements HttpJsonClient {
   _FlakyClient(this.handler);
-  final Future<JsonOutcome> Function(Uri url) handler;
+  // parity 校正（2026-11-10）：原写 `Future<JsonOutcome> Function(Uri url)`，
+  // 但三处用例分别返回同步的 `JsonStatus(500)` / `JsonTimeout()` / 一个 Future，
+  // 同步那两处与 `Future<JsonOutcome>` 不兼容，编译期就挂。改 FutureOr：
+  // 三种写法都能原样保留，`Future.sync` 顺带把同步返回归一成 Future。
+  final FutureOr<JsonOutcome> Function(Uri url) handler;
   @override
-  Future<JsonOutcome> getJson(Uri url, {required Duration timeout, required Map<String, String> headers}) => handler(url);
+  Future<JsonOutcome> getJson(Uri url, {required Duration timeout, required Map<String, String> headers}) => Future.sync(() => handler(url));
 }
 ```
 

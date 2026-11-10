@@ -43,9 +43,6 @@ const Duration _searchTimeout = Duration(seconds: 26);
 /// 整次匹配的总预算：到点取消并按 timeout 分类。
 const Duration _totalBudget = Duration(seconds: 60);
 
-/// 单次退避的上限（spec §11 的 6000ms，实际夹紧发生在 T6 的客户端策略里）。
-const Duration _retryAfterCap = Duration(seconds: 6);
-
 const int _getAttempts = 2;
 const int _searchAttempts = 1;
 
@@ -104,7 +101,6 @@ class LyricsSource implements LyricsMatcher {
     this.getTimeout = _getTimeout,
     this.searchTimeout = _searchTimeout,
     this.totalBudget = _totalBudget,
-    this.retryAfterCap = _retryAfterCap,
     this.sleep,
   }) : gate = gate ?? RateLimitGate();
 
@@ -122,10 +118,6 @@ class LyricsSource implements LyricsMatcher {
 
   /// 整次匹配的总预算：到点按 timeout 分类、放弃写缓存。
   final Duration totalBudget;
-
-  /// 单次退避上限的对外可见值。spec §11 的 6000ms 夹紧由 T6 的客户端策略实施，
-  /// 本层不再二次夹紧；字段保留是为了让装配签名与计划一致。
-  final Duration retryAfterCap;
 
   /// 退避用的睡眠；测试注入空实现，免得靠真时间。
   final Future<void> Function(Duration)? sleep;

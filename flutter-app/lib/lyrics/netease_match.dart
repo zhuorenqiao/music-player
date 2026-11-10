@@ -133,6 +133,10 @@ final RegExp _tailSpace = RegExp(r'\s+$');
 /// JS 语义的「首部空白」。
 final RegExp _headSpace = RegExp(r'^\s+');
 
+/// JS 语义的 `String.prototype.trim`：两端各剥一遍 `\s`（不含 U+0085）。
+String _jsTrim(String value) =>
+    value.replaceFirst(_headSpace, '').replaceFirst(_tailSpace, '');
+
 /// 歌手名，只留非空的（music-api.ts:423-425 的 `artistNames`）。
 List<String> _artistNames(NetEaseSong song) => [
   for (final name in song.artists)
@@ -240,8 +244,12 @@ List<TranslateCandidate> translatePairs(String trackName, String artistName) {
   }
   final split = _titleSplit.firstMatch(trackName);
   if (split != null) {
-    final head = split.group(1)!.trim();
-    final tail = split.group(2)!.trim();
+    // JS 的 `head.trim()` / `tail.trim()` 用的是 JS 空白集合（== `\s`），
+    // **不含** Dart 独有的 U+0085（NEL）——见文件头与 coreTitle 的同一条裁定。
+    // 内建 `.trim()` 在 NEL 边界上与 JS 不同（实测 'ab\u0085' 会被 Dart 剥成
+    // 'ab' 而 JS 保留），所以这里用与 `\s` 同集合的正则 trim。
+    final head = _jsTrim(split.group(1)!);
+    final tail = _jsTrim(split.group(2)!);
     pairs.add(TranslateCandidate(name: head, artist: tail, strict: true));
     pairs.add(TranslateCandidate(name: tail, artist: head, strict: true));
   }
