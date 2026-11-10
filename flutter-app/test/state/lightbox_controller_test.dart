@@ -180,6 +180,12 @@ Future<AppBootstrapHarness> _pumpApp(WidgetTester tester) async {
   // `AppBootstrap.dispose` 不在这里 await：时长探测内核的关闭排在真异步区，
   // 界面层卸载（pumpWidget 的树被拆）时已经由 `State.dispose` unawaited 发起。
 
+  // M3 T11 起 transport 多一行 transport__wave（+33px）：parity 校正把视口
+  // 加高（与 app_bootstrap_test 同因）。
+  tester.view.physicalSize = const Size(800, 660);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+
   await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
   // 快捷键宿主（AppShortcuts 里的 autofocus Focus）首帧才拿到焦点，
   // 不补这一帧的话 Esc 会落空。

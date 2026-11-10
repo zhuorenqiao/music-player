@@ -117,6 +117,11 @@ void main() {
     expect(bootstrap!.lyrics.track?.id, 'a');
     expect(bootstrap.bilingual.translatable, isTrue);
 
+    // M3 T11 起 transport 多一行 transport__wave（+33px）：parity 校正把视口
+    // 加高（与 app_bootstrap_test 同因）。
+    tester.view.physicalSize = const Size(800, 660);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
     await tester.pump();
     final context = tester.element(find.byType(Scaffold).first);
@@ -165,7 +170,18 @@ void main() {
   test('双语开关持久化到 StorageKeys.bilingual', () async {
     final prefs = AppPrefs.inMemory();
     final dir = await _tempDir();
-    addTearDown(() => dir.delete(recursive: true));
+    // M3 起 buildBootstrap 建 CoverState/ThemeState：teardown 容忍句柄迟关
+    //（errno 32），与下方 T8 裁定的那条 teardown 同款。
+    addTearDown(() async {
+      try {
+        await dir.delete(recursive: true);
+      } on FileSystemException {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        try {
+          await dir.delete(recursive: true);
+        } catch (_) {}
+      }
+    });
     final bootstrap = await buildBootstrap(
       prefs: prefs,
       dataDirectory: dir.path,

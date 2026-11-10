@@ -523,6 +523,11 @@ void main() {
   });
 
   testWidgets('应用根把四个状态注册给 provider', (tester) async {
+    // M3 T11 起 transport 多一行 transport__wave（+33px）：默认 600 高的
+    // 视口会溢出 21px，parity 校正把视口加高。
+    tester.view.physicalSize = const Size(800, 660);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     // 组合根要读真实文件；testWidgets 的假时钟里必须借 runAsync 跑真异步
     final bootstrap = (await tester.runAsync(
       () => buildBootstrap(
@@ -705,6 +710,11 @@ void main() {
   });
 
   testWidgets('应用根卸载时释放探测内核（dispose 链接到界面层）', (tester) async {
+    // M3 T11 起 transport 多一行：parity 校正把视口加高（与 provider 注册
+    // 那条用例同因）。
+    tester.view.physicalSize = const Size(800, 660);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     var closes = 0;
     final bootstrap = (await tester.runAsync(
       () => buildBootstrap(

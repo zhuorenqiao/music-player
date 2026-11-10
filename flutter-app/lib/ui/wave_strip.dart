@@ -69,11 +69,19 @@ class _WaveStripState extends State<WaveStrip>
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick);
-    // 播放且未开启 reduced-motion 才推进（WaveStrip.tsx:158-163）。
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // MediaQuery 依赖只能在 didChangeDependencies 取（initState 里
+    // dependOnInherited 会抛）。播放且未开启 reduced-motion 才推进
+    //（WaveStrip.tsx:158-163）。
     final reduced = MediaQuery.disableAnimationsOf(context);
     if (widget.playing && !reduced) {
-      _ticker.muted = false;
       _ticker.start();
+    } else if (_ticker.isActive) {
+      _ticker.stop();
     }
   }
 
