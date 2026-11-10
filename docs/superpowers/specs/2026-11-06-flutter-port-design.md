@@ -520,3 +520,45 @@ closeOverlay 灯箱分支）、`lib/theme/app_tokens.dart`（`lightboxScrim`）�
 （resultCount=0，中国区无此曲）、iTunes US 200/0.49s（8 条含 artworkUrl100）、
 Wikipedia zh 连接失败/21.1s（本机 DNS 污染，按预期落生成卡）。
 **Android 真机捏合手势与 Windows 真机完整封面链路未跑**，如实记在验收文档 D 节。
+
+## 22. M3 落地记录（2026-11-10）
+
+> 计划 `docs/superpowers/plans/2026-11-10-flutter-m3-visual-rhythm.md` 的 15 个任务
+> 落地；验收记录见 `flutter-app/docs/M3-ACCEPTANCE.md`（闸口尾行、对比度实测、
+> 真机解码探针、未验项 D 节）。
+
+**新增**（`flutter-app/` 下）：`lib/theme/{theme_state,color_utils}.dart`（七维外观
+状态机 + highlightOnLight）；`lib/wave/` 下 `spectrum_pipeline.dart`（离线解码→Hann→
+FFT→64 段折叠→.bin，串行 isolate 队列 + 插队 + 指纹失效）、`wave_signal.dart`
+（三态采样器 + fallbackBands/fallbackWave）、`wave_styles.dart`（17 painter + 三条
+hue ramp + buildWavePalette）、`wave_thumb.dart`；`lib/ui/` 下 `wave_strip.dart`、
+`wave_thumb`消费、`lyric_color_button.dart`、`glass_control.dart`、`glass_frost.dart`、
+`theme_drawer.dart`、`auto_hide_scrollbar.dart`、`tonearm.dart`；以及 10+ 测试文件
+与 `integration_test/decode_probe_it.dart`。
+
+**修改**：`lib/theme/app_tokens.dart`（35→61 字段 + 5 实例 + resolve）、
+`lib/main.dart`/`lib/app.dart`（ThemeState 装配 + Consumer 切表）、
+`lib/ui/{stage,vinyl_deck,transport,panel,drawer_menu}.dart`（glassLevel 缩放、
+磨砂层、黑胶旋转/唱臂/光晕、transport__wave 行、auto-hide、换肤入口）、
+`lib/ui/lyrics_view.dart`（当前行色走 lyricColor）。
+
+**pubspec 解冻**：新增 `audio_decoder ^0.8.1` + `fft ^0.5.1`（§15 设计表既定）+
+dev `integration_test`。**首日实测（§18 风险关闭）**：Windows 真宿主
+`convertToWav(44100/mono/16bit)` 通过（integration_test 现场采集）。
+
+**关键裁定/偏差**（详见计划 Self-Review 与验收文档）：
+1. 缓存头 20B（七字段之和，spec「16 字节」为笔误，按字段清单为准）。
+2. PCM 归一化 [-1,1] 后再 FFT（int16 直喂会 +90dB 全段饱和——首轮实测发现）。
+3. `ui.Gradient.linear` 无 colorStops 时严格要求 2 色——多段渐变必须带 stops。
+4. token 表 6 组实例逐字对表 app.css；深色蓝 accentLine=rgba(141,180,255,.34)。
+5. 歌词高亮色 6 个消费点接入 lyricColor（浅色过 highlightOnLight）。
+6. T10 的 WavePalette/buildWavePalette API 与 WaveStrip 消费对齐（T11）。
+
+**验收**（2026-11-10）：`analyze` 0 issue；`test` 全量 **1076 通过 / 2 skip**
+（解码探针 MethodChannel 无宿主，真机形态在 integration_test 已通过）；
+Windows exe 1,032,192 bytes、apk 217,172,146 bytes（现场构建）。
+**对比度实测**：浅色当前行 7.11 / 未唱 19.17 / 已唱 9.42（全 ≥4.5，优于 React 的
+5.31/5.11/4.35——accentLight 更深，方向安全）；highlightOnLight 7/7 ≥4.5。
+**遗留**（验收文档 D 节）：WaveStrip 实时帧表调度未接装配层（当前装饰回退渲染，
+显式降级）；WaveStylePicker 下拉 UI 未挂歌词页；Android 真机未跑；磨砂膜噪点
+为白点近似；panel 未包磨砂层（播放卡已包）。
