@@ -48,6 +48,30 @@ class MediaKitDriver implements AudioDriver {
       if (value) _emit(_completed, null);
     });
     _errorSub = _player.stream.error.listen((message) {
+      // mpv 的 error 级日志**不都致命**。media_kit 把 `cplayer` / `lavf` /
+      // `stream` 前缀的 error 日志一律转发到 `stream.error`（real.dart 的
+      // MPV_EVENT_LOG_MESSAGE 分支），其中混着「附加资源加载失败」这类
+      // **不影响主音频链**的噪音 —— 2026-11-10 真机实测抓到的形状：
+      //   [lavf][error]    Failed to create file cache.
+      //   [cplayer][error] Can not open external file \\?\D:\…\<歌名>.lrc.
+      // 出现场景：曲目目录里有同名 .lrc 外挂歌词，mpv 自动挂载外挂字幕/
+      // 歌词时用带 `\\?\` 前缀的路径打不开（它对外挂文件走这个前缀，主文件
+      // 不用）→ 打不开**外挂**，但音频主链完全正常（实测 duration 正确回报、
+      // position 持续前进、playing=true）。不过滤的话这条被 classifyFailure
+      // 归成 unknown → 弹「音频播放失败」→ 还触发 1.4s 自动跳坏链，把一首
+      // 播得好好的歌标记成损坏并切走 —— 这就是真机上「音乐播放不出来」的
+      // 直接原因。
+      //
+      // 致命错误（真坏文件）的形状完全不同，实测对照：
+      //   [ffmpeg/audio][error] flac: invalid residual
+      //   [ffmpeg/audio][error] flac: decode_frame() failed
+      //   [ad][error]           Error decoding audio.
+      // 解码器/音频输出层的失败**不在**过滤名单里，照常上报 —— 过滤只丢
+      // 「外挂文件 / file cache」这两个已证实的噪音形状，宁可漏报噪音、
+      // 绝不吞掉真错。
+      if (MediaKitDriver.isNonFatalAttachmentError(message)) {
+        return;
+      }
       _emit(
         _errors,
         DriverError(
@@ -60,6 +84,15 @@ class MediaKitDriver implements AudioDriver {
       );
     });
   }
+
+  /// mpv 的「外挂资源打开失败」噪音：主音频链不受影响，不上报。
+  ///
+  /// 两条形状都是 2026-11-10 真机/同源 libmpv 实测的原话（`\\?\` 后的路径
+  /// 任意、结尾句点可有可无），用 `contains` 匹配以容纳路径差异。
+  /// static 公开：test/playback/media_kit_driver_filter_test.dart 直接钉这份名单。
+  static bool isNonFatalAttachmentError(String message) =>
+      message.contains('Can not open external file') ||
+      message.contains('Failed to create file cache');
 
   final Player _player;
 
