@@ -133,4 +133,151 @@ void main() {
     expect(kRadiusMd, 12);
     expect(kTrackThumb, 44);
   });
+
+  // ---- M3 Task 3：6 组 token 实例与扩字段 ----
+
+  test('M3 扩字段在深色薄荷上的默认值逐字对齐 app.css :10-122', () {
+    const tokens = AppTokens.dark;
+    // 光晕（app.css:13-14）
+    expect(tokens.glowA, const Color(0x292EE6A8)); // rgba(46,230,168,0.16)
+    expect(tokens.glowB, const Color(0x216084FF)); // rgba(96,132,255,0.13)
+    // 选中态面（app.css:16-18）
+    expect(tokens.surface, const Color(0x0AFFFFFF)); // = var(--tint-1)
+    expect(tokens.surface2, const Color(0x13FFFFFF)); // rgba(255,255,255,0.075)
+    expect(tokens.surface3, const Color(0x1CFFFFFF)); // = var(--tint-3)
+    // 遮罩（app.css:79-80）
+    expect(tokens.scrim, const Color(0xA804080C)); // rgba(4,8,12,0.66)
+    expect(tokens.scrimStrong, const Color(0xBD04080C)); // rgba(4,8,12,0.74)
+    // 已唱行透明度：CSS 缺省档（app.css:1940/:3057 的 fallback）
+    expect(tokens.pastOpacity, 0.62);
+    expect(tokens.pastOpacityPage, 0.5);
+    // 滚动条滑块（app.css:43）
+    expect(tokens.scrollThumb, const Color(0x47FFFFFF)); // rgba(255,255,255,0.28)
+    // 磨砂膜四层（app.css:64-67）
+    expect(tokens.frostSheenA, const Color(0x1AFFFFFF)); // rgb(255 255 255/0.1)
+    expect(tokens.frostSheenB, const Color(0x08FFFFFF)); // rgb(255 255 255/0.03)
+    expect(tokens.frostBloom, const Color(0x2EFFFFFF)); // rgb(255 255 255/0.18)
+    expect(tokens.frostTint, const Color(0x1A2EE6A8)); // rgb(46 230 168/0.1)
+    // 玻璃后封面垫（app.css:69-70）；窄屏 blur 30 由消费方换算
+    expect(tokens.frostCoverOpacity, 0.5);
+    expect(tokens.frostCoverBlur, 44);
+    expect(tokens.frostCoverSat, 1.6);
+    expect(tokens.frostCoverBrightness, 0.7);
+    // 薄纱渐变（app.css:71）
+    expect(tokens.frostVeilA, const Color(0x52080A0F)); // rgb(8 10 15/0.32)
+    expect(tokens.frostVeilB, const Color(0x24080A0F)); // rgb(8 10 15/0.14)
+    // 黑胶四色，深浅同值（app.css:85-88）
+    expect(tokens.vinylLow, const Color(0x0FFFFFFF)); // rgba(255,255,255,0.06)
+    expect(tokens.vinylMid, const Color(0x17FFFFFF)); // rgba(255,255,255,0.09)
+    expect(tokens.vinylHi, const Color(0x29FFFFFF)); // rgba(255,255,255,0.16)
+    expect(tokens.vinylLine, const Color(0x29FFFFFF)); // rgba(255,255,255,0.16)
+    // btn--soft hover 的 rgb(accent/0.22)（app.css:929）
+    expect(tokens.accentSoftHover, const Color(0x382EE6A8));
+  });
+
+  test('6 组实例的关键色逐字对齐 app.css', () {
+    const darkMint = AppTokens.dark;
+    const darkPink = AppTokens.darkPink;
+    const darkBlue = AppTokens.darkBlue;
+    const lightMint = AppTokens.lightMint;
+    const lightPink = AppTokens.lightPink;
+    const lightBlue = AppTokens.lightBlue;
+
+    // 深色粉（app.css:257-294）
+    expect(darkPink.name, 'pink-dark');
+    expect(darkPink.bg, const Color(0xFF100A11)); // #100a11
+    expect(darkPink.accent, const Color(0xFFFF6AA8)); // #ff6aa8
+    expect(darkPink.accentLight, const Color(0xFFFFD2E4)); // #ffd2e4
+    expect(darkPink.text, const Color(0xFFF8EDF4)); // #f8edf4
+
+    // 深色蓝（app.css:299-336）
+    expect(darkBlue.name, 'blue-dark');
+    expect(darkBlue.bg, const Color(0xFF070D17)); // #070d17
+    expect(darkBlue.accent, const Color(0xFF4D8DFF)); // #4d8dff
+    expect(darkBlue.accentLight, const Color(0xFFD3E4FF)); // #d3e4ff
+    expect(darkBlue.text, const Color(0xFFE9F1FB)); // #e9f1fb
+
+    // 浅色薄荷（app.css:129-214）
+    expect(lightMint.name, 'mint-light');
+    expect(lightMint.bg, const Color(0xFFDFE8F2)); // #dfe8f2
+    expect(lightMint.accent, const Color(0xFF12B98C)); // #12b98c
+    expect(lightMint.accentLight, const Color(0xFF0A7A5D)); // #0a7a5d
+    expect(lightMint.text, const Color(0xFF16202B)); // #16202b
+
+    // 浅色粉（app.css:229-239，只覆写强调色组 + bg-grad + glow）
+    expect(lightPink.name, 'pink-light');
+    expect(lightPink.bg, const Color(0xFFDFE8F2)); // --bg 未覆写
+    expect(lightPink.accent, const Color(0xFFEC4F92)); // #ec4f92
+    expect(lightPink.accentLight, const Color(0xFFA3175A)); // #a3175a
+    expect(lightPink.text, const Color(0xFF16202B)); // 沿用浅色薄荷
+
+    // 浅色蓝（app.css:241-251）
+    expect(lightBlue.name, 'blue-light');
+    expect(lightBlue.bg, const Color(0xFFDFE8F2)); // --bg 未覆写
+    expect(lightBlue.accent, const Color(0xFF3B7CF6)); // #3b7cf6
+    expect(lightBlue.accentLight, const Color(0xFF1B4FAE)); // #1b4fae
+    expect(lightBlue.text, const Color(0xFF16202B)); // 沿用浅色薄荷
+
+    // 深色薄荷仍是原值
+    expect(darkMint.name, 'mint-dark');
+    expect(darkMint.bg, const Color(0xFF080B10));
+    expect(darkMint.accent, const Color(0xFF2EE6A8));
+    expect(darkMint.accentLight, const Color(0xFFB9FFE9));
+    expect(darkMint.text, const Color(0xFFE9F1F7));
+
+    // 深色明暗推导：浅色三套 light、深色三套 dark
+    expect(darkMint.brightness, Brightness.dark);
+    expect(darkPink.brightness, Brightness.dark);
+    expect(darkBlue.brightness, Brightness.dark);
+    expect(lightMint.brightness, Brightness.light);
+    expect(lightPink.brightness, Brightness.light);
+    expect(lightBlue.brightness, Brightness.light);
+  });
+
+  test('pastOpacity 两档：深 0.62/0.5，浅 0.82/0.8', () {
+    // 深色档（CSS 缺省 fallback，app.css:1940/:3057）
+    expect(AppTokens.dark.pastOpacity, 0.62);
+    expect(AppTokens.dark.pastOpacityPage, 0.5);
+    expect(AppTokens.darkPink.pastOpacity, 0.62);
+    expect(AppTokens.darkPink.pastOpacityPage, 0.5);
+    expect(AppTokens.darkBlue.pastOpacity, 0.62);
+    expect(AppTokens.darkBlue.pastOpacityPage, 0.5);
+    // 浅色档（app.css:196-197）
+    expect(AppTokens.lightMint.pastOpacity, 0.82);
+    expect(AppTokens.lightMint.pastOpacityPage, 0.8);
+    expect(AppTokens.lightPink.pastOpacity, 0.82);
+    expect(AppTokens.lightPink.pastOpacityPage, 0.8);
+    expect(AppTokens.lightBlue.pastOpacity, 0.82);
+    expect(AppTokens.lightBlue.pastOpacityPage, 0.8);
+  });
+
+  test('浅色薄荷的危险态与 toast 翻转（app.css:200-213）', () {
+    const tokens = AppTokens.lightMint;
+    expect(tokens.danger, const Color(0xFFC9253F)); // #c9253f
+    expect(tokens.dangerInk, const Color(0xFF9D1B30)); // #9d1b30
+    expect(tokens.dangerSoft, const Color(0x17C9253F)); // rgba(201,37,63,0.09)
+    expect(tokens.dangerLine, const Color(0x4DC9253F)); // rgba(201,37,63,0.3)
+    expect(tokens.toastBg, const Color(0xFFFFFFFF)); // #ffffff
+    expect(tokens.toastErrorBg, const Color(0xFFFFF1F3)); // #fff1f3
+  });
+
+  test('深色蓝的 accentLine 是浅靛蓝（app.css:321 逐字），不是 accent 同色', () {
+    expect(AppTokens.darkBlue.accentLine, const Color(0x578DB4FF));
+    // rgba(141, 180, 255, 0.34)：0.34 × 255 = 86.7 → 0x57
+    expect(AppTokens.darkBlue.accentLine.a, closeTo(0.34, 0.005));
+    // 对照：accentSoft 才是 accent 同色的 0.16
+    expect(AppTokens.darkBlue.accentSoft, const Color(0x294D8DFF));
+  });
+
+  test('resolve() 两维矩阵返回对应实例', () {
+    expect(identical(AppTokens.resolve('dark', 'mint'), AppTokens.dark), isTrue);
+    expect(identical(AppTokens.resolve('dark', 'pink'), AppTokens.darkPink), isTrue);
+    expect(identical(AppTokens.resolve('dark', 'blue'), AppTokens.darkBlue), isTrue);
+    expect(identical(AppTokens.resolve('light', 'mint'), AppTokens.lightMint), isTrue);
+    expect(identical(AppTokens.resolve('light', 'pink'), AppTokens.lightPink), isTrue);
+    expect(identical(AppTokens.resolve('light', 'blue'), AppTokens.lightBlue), isTrue);
+    // 未知值回落到各维缺省（深色薄荷）
+    expect(identical(AppTokens.resolve('system', 'mint'), AppTokens.dark), isTrue);
+    expect(identical(AppTokens.resolve('dark', 'xxx'), AppTokens.dark), isTrue);
+  });
 }
