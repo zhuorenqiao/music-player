@@ -23,6 +23,12 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import '../lyrics/query.dart' show LyricsQuery, normalizeQuery;
+import '../lyrics/upstream.dart'
+    show HttpJsonClient, RequestAborted;
+import 'cover_disk_cache.dart';
+import 'itunes_source.dart' show CoverMatch, itunesSearch;
+
 /// 下载字节上限（task 3 指令）：Content-Length 超限或累计超限都当失败。
 const int kCoverDownloadLimitBytes = 8 * 1024 * 1024;
 
@@ -122,3 +128,84 @@ class ImageBytesClientImpl implements ImageBytesClient {
 // * 「构造后不触发任何网络」没有直接断言：真内核是懒建的（见上），单测只测
 //   注入 inner 的纯 outcome 路径；构造 impl 不传 inner 时一个 socket 都不开。
 //   8MB 两条刀都可用 MockClient / MockClient.streaming 钉住，已测。
+
+// ---------------------------------------------------------------------------
+// matchCover 编排（Task 5）：查询 → 索引 → 两区搜索 → 落盘 → 状态。
+// 对译 React matchCover（cover-source.js:368-396）去掉代理 / JSONP 分叉、
+// 加上两区（music-api.ts:687-690 移进客户端）与落盘（music-api.ts:705-720
+// 移进客户端）。空查询 / 索引命中 / not-found / 下载失败 / error 的语义
+// 见 test/cover/cover_match_test.dart。
+// ---------------------------------------------------------------------------
+
+/// 一条曲目参与封面匹配所需的三个字段（[Track] 与最近播放记录都装得下）。
+typedef CoverTrackLike = ({String title, String artist, double duration});
+
+/// matchCover 的完整编排。永不抛错；失败一律以 [CoverMatch.status] 表达。
+///
+/// * 空查询（`normalizeQuery` 归一后 [LyricsQuery.trackName] 为空）→
+///   `empty-query`，不发请求；
+/// * [useCache] 且 [index] 命中（TTL 内）→ 直接返回缓存里的落盘路径；
+/// * 未命中 → [itunesSearch] 两区搜索；ok → [CoverDiskStore.saveFromUrl]
+///   落盘 → 索引写 `{p: 路径}` → 返回 ok+路径；**下载 / 落盘失败按
+///   not-found 处理**（索引写 miss）—— 不返回半成品；
+/// * 搜索 not-found → 索引写 miss；error / aborted 不写缓存。
+Future<CoverMatch> matchCover(
+  CoverTrackLike track, {
+  required HttpJsonClient json,
+  required ImageBytesClient bytes,
+  required CoverDiskStore diskStore,
+  CoverIndexCache? index,
+  bool useCache = true,
+}) async {
+  final query = normalizeQuery(
+    title: track.title,
+    artist: track.artist,
+    duration: track.duration,
+  );
+  if (query.trackName.isEmpty) {
+    return const CoverMatch(status: 'empty-query');
+  }
+  if (useCache && index != null) {
+    final cached = await index.read(query.key);
+    if (cached != null) {
+      return cached.isOk
+          ? CoverMatch(status: 'ok', url: cached.path, source: cached.source)
+          : const CoverMatch(status: 'not-found');
+    }
+  }
+  try {
+    final searched = await itunesSearch(
+      query: (
+        trackName: query.trackName,
+        artistName: query.artistName,
+        duration: query.duration.toDouble(),
+      ),
+      client: json,
+    );
+    if (searched.status == 'ok' && (searched.url?.isNotEmpty ?? false)) {
+      final path = await diskStore.saveFromUrl(
+        url: searched.url!,
+        id: CoverDiskStore.cacheId(query.key),
+        bytes: bytes,
+      );
+      if (path != null) {
+        final record = CoverRecord(status: 'ok', path: path);
+        await index?.write(query.key, record);
+        return CoverMatch(status: 'ok', url: path, source: 'iTunes');
+      }
+      // 图下载 / 落盘失败：按 not-found 处理（写 miss），不返回半成品。
+      await index?.write(query.key, const CoverRecord(status: 'not-found'));
+      return const CoverMatch(status: 'not-found');
+    }
+    if (searched.status == 'not-found' || searched.status == 'empty-query') {
+      await index?.write(query.key, const CoverRecord(status: 'not-found'));
+      return const CoverMatch(status: 'not-found');
+    }
+    // error / aborted：不写缓存（网络错误不缓存，下次还值得一试）。
+    return searched;
+  } on RequestAborted {
+    return const CoverMatch(status: 'aborted');
+  } catch (_) {
+    return const CoverMatch(status: 'error', message: '封面匹配失败');
+  }
+}

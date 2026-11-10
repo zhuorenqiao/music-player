@@ -28,6 +28,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import '../core/app_prefs.dart';
 import '../metadata/cover_image.dart';
 import 'cover_source.dart';
@@ -168,6 +170,12 @@ class CoverDiskStore {
 
   final String directory;
   final CoverImageWriter writer;
+
+  /// 缓存键 → 落盘 id：`sha1(缓存键)` 的 hex 小写（music-api.ts:711 同规则；
+  /// 键由 lyrics/query.dart 的 [normalizeQuery] 产出，`曲名|歌手|时长` 中竖线
+  /// 分隔、整串小写）。写真键另用 `sha1(图片 URL)`（music-api.ts:750）。
+  static String cacheId(String cacheKey) =>
+      sha1.convert(utf8.encode(cacheKey)).toString();
 
   /// id → 落盘文件路径（供显示层判 existsSync，无需真的写一次）。
   ///
