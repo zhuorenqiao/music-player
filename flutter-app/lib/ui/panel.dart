@@ -44,6 +44,7 @@ import '../theme/theme_state.dart';
 import 'autoplay_gate.dart';
 import 'empty_state.dart';
 import 'recent_row.dart';
+import 'auto_hide_scrollbar.dart';
 import 'track_row.dart';
 
 /// 播放列表 / 最近播放面板。
@@ -421,20 +422,22 @@ class _PlaylistBody extends StatelessWidget {
       // 原版 `closest('.btn--play, .panel__list')` 里的那半句（`src/App.tsx:1562`）：
       // 这一块的每一行自己就会播放（`playAt`），pointer-down 不再被网关
       // 当成「任意手势」重复花额度（终审 R7）。
-      child: ListView.builder(
-        key: const Key('playlist-list'),
-        padding: EdgeInsets.zero,
-        itemCount: tracks.length,
-        itemBuilder: (context, index) {
-          final track = tracks[index];
-          return TrackRow(
-            key: ValueKey<String>(track.id),
-            title: track.title,
-            artistLine: _artistLine(track),
-            duration: formatTime(track.duration),
-            // M2b T10：在线匹配的封面进 resolver（matchedCovers 优先于
-            // 内嵌 cover 是错的 —— 内嵌优先，见 CoverState 的一级判据；
-            // 传内嵌路径进去由 resolver 统一裁）。
+      // M3 T14：auto-hide 滚动条（900ms 收起、只认用户滚动）。
+      child: AutoHideScrollbar(
+        child: ListView.builder(
+          key: const Key('playlist-list'),
+          padding: EdgeInsets.zero,
+          itemCount: tracks.length,
+          itemBuilder: (context, index) {
+            final track = tracks[index];
+            return TrackRow(
+              key: ValueKey<String>(track.id),
+              title: track.title,
+              artistLine: _artistLine(track),
+              duration: formatTime(track.duration),
+              // M2b T10：在线匹配的封面进 resolver（matchedCovers 优先于
+              // 内嵌 cover 是错的 —— 内嵌优先，见 CoverState 的一级判据；
+              // 传内嵌路径进去由 resolver 统一裁）。
             coverPath: cover.coverForDisplay(
               cover: track.cover,
               artist: track.artist,
@@ -450,6 +453,7 @@ class _PlaylistBody extends StatelessWidget {
             onRemove: () => unawaited(library.removeTrack(track.id)),
           );
         },
+        ),
       ),
     );
   }
@@ -535,35 +539,37 @@ class _RecentBody extends StatelessWidget {
                   title: '没有找到《${library.keyword.trim()}》',
                   hint: '换个关键词试试',
                 )
-              : ListView.builder(
-                  key: const Key('recent-list'),
-                  padding: EdgeInsets.zero,
-                  itemCount: visible.length,
-                  itemBuilder: (context, index) {
-                    final entry = visible[index];
-                    return RecentRow(
-                      key: ValueKey<String>(entry.id),
-                      title: entry.title,
-                      artist: entry.artist,
-                      relativeTime: formatRelativeTime(entry.at),
-                      duration: formatTime(entry.duration),
-                      // M2b T10：最近条目同走 resolver（最近播放与封面
-                      // 显示层的联动 —— spec §17「最近播放打磨」）。
-                      coverPath: cover.coverForDisplay(
-                        cover: entry.cover,
-                        artist: entry.artist,
+              : AutoHideScrollbar(
+                  child: ListView.builder(
+                    key: const Key('recent-list'),
+                    padding: EdgeInsets.zero,
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final entry = visible[index];
+                      return RecentRow(
+                        key: ValueKey<String>(entry.id),
                         title: entry.title,
-                        trackId: entry.id,
-                      ),
-                      coverTitle: entry.title,
-                      inPlaylist: entry.inPlaylist,
-                      active: library.currentId == entry.id,
-                      // 已失效的记录不静默失败：给一条提示，绝不假装播放
-                      onTap: () => entry.inPlaylist
-                          ? unawaited(player.playTrack(entry.id))
-                          : library.toastMissingInPlaylist(),
-                    );
-                  },
+                        artist: entry.artist,
+                        relativeTime: formatRelativeTime(entry.at),
+                        duration: formatTime(entry.duration),
+                        // M2b T10：最近条目同走 resolver（最近播放与封面
+                        // 显示层的联动 —— spec §17「最近播放打磨」）。
+                        coverPath: cover.coverForDisplay(
+                          cover: entry.cover,
+                          artist: entry.artist,
+                          title: entry.title,
+                          trackId: entry.id,
+                        ),
+                        coverTitle: entry.title,
+                        inPlaylist: entry.inPlaylist,
+                        active: library.currentId == entry.id,
+                        // 已失效的记录不静默失败：给一条提示，绝不假装播放
+                        onTap: () => entry.inPlaylist
+                            ? unawaited(player.playTrack(entry.id))
+                            : library.toastMissingInPlaylist(),
+                      );
+                    },
+                  ),
                 ),
         ),
       ],
