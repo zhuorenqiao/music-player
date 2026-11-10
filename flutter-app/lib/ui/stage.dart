@@ -37,6 +37,7 @@ import '../state/lightbox_controller.dart';
 import '../state/lyrics_page_controller.dart';
 import '../theme/theme_state.dart';
 import 'glass_frost.dart';
+import 'tonearm.dart';
 import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
@@ -91,6 +92,9 @@ class Stage extends StatelessWidget {
     final page = context.read<LyricsPageController?>();
     final cover = context.watch<CoverState?>();
     final track = player.view.value.current;
+    // M3 T13：播放态驱动黑胶旋转 / 唱臂落针 / 光晕呼吸（StagePreview 仍纯展示，
+    // 播放态经参数注入）。
+    final playing = player.view.value.playing;
     // 总时长的两级取值（终审 minor 3，与 `TransportBar._totalOf` 同一思路）：
     // 标签里有时长就以标签为准（那是权威元数据，内核报的往往晚到），
     // 标签没有（ID3v1-only / 无标签文件 / 探测失败）就回退内核那个
@@ -129,6 +133,8 @@ class Stage extends StatelessWidget {
       // M3 T7：卡面透明度（ThemeState 可空 watch——同上四个 provider 的容错
       // 模式；没有注册时 null → preview 按主题原样画）。
       glassLevel: context.watch<ThemeState?>()?.glassLevel,
+      // M3 T13：播放态（黑胶旋转 / 唱臂 / 光晕呼吸由 StagePreview 内消化）。
+      playing: playing,
       // 标题行尾部：只有非中文歌词才出「双语」开关（原版组件里那句
       // `if (!translatable) return null`，由调用方判 —— 见 bilingual_toggle.dart）。
       titleTrailing: bilingual != null && bilingual.translatable
@@ -254,6 +260,7 @@ class StagePreview extends StatelessWidget {
     this.titleTrailing,
     this.onOpenLyrics,
     this.glassLevel,
+    this.playing = false,
     super.key,
   });
 
@@ -298,6 +305,9 @@ class StagePreview extends StatelessWidget {
   /// 由 [Stage] 从 ThemeState 读出注入；纯展示测试不传即得 M1 观感。
   final double? glassLevel;
 
+  /// 播放中（M3 T13）：黑胶旋转、唱臂落针、光晕呼吸的驱动信号。
+  final bool playing;
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
@@ -318,18 +328,34 @@ class StagePreview extends StatelessWidget {
         // 这里封面热区与曲目区热区本来就是两个 GestureDetector，天然不冒泡）。
         // 控制器没注册（部分纯展示测试）时点了不做事 —— watch<T?>() 容错。
         onTap: context.read<LightboxController?>()?.open,
-        child: CoverDisc(
-          coverPath: coverPath,
-          size: coverSize,
-          spinning: false, // M1 黑胶静止，旋转在 M3
-          // M2b T10：无封面文件时碟面画生成卡（resolver 第 4 级）。
-          // 空态（曲名/歌手都是占位文案）没有派生源，保留音符占位碟 ——
-          // 生成卡是「属于这位歌手的图」，空态没有歌手。
-          fallbackArtist:
-              artist == kUnknownStageArtist || artist == kIdleStageArtist
-                  ? ''
-                  : artist,
-          fallbackTitle: title == kIdleStageTitle ? '' : title,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            CoverDisc(
+              coverPath: coverPath,
+              size: coverSize,
+              // M3 T13：播放中旋转（暂停冻角）；空态不转。
+              spinning: playing && title != kIdleStageTitle,
+              // M2b T10：无封面文件时碟面画生成卡（resolver 第 4 级）。
+              // 空态（曲名/歌手都是占位文案）没有派生源，保留音符占位碟 ——
+              // 生成卡是「属于这位歌手的图」，空态没有歌手。
+              fallbackArtist:
+                  artist == kUnknownStageArtist || artist == kIdleStageArtist
+                      ? ''
+                      : artist,
+              fallbackTitle: title == kIdleStageTitle ? '' : title,
+            ),
+            // 唱臂（M3 T13）：覆盖在碟面之上（原版 .stage__tonearm
+            // position:absolute inset:0，:836-843），pointer-events none。
+            if (title != kIdleStageTitle)
+              IgnorePointer(
+                child: SizedBox(
+                  width: coverSize,
+                  height: coverSize,
+                  child: Tonearm(spinning: playing, size: coverSize),
+                ),
+              ),
+          ],
         ),
       ),
     );
