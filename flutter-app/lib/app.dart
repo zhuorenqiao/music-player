@@ -34,6 +34,7 @@ import 'state/toast_state.dart';
 import 'lyrics/upstream.dart' show HttpJsonClient, HttpJsonClientImpl;
 import 'theme/app_theme.dart';
 import 'theme/app_tokens.dart';
+import 'theme/theme_state.dart';
 import 'ui/autoplay_gate.dart';
 import 'ui/home_page.dart';
 import 'ui/toasts.dart';
@@ -58,6 +59,7 @@ class AppBootstrap {
     LightboxController? lightbox,
     CoverState? cover,
     VoidCallback? onCoverViewChanged,
+    ThemeState? theme,
   }) : // 全屏歌词页的开合开关（T18 建、T19 接页面本体）。
        // 可空入参 + 在这里兜底建：`buildBootstrap` 传它（Stage 与 T19 的页面 /
        // 快捷键要共用同一份），测试里直接 new `AppBootstrap` 的路径也不必改。
@@ -78,7 +80,10 @@ class AppBootstrap {
              diskStore: CoverDiskStore(directory: ''),
              artistImageDirectory: '',
            ),
-       onCoverViewChanged = onCoverViewChanged ?? (() {});
+       onCoverViewChanged = onCoverViewChanged ?? (() {}),
+       // 外观状态机（M3 T4/T5）：兜底用 unloaded（默认值，不读 prefs）——
+       // 要验主题的测试自己传真实例。
+       theme = theme ?? ThemeState.unloaded();
 
   final AppPrefs prefs;
   final LibraryRepository repository;
@@ -140,6 +145,9 @@ class AppBootstrap {
   /// 纯界面态，与封面数据无关（[LyricsPageController] 同款裁定）——封面热区
   /// `open()`（T11），灯箱本体与 Esc `close()`，三方读同一个 flag。
   final LightboxController lightbox;
+
+  /// 外观状态机（M3 T4/T5）：换肤 / 玻璃 / 波形 / 歌词色七维。
+  final ThemeState theme;
 
   /// 封面显示层（M2b T6/T8）。resolver（coverForDisplay）、当前曲目在线
   /// 匹配、写真表与预取调度都在这一层；界面（Stage / Panel / 灯箱）只读它。
@@ -225,12 +233,24 @@ class _LightMusicAppState extends State<LightMusicApp> {
         // 面板的选中 tab 是纯界面态：不属于组合根，界面装配时建即可。
         // 放在路由之上，T29 的弹层复用同一份。
         ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
+        // 外观状态机（M3 T5）：换肤 / 玻璃 / 波形 / 歌词色七维共读这一份。
+        ChangeNotifierProvider<ThemeState>.value(value: bootstrap.theme),
         Provider<AppPrefs>.value(value: bootstrap.prefs),
       ],
-      child: MaterialApp(
+      child: Consumer<ThemeState>(
+        builder: (context, themeState, _) => MaterialApp(
         title: '流光音乐',
         debugShowCheckedModeBanner: false,
-        theme: buildTheme(tokens: AppTokens.dark),
+        // M3 T5：主题随 ThemeState 切换（main() 先 await 读完 prefs 再
+        // runApp —— 等价 React useLayoutEffect 的「首帧前挂属性」，
+        // 浅色用户不会先闪一帧深色）。system 模式按平台亮度解析。
+        // Consumer 包住：watch 发生在 MultiProvider 之下，浅色首帧就位。
+        theme: buildTheme(
+          tokens: AppTokens.resolve(
+            themeState.resolvedMode,
+            themeState.color.name,
+          ),
+        ),
         // 提示条压在路由之上：任何页面 / 弹层看到的都是同一条，且不随页面重建
         // 丢失计时。`home` 只放骨架页，提示条不该由它自己挂。
         // 网关（终审 I5，覆盖面按 R7 补齐）再压一层：原版的 pointerdown /
@@ -282,6 +302,7 @@ class _LightMusicAppState extends State<LightMusicApp> {
             }
           },
           child: const HomePage(),
+        ),
         ),
       ),
     );

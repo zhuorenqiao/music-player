@@ -52,6 +52,7 @@ import 'playback/track.dart';
 import 'cover/artist_image.dart';
 import 'cover/cover_disk_cache.dart';
 import 'cover/cover_source.dart';
+import 'theme/theme_state.dart';
 import 'state/cover_state.dart';
 import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
@@ -137,6 +138,9 @@ Future<AppBootstrap> buildBootstrap({
   // pending-Timer 手法）。
   Future<void> Function(Duration)? prefetchDelay,
   Future<int> Function(List<Track>, {String? currentId})? lyricsPrefetchRun,
+  // M3 T5：外观状态机的注入接缝（测试传 load 好的真实例；生产不传，
+  // 内部 load）。接缝模式与 lyricsMatcher / translationFetcher 相同。
+  ThemeState? themeState,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -179,6 +183,16 @@ Future<AppBootstrap> buildBootstrap({
   // 全屏歌词页的开合开关（T18）：纯界面态，但要跨「播放卡的点击」与「T19 的
   // 页面本体 / overlay 槽 / 快捷键」三方共用，所以由组合根持有、经 provider 下发。
   final lyricsPage = LyricsPageController();
+  // 外观状态机（M3 T5）：换肤 / 玻璃 / 波形 / 歌词色七维。load 在这里 await
+  // 完（main() 在 runApp 前，等价 React useLayoutEffect 首帧前挂属性）。
+  final theme =
+      themeState ??
+      await ThemeState.load(
+        prefs,
+        platformDark: () =>
+            WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+            Brightness.dark,
+      );
   final library = LibraryState(
     prefs: prefs,
     repo: repository,
@@ -369,6 +383,7 @@ Future<AppBootstrap> buildBootstrap({
     lyricsPage: lyricsPage,
     cover: cover,
     onCoverViewChanged: syncCoverTrack,
+    theme: theme,
   );
 }
 
