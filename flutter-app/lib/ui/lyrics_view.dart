@@ -62,6 +62,14 @@
 //   `behavior: 'smooth'`；系统「减少动态效果」时退成零时长（项目既有约定，见
 //   ui/lyrics_status.dart 与 ui/transport.dart 的 reduced-motion 一节）。
 //
+// * **歌词内容一换，滚动位置回到最上方**（换歌 / 同一首的纯文本升级成带时间轴）。
+//   滚动视图带的是 const key，元素被复用、偏移留着 —— 不拨回去的话，新歌会停在
+//   旧歌滚到的位置（多半是中间），看起来像「歌词没换」。`SingleChildScrollView`
+//   自带的匿名控制器够不着位置，所以自己持有一个 `ScrollController`。
+//   **瞬时跳、不做动画**：从旧歌中段一路滑到新歌顶部显得拖沓，直接跳更利落。
+//   **这一次不做居中**：否则新歌的当前行会立刻把视图从顶部拉走，「回到最上方」
+//   根本看不到 —— 下一行变化时照旧跟随。
+//
 // * **两档规格表逐字**（compact / full）：容器左右 padding 4 / 8，行内边距
 //   `6 8` / `12 14`，字号 17 / 19，行高 1.55（继承）/ 1.5，圆角都是 10，译文
 //   字号 13 / 14、上间距 1 / 3、行高都 1.45、不透明度 .85。唱过的行 `textDim` +
@@ -78,6 +86,8 @@ import '../state/bilingual_state.dart';
 import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
+import '../theme/color_utils.dart';
+import '../theme/theme_state.dart';
 
 /// 两档规格：播放卡内（compact）与歌词页（full）。
 enum LyricsVariant { compact, full }
@@ -190,6 +200,9 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
   /// 每行的 GlobalKey：`ensureVisible` 要靠它定位。
   List<GlobalKey> _itemKeys = const [];
 
+  /// 滚动控制器：歌词内容一换要把位置拨回最上方，匿名控制器够不着。
+  final ScrollController _scrollController = ScrollController();
+
   /// 是否处在「手动滚动后暂停跟随」的窗口里。
   ///
   /// React 那边是 `manualUntil` 时间戳 + 每次滚动直接比较 Date.now()（App.tsx:250-255）。
@@ -209,6 +222,7 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
   @override
   void dispose() {
     _manualTimer?.cancel();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -216,10 +230,32 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
   void didUpdateWidget(covariant LyricsLinesView oldWidget) {
     super.didUpdateWidget(oldWidget);
     _syncKeys();
+    // 歌词内容换了（换歌 / 同一首的纯文本升级成带时间轴）：旧歌的滚动位置不能
+    // 留给新歌 —— 拨回最上方。判定用**列表身份**：LyricsState 每次重算都造新的
+    // displayLines，同一首的行内容没变时身份也不变。
+    if (!identical(oldWidget.lines, widget.lines)) {
+      _resetToTop();
+      // 这一次不做居中：新歌的当前行会立刻把视图从顶部拉走，「回到最上方」就
+      // 看不见了。下一行变化时照旧跟随。
+      return;
+    }
     // 「当前行变了」才滚：构建期不能动滚动位置，排到这一帧之后。
     if (widget.activeIndex != oldWidget.activeIndex) {
       _followIfAllowed();
     }
+  }
+
+  /// 把滚动位置拨回最上方（瞬时，不做动画）。
+  ///
+  /// 排在下一帧：构建期滚动视图还没完成布局，位置还没有像素值。
+  void _resetToTop() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      if (!position.hasPixels) return;
+      position.jumpTo(0);
+    });
   }
 
   /// key 数量跟着行数走（换歌 / 升级纯文本时行数会变）。
@@ -292,6 +328,8 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
           },
           child: SingleChildScrollView(
             key: const Key('lyrics-scroll'),
+            // 自己持控制器：换歌时要把位置拨回最上方（见 _resetToTop）。
+            controller: _scrollController,
             child: Padding(
               key: const Key('lyrics-content-padding'),
               padding: EdgeInsets.symmetric(
@@ -327,11 +365,26 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
     final canSeek = seekable && !isEmpty;
 
     // 颜色三档：普通行 textFaint；纯文本行 textDim（:2005-2007）；
-    // 唱过的行 textDim + 整行压不透明度；当前行 accentLight + 不透明度 1。
+    // 唱过的行 textDim + 整行压不透明度；当前行 `--lyric-hl` + 不透明度 1。
+    // `--lyric-hl` 缺省跟随 `--accent-light`，用户在「T」色板里选过就换成
+    // 那个色（React wave-style.tsx:66-70 / theme.tsx:160-219 的高亮压暗）。
+    // 截图里 React 的粉紫高亮正是「玫红」预设；旧实现写死 accentLight，
+    // 于是 Flutter 侧永远是薄荷白 —— 这是肉眼最明显的配色差异。
+    final theme = context.watch<ThemeState?>();
+    final picked = theme?.lyricColor ?? '';
+    final Color highlight = picked.isEmpty
+        ? tokens.accentLight
+        : (() {
+            final parsed = parseHexColor(picked);
+            if (parsed == null) return tokens.accentLight;
+            return tokens.brightness == Brightness.light
+                ? highlightOnLight(parsed)
+                : parsed;
+          })();
     final Color color;
     final double opacity;
     if (isActive) {
-      color = tokens.accentLight;
+      color = highlight;
       opacity = 1;
     } else if (isPast) {
       color = tokens.textDim;
@@ -423,29 +476,95 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
 ///
 /// 进度只走 `ValueListenableBuilder` 订阅 position（player_state.dart:8-11 明确
 /// 进度不进 ChangeNotifier），别把它接进整棵树的重建。
-class LyricsView extends StatelessWidget {
+///
+/// **但「只订阅 position」还不够**：progress tick 每秒来 4 次，而
+/// [LyricsLinesView] 是「全量构建」的（每行一个 Container + 1~2 个 Text，一行
+/// 歌词通常 60~120 行）。每次 tick 都返回一个新的 `LyricsLinesView` 实例，
+/// Flutter 就认为整棵歌词树是新的，于是 4Hz 重跑一遍全部行的 build —— 实测在
+/// 80 行的完整歌词页上单帧 20~30ms，已经超掉 16.6ms 的整帧预算：表现是歌词页
+/// 里拖动窗口、切歌、滚动都发顿，且只在「行数多」时明显。
+///
+/// 修法不是砍行数（全量构建是居中定位的硬前提，见文件头），而是把「tick」和
+/// 「重建」拆开：本 widget 缓存上一次交出去的列表实例，**只有 activeIndex 真的
+/// 换了**（或歌词 / 译文换了身份）才造一个新的。`Element.updateChild` 对
+/// 「同一个 widget 实例」会直接短路，整棵歌词树因此完全不重建。一句歌词持续
+/// 3~5 秒，于是重建从 4Hz 降到「换行时一次」—— 与 CSS 那边只切 `is-active`
+/// 类的代价同阶。
+class LyricsView extends StatefulWidget {
   const LyricsView({required this.variant, super.key});
 
   final LyricsVariant variant;
+
+  @override
+  State<LyricsView> createState() => _LyricsViewState();
+}
+
+class _LyricsViewState extends State<LyricsView> {
+  /// 上一次交出去的列表实例，以及它对应的输入（用来判断能否直接复用）。
+  ///
+  /// 不用 `int? _cachedIndex` 与 `List<String>? _cachedTrans` 单独存：
+  /// 前者与 [_cachedPhase] 同源（相位就是行号的 double 形式），后者每次从
+  /// `BilingualState.trans` 取都是一个新 List（未启用时 `List.filled`，
+  /// 启用时 `alignTranslation` 的结果），按实例判等永远不成立，存了也不能比。
+  Widget? _cachedList;
+  double _cachedPhase = double.nan;
+  List<LyricLine>? _cachedLines;
+  LyricsVariant? _cachedVariant;
 
   @override
   Widget build(BuildContext context) {
     final lyrics = context.watch<LyricsState>();
     final bilingual = context.watch<BilingualState>();
     final player = context.watch<PlayerState>();
+    final lines = lyrics.displayLines;
+
     return ValueListenableBuilder<double>(
       valueListenable: player.position,
-      builder: (context, position, _) => LyricsLinesView(
-        lines: lyrics.displayLines,
-        trans: bilingual.trans,
-        variant: variant,
+      builder: (context, position, _) {
         // 纯文本行没有时间轴：只把有时间的 cues 喂给 findActiveCue。
-        activeIndex: findActiveCue(lyrics.cues, position),
-        onSeek: (seconds) {
-          // 点歌词跳转；seek 落空不影响显示（transport 内部自己报错）。
-          player.seekTo(seconds);
-        },
-      ),
+        final next = findActiveCue(lyrics.cues, position);
+        // 相位 = 行号。行号没变就什么都不用重做 —— 连 `bilingual.trans`
+        // 都不该取：它每次都新建一个 List（见类注释）。
+        final phase = next.toDouble();
+
+        final cached = _cachedList;
+        // 输入全等才复用：返回**同一个 widget 实例**，`Element.updateChild`
+        // 会直接短路，整棵歌词树完全不重建（见类注释）。
+        //
+        // `_seek` 不参与判等：它是本 State 的方法 tear-off，在 State 的整个
+        // 生命周期里指向同一个接收者，不可能变；而方法 tear-off 的
+        // `identical()` 并不保证为真（Dart 只保证 `==` 成立），拿它判等会让
+        // 缓存永远失效 —— 这条在实测里表现为「加了缓存还是 34ms/次」。
+        if (cached != null &&
+            _cachedPhase == phase &&
+            identical(_cachedLines, lines) &&
+            _cachedVariant == widget.variant) {
+          return cached;
+        }
+
+        final built = LyricsLinesView(
+          lines: lines,
+          trans: bilingual.trans,
+          variant: widget.variant,
+          activeIndex: next,
+          onSeek: _seek,
+        );
+        _cachedList = built;
+        _cachedPhase = phase;
+        _cachedLines = lines;
+        _cachedVariant = widget.variant;
+        return built;
+      },
     );
+  }
+
+  /// 点歌词 seek 的回调。写成方法（而不是内联闭包）是为了让它的身份在整个
+  /// State 生命周期里稳定：内联闭包每次 build 都是新对象，虽然本文件的判等
+  /// 已经不用它了，但稳定身份仍然让 `LyricsLinesView` 的 `onSeek` 在
+  /// 「真的需要重建」时也不因回调变化而连带重建子层。
+  void _seek(double seconds) {
+    // 点歌词跳转；seek 落空不影响显示（transport 内部自己报错）。
+    if (!mounted) return;
+    context.read<PlayerState>().seekTo(seconds);
   }
 }

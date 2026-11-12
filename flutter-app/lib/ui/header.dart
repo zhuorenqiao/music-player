@@ -21,12 +21,21 @@ class AppHeader extends StatelessWidget {
     required this.onAddFiles,
     required this.onAddFolder,
     required this.onClearPlaylist,
+    this.onSwitchView,
+    this.immersive = false,
     super.key,
   });
 
   final Future<void> Function() onAddFiles;
   final Future<void> Function() onAddFolder;
   final Future<void> Function() onClearPlaylist;
+
+  /// 顶部「模式切换」按钮（React `App.tsx:220-229` 的 `.app__mode`）：
+  /// 在封面页 / 完整歌词页之间切。null 时不渲染（纯展示 / 旧调用点保持原样）。
+  final VoidCallback? onSwitchView;
+
+  /// 当前是否处于沉浸（歌词页）模式，决定按钮图标与读屏名。
+  final bool immersive;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +45,23 @@ class AppHeader extends StatelessWidget {
       children: [
         Expanded(child: _Brand(compact: compact)),
         const SizedBox(width: 8),
+        // `.app__actions`：模式切换在菜单左侧，gap 8（app.css:580-599）。
+        if (onSwitchView != null) ...[
+          Semantics(
+            key: const Key('view-mode-button'),
+            button: true,
+            label: immersive ? '切换到简约模式（封面页）' : '切换到沉浸模式（歌词页）',
+            excludeSemantics: true,
+            onTap: onSwitchView,
+            child: InkWell(
+              onTap: onSwitchView,
+              borderRadius: BorderRadius.circular(999),
+              overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
+              child: _ViewModeChip(compact: compact, immersive: immersive),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
         Semantics(
           button: true,
           label: '更多',
@@ -149,6 +175,54 @@ class _Brand extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// 模式切换按钮：与菜单同档（36px 高、12.5px 字、16px 图标、999 圆角）。
+/// 宽 <480 时 `.btn__text` 隐藏、按钮收成 36×36（app.css:4022-4045）。
+class _ViewModeChip extends StatelessWidget {
+  const _ViewModeChip({required this.compact, required this.immersive});
+
+  final bool compact;
+  final bool immersive;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.tokens;
+    return Container(
+      height: 36,
+      width: compact ? 36 : null,
+      padding: compact
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: tokens.border),
+        color: tokens.surface,
+      ),
+      alignment: Alignment.center,
+      child: compact
+          ? Icon(
+              immersive ? Icons.album : Icons.queue_music,
+              size: 16,
+              color: tokens.text,
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  immersive ? Icons.album : Icons.queue_music,
+                  size: 16,
+                  color: tokens.text,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  immersive ? '简约模式' : '沉浸模式',
+                  style: TextStyle(fontSize: 12.5, color: tokens.text),
+                ),
+              ],
+            ),
     );
   }
 }

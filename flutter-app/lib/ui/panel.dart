@@ -43,13 +43,21 @@ import '../theme/app_tokens.dart';
 import '../theme/theme_state.dart';
 import 'autoplay_gate.dart';
 import 'empty_state.dart';
+import 'glass_frost.dart';
 import 'recent_row.dart';
 import 'auto_hide_scrollbar.dart';
 import 'track_row.dart';
 
 /// 播放列表 / 最近播放面板。
 class Panel extends StatelessWidget {
-  const Panel({super.key, this.onClose, this.tickerEnabled = true});
+  const Panel({
+    super.key,
+    this.onClose,
+    this.tickerEnabled = true,
+    this.flush = false,
+    this.coverPath = '',
+    this.frostLevel = 0,
+  });
 
   /// 收起按钮；弹层里才有（侧栏里面板是常驻的，不需要收起）。
   final VoidCallback? onClose;
@@ -57,6 +65,22 @@ class Panel extends StatelessWidget {
   /// 音柱 ticker 开关。弹层在后台保留面板（offstage）时由 T29 传 false：
   /// 看不见的面板不该继续按 60fps 走动画。侧栏里恒为 true。
   final bool tickerEnabled;
+
+  /// 弹层里的那一版（`.panel--sheet`，app.css:1673-1685）：卡片外观全剥掉
+  /// —— 弹层自己已经画了 `sheet-a→sheet-b` 的卡面、顶部圆角与描边，
+  /// 面板再画一层就会叠出「卡里套卡」的两道边。
+  final bool flush;
+
+  /// 玻璃后垫的封面路径（React `Panel` 用 `useCover(current)` 拿 `panelCover`，
+  /// App.tsx:594/:692-694）。由 [HomePage] 注入；纯展示 / 测试不传即空串。
+  final String coverPath;
+
+  /// 磨砂强度（ThemeState.frostLevel）。0 = 不挂磨砂层（零开销）。
+  ///
+  /// 由调用方注入而不是本件 `watch<ThemeState>()`：面板自己已经 watch 了
+  /// glassLevel，再挂一层会把每帧的重建面扩大；保持「无 provider 也能画」的
+  /// 既有契约（与 `GlassFrostLayer` 一致）。
+  final double frostLevel;
 
   /// 「舒适高度」下限。低于它就切到 [Panel] 的兜底布局（整块可滚）。
   ///
@@ -120,7 +144,34 @@ class Panel extends StatelessWidget {
     final glass = context.watch<ThemeState>().glassLevel;
     final scaledA = tokens.panelA.withValues(alpha: tokens.panelA.a * glass);
     final scaledB = tokens.panelB.withValues(alpha: tokens.panelB.a * glass);
-    return Container(
+    final content = LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxHeight < minComfortableHeight) {
+          // 兜底：固定行摆不下时整块可滚，任何一项都不被裁掉
+          return SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ...fixed,
+                SizedBox(height: compactBodyHeight, child: body),
+              ],
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [...fixed, Expanded(child: body)],
+        );
+      },
+    );
+    // 弹层版（`.panel--sheet`）：不画卡面，只留内容（padding 也换成弹层那套）。
+    if (flush) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+        child: content,
+      );
+    }
+    final card = Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kRadiusXl),
         border: Border.all(color: tokens.border),
@@ -132,26 +183,16 @@ class Panel extends StatelessWidget {
         ),
       ),
       padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxHeight < minComfortableHeight) {
-            // 兜底：固定行摆不下时整块可滚，任何一项都不被裁掉
-            return SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ...fixed,
-                  SizedBox(height: compactBodyHeight, child: body),
-                ],
-              ),
-            );
-          }
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [...fixed, Expanded(child: body)],
-          );
-        },
-      ),
+      child: content,
+    );
+    // M3 D.6：CSS 里 `.player::before` 与 `.panel::before` 是**同一套**磨砂膜
+    // （app.css:461-477），播放卡已经包了 GlassFrostLayer，面板此前漏了这一层。
+    // 用同一个组件包住整卡，视觉与强度公式逐字一致；frost==0 时它原样返回
+    // child，零开销。
+    return GlassFrostLayer(
+      coverPath: coverPath,
+      frostLevel: frostLevel,
+      child: card,
     );
   }
 }
@@ -392,7 +433,7 @@ class _StatsRow extends StatelessWidget {
 }
 
 /// 播放列表 tab。
-class _PlaylistBody extends StatelessWidget {
+class _PlaylistBody extends StatefulWidget {
   const _PlaylistBody({
     required this.library,
     required this.player,
@@ -404,7 +445,24 @@ class _PlaylistBody extends StatelessWidget {
   final CoverState cover;
 
   @override
+  State<_PlaylistBody> createState() => _PlaylistBodyState();
+}
+
+class _PlaylistBodyState extends State<_PlaylistBody> {
+  /// ListView 与 RawScrollbar 共用的 controller（两者必须是同一个，
+  /// 否则鼠标悬停滚动条时会抛「no ScrollPosition attached」）。
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final library = widget.library;
+    final cover = widget.cover;
     final tracks = library.filteredTracks;
     if (tracks.isEmpty) {
       // 两种空态：列表本来就没有歌 vs 搜索没命中（原版分开写文案）
@@ -424,8 +482,10 @@ class _PlaylistBody extends StatelessWidget {
       // 当成「任意手势」重复花额度（终审 R7）。
       // M3 T14：auto-hide 滚动条（900ms 收起、只认用户滚动）。
       child: AutoHideScrollbar(
+        controller: _controller,
         child: ListView.builder(
           key: const Key('playlist-list'),
+          controller: _controller,
           padding: EdgeInsets.zero,
           itemCount: tracks.length,
           itemBuilder: (context, index) {
@@ -447,9 +507,9 @@ class _PlaylistBody extends StatelessWidget {
             coverArtist: track.artist,
             coverTitle: track.title,
             active: library.currentId == track.id,
-            playing: player.playing,
+            playing: widget.player.playing,
             broken: track.broken,
-            onPlay: () => unawaited(player.playTrack(track.id)),
+            onPlay: () => unawaited(widget.player.playTrack(track.id)),
             onRemove: () => unawaited(library.removeTrack(track.id)),
           );
         },
@@ -471,7 +531,7 @@ class _PlaylistBody extends StatelessWidget {
 /// 过滤，关键词折叠规则与播放列表一致；空态因此有四种 —— 没有记录 / 关键词
 /// 没命中。顶部说明行与「清空历史」的禁用态读**未过滤**的条目：历史还在，
 /// 只是当前关键词看不到，清空按钮不该跟着变灰。
-class _RecentBody extends StatelessWidget {
+class _RecentBody extends StatefulWidget {
   const _RecentBody({
     required this.recent,
     required this.library,
@@ -485,8 +545,24 @@ class _RecentBody extends StatelessWidget {
   final CoverState cover;
 
   @override
+  State<_RecentBody> createState() => _RecentBodyState();
+}
+
+class _RecentBodyState extends State<_RecentBody> {
+  /// ListView 与 RawScrollbar 共用的 controller（同 _PlaylistBodyState）。
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
+    final recent = widget.recent;
+    final library = widget.library;
     final entries = recent.entries;
     final keyword = library.effectiveKeyword;
     final visible = keyword.isEmpty
@@ -540,8 +616,10 @@ class _RecentBody extends StatelessWidget {
                   hint: '换个关键词试试',
                 )
               : AutoHideScrollbar(
+                  controller: _controller,
                   child: ListView.builder(
                     key: const Key('recent-list'),
+                    controller: _controller,
                     padding: EdgeInsets.zero,
                     itemCount: visible.length,
                     itemBuilder: (context, index) {
@@ -554,7 +632,7 @@ class _RecentBody extends StatelessWidget {
                         duration: formatTime(entry.duration),
                         // M2b T10：最近条目同走 resolver（最近播放与封面
                         // 显示层的联动 —— spec §17「最近播放打磨」）。
-                        coverPath: cover.coverForDisplay(
+                        coverPath: widget.cover.coverForDisplay(
                           cover: entry.cover,
                           artist: entry.artist,
                           title: entry.title,
@@ -565,7 +643,7 @@ class _RecentBody extends StatelessWidget {
                         active: library.currentId == entry.id,
                         // 已失效的记录不静默失败：给一条提示，绝不假装播放
                         onTap: () => entry.inPlaylist
-                            ? unawaited(player.playTrack(entry.id))
+                            ? unawaited(widget.player.playTrack(entry.id))
                             : library.toastMissingInPlaylist(),
                       );
                     },

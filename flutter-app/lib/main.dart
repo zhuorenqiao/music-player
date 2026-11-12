@@ -60,7 +60,10 @@ import 'state/lyrics_page_controller.dart';
 import 'state/lyrics_state.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
+import 'state/sleep_timer_state.dart';
+import 'state/spectrum_state.dart';
 import 'state/toast_state.dart';
+import 'wave/spectrum_pipeline.dart';
 
 /// 媒体会话附着的上限。`activate()` 会抛（Android 没有 Activity 时 `NO_ACTIVITY`）
 /// 也可能长时间不返回（13+ 要等用户点系统权限对话框），而它一旦把启动扣住，
@@ -141,6 +144,9 @@ Future<AppBootstrap> buildBootstrap({
   // M3 T5：外观状态机的注入接缝（测试传 load 好的真实例；生产不传，
   // 内部 load）。接缝模式与 lyricsMatcher / translationFetcher 相同。
   ThemeState? themeState,
+  // D.3：实时频谱的注入接缝。生产不传，内部按 dataDirectory 建真的
+  // SpectrumPipeline；测试传假源，既不解码也不碰平台通道。
+  SpectrumSource? spectrumSource,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -202,6 +208,35 @@ Future<AppBootstrap> buildBootstrap({
     onPlaylistChanged: _playlistChangeHandler(transport, recent),
   );
   final player = PlayerState(prefs: prefs, transport: transport);
+
+  // 睡眠定时器：到点暂停播放。**在 runApp 之前 restore** —— 上次留下的截止
+  // 时刻还在就接着走（重启应用不该让用户的定时器凭空消失）。
+  final sleepTimer = SleepTimerState(
+    prefs: prefs,
+    player: player,
+    toasts: toasts,
+  );
+  await sleepTimer.restore();
+
+  // D.3：实时频谱调度层。
+  //
+  // 管线本身是纯懒的 —— 只有歌词页打开、且有可解码的本地曲目时才会真的
+  // 去读缓存 / 解码（见 SpectrumState.setVisible）。这里只建对象与接线，
+  // 不预填整个曲库：为一首没打开的歌解一整条 FLAC 是纯浪费。
+  final spectrum = SpectrumState(
+    source: spectrumSource ??
+        SpectrumPipeline(cacheDirectory: '$dataDirectory/spectrum'),
+  );
+  // 切歌联动：与歌词 / 封面同一条 view 事件源。语义快照变了才调，
+  // 进度 tick 不经过这里（SpectrumState 自己会比对 id/句柄去重）。
+  void syncSpectrumTrack() => spectrum.setCurrent(player.current);
+  player.transport.view.addListener(syncSpectrumTrack);
+  // 歌词页开合 → 懒启动 / 清表。控制器是 ChangeNotifier，直接挂监听。
+  void syncSpectrumVisibility() =>
+      spectrum.setVisible(lyricsPage.isOpen);
+  lyricsPage.addListener(syncSpectrumVisibility);
+  syncSpectrumTrack();
+  syncSpectrumVisibility();
 
   // T15：歌词与双语状态。**顺序承重** —— `library` 必须先建好
   //（`onChanged` 引用它），`lyrics` 在 `library` 之后、`player.ready()` /
@@ -384,6 +419,10 @@ Future<AppBootstrap> buildBootstrap({
     cover: cover,
     onCoverViewChanged: syncCoverTrack,
     theme: theme,
+    spectrum: spectrum,
+    onSpectrumViewChanged: syncSpectrumTrack,
+    onSpectrumVisibilityChanged: syncSpectrumVisibility,
+    sleepTimer: sleepTimer,
   );
 }
 

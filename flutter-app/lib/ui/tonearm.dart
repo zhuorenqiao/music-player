@@ -48,9 +48,19 @@ class _TonearmState extends State<Tonearm> with SingleTickerProviderStateMixin {
     reverseCurve: Curves.easeInCubic,
   );
 
+  bool _armPlaced = false;
+
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 初始角度依赖 `MediaQuery.disableAnimationsOf`，而 InheritedWidget 依赖
+    // 不能在 initState() 里取（框架会抛 dependOnInheritedWidgetOfExactType
+    // 红屏，与 _CoverDiscState 同一次回归）。只在首次挂载时定一次初值，
+    // 后续 spinning / reduced 变化仍由 didUpdateWidget 按原口径处理。
+    if (_armPlaced) return;
+    _armPlaced = true;
+    // 保持原 initState 语义：不播入场动画，直接落到播放角度；
+    // 「减少动态效果」开着时维持摆出角度（value 0）。
     if (widget.spinning && !MediaQuery.disableAnimationsOf(context)) {
       _arm.value = 1;
     }

@@ -7,6 +7,8 @@
  * 几个刻意保留的细节：
  * · 主封面 / 歌词页头部封面由 CSS 动画驱动，播放时 running、
  *   暂停时 paused —— 停在当前角度而不是跳回 0deg。
+ * · 黑胶整张一起转：封面（标签位）与外圈盘面（`.stage__vinyl-disc`）共用同一条
+ *   cover-rotate 动画、同一个相位；斜向反光留在不转的外层（灯不随唱片转）。
  * · 点封面 = 放大看完整方图；点曲目区其它位置 = 进完整歌词页；点歌词行 = 定位播放。
  * · 进度值走 usePlaybackTime()（useSyncExternalStore），不会带着整棵树每帧重渲染。
  */
@@ -16,14 +18,18 @@ import { debounce } from 'lodash-es';
 import { ToastProvider, useToast } from './state/toast';
 import { PlayerProvider, usePlayer, usePlaybackTime, useBufferedEnd } from './state/player';
 import { CoverProvider, coverForDisplay, useCover } from './state/covers';
-import { LyricsProvider, useLyrics, findActiveCue } from './state/lyrics';
+import { LyricsProvider, useLyrics, findActiveCue, type Cue } from './state/lyrics';
+import { SleepTimerProvider } from './state/sleep-timer';
 import { WaveStyleProvider } from './state/wave-style';
 import { ThemeProvider } from './state/theme';
+import { GlassProvider } from './state/glass';
 import { useLibrary } from './state/library';
 import { useAutoHideScroll } from './state/useAutoHideScroll';
 import { WaveStrip } from './components/WaveStrip';
 import { BilingualToggle } from './components/BilingualToggle';
 import { LyricColorButton } from './components/LyricColorButton';
+import { SleepTimerButton } from './components/SleepTimerButton';
+import { GlassControl } from './components/GlassControl';
 import { LibraryMenu } from './components/LibraryMenu';
 import { WaveStylePicker } from './components/WaveStylePicker';
 import { clearRecent as clearRecentStore, formatRelativeTime } from './lib/recent-store.js';
@@ -246,16 +252,38 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
 
   // 当前行滚到中间；手动滚动后 2.6s 再回到跟随
   const manualUntil = useRef(0);
+  /**
+   * 上一次的歌词内容（列表身份）：换了就说明是换歌、或同一首的纯文本升级成了带时间轴。
+   *
+   * 判定用**身份**而不是逐字比较：cues / plainLines 都是 useMemo 的产物，只有内容
+   * 真换了才会换身份 —— 同一首歌的译文刷新、进度推进都不会动它。
+   */
+  const lastContent = useRef<{ cues: Cue[]; plainLines: string[] } | null>(null);
   useEffect(() => {
     const list = listRef.current;
-    if (!list || activeIndex < 0 || Date.now() < manualUntil.current) {
+    if (!list) {
+      return;
+    }
+    const prev = lastContent.current;
+    lastContent.current = { cues, plainLines };
+    /**
+     * 歌词内容换了 → 旧歌的滚动位置不能留给新歌：拨回最上方。
+     * <ul> 是同一个 DOM 节点，不拨回去的话新歌会停在旧歌滚到的位置（多半是中间）。
+     * 瞬时跳（没有 behavior），从旧歌中段一路滑到新歌顶部显得拖沓。
+     * 这一轮不做居中：新歌的当前行会立刻把视图从顶部拉走，「回到最上方」就看不见了。
+     */
+    if (prev !== null && (prev.cues !== cues || prev.plainLines !== plainLines)) {
+      list.scrollTo({ top: 0 });
+      return;
+    }
+    if (activeIndex < 0 || Date.now() < manualUntil.current) {
       return;
     }
     const line = list.children[activeIndex] as HTMLElement | undefined;
     if (line) {
       list.scrollTo({ top: line.offsetTop - (list.clientHeight - line.clientHeight) / 2, behavior: 'smooth' });
     }
-  }, [activeIndex]);
+  }, [activeIndex, cues, plainLines]);
 
   if (cues.length === 0 && plain) {
     // 纯文本歌词已在 provider 里按原文换行拆好：直接塞进容器会被 HTML 折叠成一整段
@@ -337,7 +365,9 @@ function useTrackSwipe() {
       return;
     }
     // 封面本身也能滑：它是一个用于放大的按钮，但横滑不算点击
-    if ((event.target as Element).closest('button:not(.stage__cover-wrap), input, select, textarea, .wave-style')) {
+    // 歌词页右上角那三颗小按钮（.lyric-tools）连同它们弹出的面板一并排除：
+    // 面板里能拖滑杆（拖动 = 横向手势），不能被当成「左右滑切歌」
+    if ((event.target as Element).closest('button:not(.stage__cover-wrap), input, select, textarea, .wave-style, .lyric-tools')) {
       start.current = null;
       return;
     }
@@ -386,10 +416,22 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
   // 首页紧凑歌词也做成可滚动列表：默认跟随当前行，手动滑动后 2.6s 再恢复跟随
   const compactScroll = useAutoHideScroll<HTMLUListElement>();
   const compactManualUntil = useRef(0);
+  /** 上一次的歌词内容（列表身份）：换了 = 换歌 / 纯文本升级成带时间轴。 */
+  const compactLastCues = useRef<Cue[] | null>(null);
 
   useEffect(() => {
     const list = compactScroll.ref.current;
     if (!list) {
+      return;
+    }
+    const prevCues = compactLastCues.current;
+    compactLastCues.current = cues;
+    /**
+     * 歌词内容换了 → 回到最上方（与完整歌词页同一套判定，见 LyricsView）。
+     * 这一轮不做居中：新歌的当前行会立刻把视图从顶部拉走，「回到最上方」就看不见了。
+     */
+    if (prevCues !== null && prevCues !== cues) {
+      list.scrollTo({ top: 0 });
       return;
     }
     if (activeIndex < 0) {
@@ -403,7 +445,7 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
     if (line) {
       list.scrollTo({ top: line.offsetTop - (list.clientHeight - line.clientHeight) / 2, behavior: 'smooth' });
     }
-  }, [activeIndex, compactScroll.ref]);
+  }, [activeIndex, cues, compactScroll.ref]);
 
   const onStageClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement;
@@ -430,7 +472,14 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
           onOpenLightbox(event.currentTarget);
         }}
       >
-        <span className="stage__vinyl" aria-hidden="true" />
+        {/*
+          盘面分两层：`.stage__vinyl-disc` 是跟着唱片转的那层（纹路 + 柔和高光 +
+          一道很淡的弧形高光），外层 `.stage__vinyl` 只留反光与内阴影 —— 灯光固定
+          不动，唱片转。反光留在外层才不会跟着盘面一起转。
+        */}
+        <span className="stage__vinyl" aria-hidden="true">
+          <span className="stage__vinyl-disc" />
+        </span>
         <img
           ref={discRef}
           className={`stage__cover${playing ? ' is-spinning' : ''}`}
@@ -540,7 +589,9 @@ function Panel({ onClose, onNavigate }: {
   /** 选中曲目开始播放后调用（弹层据此收起） */
   onNavigate?: () => void;
 } = {}) {
-  const { tracks, currentIndex, playing, playAt, removeTrack, removeRecent, recent, syncRecent, failedIds, notice, hideNotice, resumeAutoplay } = usePlayer();
+  const { current, tracks, currentIndex, playing, playAt, removeTrack, removeRecent, recent, syncRecent, failedIds, notice, hideNotice, resumeAutoplay } = usePlayer();
+  /** 播放列表卡跟着播放卡一起做磨砂：用当前曲目的封面当模糊底 */
+  const panelCover = useCover(current);
   const { show } = useToast();
   const [tab, setTab] = useState<'playlist' | 'recent'>('playlist');
   /**
@@ -638,6 +689,9 @@ function Panel({ onClose, onNavigate }: {
       style={activeHeightLock === null ? undefined : { minHeight: activeHeightLock }}
       aria-label="播放列表与最近播放"
     >
+      <div className="glass-frost" aria-hidden="true">
+        <img src={panelCover} alt="" />
+      </div>
       <div className="panel__head">
         <div
           className="panel__tabs"
@@ -929,10 +983,33 @@ function PlaylistSheet({ open, onClose, children }: {
 // 控制区
 // ---------------------------------------------------------------------------
 
-function Transport({ onOpenQueue, queueOpen }: {
+/**
+ * 三颗「设置类」小按钮：「T」（歌词高亮色）、水滴（卡面毛玻璃）、闹钟（睡眠定时器）。
+ *
+ * 简约模式（封面页）里它们排在进度条上方那条的左端；
+ * 沉浸模式（完整歌词页）里这条要让给频谱条，于是整组挪到歌词页右上角——
+ * 也就是歌名右侧、波形样式下拉左边的那一格（见 LyricsPage 的 head）。
+ *
+ * 两处共用同一个组件，面板弹出的方向由 CSS 决定：
+ * 底部那组向上弹（下面是进度条，没地方放），
+ * 头部那组（`head`）向下弹（上面就是屏幕顶）。
+ */
+function ToolButtons({ variant }: { variant?: 'head' }) {
+  return (
+    <div className={`lyric-tools${variant === 'head' ? ' lyric-tools--head' : ''}`}>
+      <LyricColorButton />
+      <GlassControl />
+      <SleepTimerButton />
+    </div>
+  );
+}
+
+function Transport({ onOpenQueue, queueOpen, immersive }: {
   /** 打开播放列表弹层（只在移动端渲染入口） */
   onOpenQueue: () => void;
   queueOpen: boolean;
+  /** 沉浸模式（完整歌词页）：这三颗按钮让位给右上角那一格 */
+  immersive: boolean;
 }) {
   const { current, playing, loading, duration, volume, muted, mode, modeLabel, togglePlay, playNext, playPrev, seek, setVolume, toggleMute, cycleMode } = usePlayer();
   const { importFiles } = useLibrary();
@@ -961,9 +1038,10 @@ function Transport({ onOpenQueue, queueOpen }: {
 
   return (
     <section className="transport" aria-label="播放控制">
-      {/* 进度条上方那条：左端是「T」（改歌词高亮色），频谱只在歌词页跟它同排 */}
+      {/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器，
+          频谱只在歌词页跟它们同排；沉浸模式这三颗按钮挪到歌词页右上角了（见 ToolButtons） */}
       <div className="transport__wave">
-        <LyricColorButton />
+        {!immersive && <ToolButtons />}
         <WaveStrip />
       </div>
       <div className="progress">
@@ -1069,7 +1147,9 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
     if (window.getSelection()?.toString()) {
       return;
     }
-    if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status, .wave-style')) {
+    // .lyric-tools 是右上角那三颗小按钮连同它们弹出的面板：
+    // 面板里有滑杆和输入框，点它们都不该被当成「空白处」把歌词页关掉
+    if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status, .wave-style, .lyric-tools')) {
       return;
     }
     window.dispatchEvent(new CustomEvent('app:close-lyrics-page'));
@@ -1084,11 +1164,16 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
     >
       <header className="lyrics-page__head">
         <div className="lyrics-page__meta">
-          <p className="lyrics-page__title">{current?.title ?? '—'}</p>
+          {/* 歌名与「双语」并排：按钮小一号，跟在标题后面 */}
+          <div className="lyrics-page__title-row">
+            <p className="lyrics-page__title">{current?.title ?? '—'}</p>
+            <BilingualToggle />
+          </div>
           <p className="lyrics-page__artist">{[current?.artist, current?.album].filter(Boolean).join(' · ') || '未知歌手'}</p>
         </div>
-        {/* 右上角两个同款控件：双语开关 + 选下面那条波形的样式 */}
-        <BilingualToggle />
+        {/* 「T」/毛玻璃/睡眠定时器：沉浸模式里从控制条挪到这一格（歌名右边、下拉左边） */}
+        <ToolButtons variant="head" />
+        {/* 右上角只留选下面那条波形的样式 */}
         <WaveStylePicker />
       </header>
       {/* 左歌词、右封面；封面在这页只是展示用，不参与旋转（没有 is-spinning） */}
@@ -1145,6 +1230,9 @@ const LIGHTBOX_MAX_SCALE = 4;
 
 /** 滚轮一格缩放多少（指数缩放，手感均匀）。 */
 const LIGHTBOX_ZOOM_RATE = 0.0016;
+
+/** 双击图片一次放大多少倍。 */
+const LIGHTBOX_DOUBLE_SCALE = 2;
 
 function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { current } = usePlayer();
@@ -1240,6 +1328,33 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
   }, []);
 
   /**
+   * 以视口坐标 (clientX, clientY) 为锚点缩放到 nextScale：
+   * 锚点底下那片像素保持不动（滚轮和双击共用这一套换算）。
+   */
+  const zoomAt = useCallback((nextScale: number, clientX: number, clientY: number) => {
+    const img = imgRef.current;
+    if (!img) {
+      return;
+    }
+    const current = scaleRef.current;
+    if (nextScale === current) {
+      return;
+    }
+    const currentOffset = offsetRef.current;
+    const rect = img.getBoundingClientRect();
+    // 锚点相对图片中心的坐标
+    const cx = clientX - (rect.left + rect.width / 2);
+    const cy = clientY - (rect.top + rect.height / 2);
+    // 换算到缩放前的图片本地坐标，缩放后让同一点落回锚点下
+    const localX = (cx - currentOffset.x) / current;
+    const localY = (cy - currentOffset.y) / current;
+    applyView(nextScale, clampOffset(
+      { x: cx - localX * nextScale, y: cy - localY * nextScale },
+      nextScale,
+    ));
+  }, [applyView, clampOffset]);
+
+  /**
    * 滚轮缩放，以光标位置为锚点：光标底下那片像素保持不动。
    *
    * 必须用原生非 passive 监听：React 的 onWheel 绑在根节点上且是 passive 的，
@@ -1252,34 +1367,15 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
     }
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      const img = imgRef.current;
-      if (!img) {
-        return;
-      }
-      const current = scaleRef.current;
-      const currentOffset = offsetRef.current;
       const nextScale = Math.min(
         LIGHTBOX_MAX_SCALE,
-        Math.max(1, current * Math.exp(-event.deltaY * LIGHTBOX_ZOOM_RATE)),
+        Math.max(1, scaleRef.current * Math.exp(-event.deltaY * LIGHTBOX_ZOOM_RATE)),
       );
-      if (nextScale === current) {
-        return;
-      }
-      // 光标相对图片中心的坐标
-      const rect = img.getBoundingClientRect();
-      const cx = event.clientX - (rect.left + rect.width / 2);
-      const cy = event.clientY - (rect.top + rect.height / 2);
-      // 换算到缩放前的图片本地坐标，缩放后让同一点落回光标下
-      const localX = (cx - currentOffset.x) / current;
-      const localY = (cy - currentOffset.y) / current;
-      applyView(nextScale, clampOffset(
-        { x: cx - localX * nextScale, y: cy - localY * nextScale },
-        nextScale,
-      ));
+      zoomAt(nextScale, event.clientX, event.clientY);
     };
     stage.addEventListener('wheel', onWheel, { passive: false });
     return () => stage.removeEventListener('wheel', onWheel);
-  }, [applyView, clampOffset, open]);
+  }, [open, zoomAt]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLImageElement>) => {
     try {
@@ -1408,6 +1504,15 @@ function Lightbox({ open, onClose }: { open: boolean; onClose: () => void }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          const current = scaleRef.current;
+          // 双击逐级放大：1× → 2× → 4×（上限）→ 回到 1×，不留死角
+          const next = current >= LIGHTBOX_MAX_SCALE
+            ? 1
+            : Math.min(LIGHTBOX_MAX_SCALE, current * LIGHTBOX_DOUBLE_SCALE);
+          zoomAt(next, event.clientX, event.clientY);
+        }}
       />
       <p className="lightbox__caption">{[current.title, current.artist, current.album].filter(Boolean).join(' · ')}</p>
     </div>
@@ -1447,6 +1552,8 @@ function DropOverlay({ visible }: { visible: boolean }) {
 
 function Shell() {
   const { current, togglePlay, seekBy, setVolume, volume, playNext, playPrev, resumeAutoplay } = usePlayer();
+  /** 毛玻璃背后的模糊封面：用显示层当前那张，切歌后自动跟着换 */
+  const playerCover = useCover(current);
   const { importFiles } = useLibrary();
   const [lyricsPage, setLyricsPage] = useState(false);
   const [lightbox, setLightbox] = useState(false);
@@ -1666,12 +1773,16 @@ function Shell() {
         <Header immersive={lyricsPage} onSwitchView={() => setLyricsPage((value) => !value)} />
         <main className="app__main">
           <div className="player">
+            <div className="glass-frost" aria-hidden="true">
+              <img src={playerCover} alt="" />
+            </div>
             {lyricsPage
               ? <LyricsPage onOpenLightbox={openLightbox} />
               : <Stage onOpenLightbox={openLightbox} discRef={stageDiscRef} />}
             <Transport
               onOpenQueue={() => setQueueOpen(true)}
               queueOpen={queueOpen}
+              immersive={lyricsPage}
             />
           </div>
           {!compact && <Panel />}
@@ -1704,15 +1815,21 @@ function WithLyrics() {
 export default function App() {
   return (
     <ThemeProvider>
-      <ToastProvider>
-        <WaveStyleProvider>
-          <PlayerProvider>
-            <CoverProvider>
-              <WithLyrics />
-            </CoverProvider>
-          </PlayerProvider>
-        </WaveStyleProvider>
-      </ToastProvider>
+      <GlassProvider>
+        <ToastProvider>
+          <WaveStyleProvider>
+            <PlayerProvider>
+              <CoverProvider>
+                {/* 睡眠定时器要能暂停播放（usePlayer）并弹提示（useToast），
+                    所以挂在 PlayerProvider / ToastProvider 里面 */}
+                <SleepTimerProvider>
+                  <WithLyrics />
+                </SleepTimerProvider>
+              </CoverProvider>
+            </PlayerProvider>
+          </WaveStyleProvider>
+        </ToastProvider>
+      </GlassProvider>
     </ThemeProvider>
   );
 }

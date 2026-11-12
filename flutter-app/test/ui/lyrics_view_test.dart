@@ -623,6 +623,174 @@ void main() {
     });
   });
 
+  group('切歌后回到最上方', () {
+    /// 另一首歌的歌词：行数相同、内容不同（列表身份变了 → 判定为「内容换了」）。
+    final otherLines = cued([
+      for (var i = 0; i < 40; i++) (i.toDouble(), '别的第$i句'),
+    ]);
+
+    testWidgets('歌词内容换了：滚动位置回到最上方', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: lines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final position = tester
+          .state<ScrollableState>(find.byType(Scrollable))
+          .position;
+
+      // 先滚到中间：模拟旧歌已经滚过去了
+      await tester.drag(
+        find.byKey(const Key('lyrics-scroll')),
+        const Offset(0, -300),
+      );
+      await tester.pumpAndSettle();
+      expect(position.pixels, greaterThan(0));
+
+      // 换歌：歌词内容换了 → 回到最上方
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: otherLines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(position.pixels, 0, reason: '换歌后新歌的歌词应从最上方开始');
+    });
+
+    testWidgets('内容换了但高亮行没变（旧实现漏掉的那种）也回到顶部', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: lines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final position = tester
+          .state<ScrollableState>(find.byType(Scrollable))
+          .position;
+
+      // 换到第 20 行：跟着居中，视图滚下去了
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: lines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 20,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(position.pixels, greaterThan(0));
+
+      // 换歌，但高亮行号恰好相同（20 → 20）：靠 activeIndex 变化触发滚动的旧
+      // 实现在这里完全不会动 —— 新歌就停在旧歌滚到的位置。
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: otherLines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 20,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(position.pixels, 0);
+    });
+
+    testWidgets('内容换了这一轮不做居中：停在顶部，下一行变化时恢复跟随', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: lines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 0,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final position = tester
+          .state<ScrollableState>(find.byType(Scrollable))
+          .position;
+
+      // 换歌 + 高亮行换到 20：这一轮只回顶部，不把视图拉到第 20 行
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: otherLines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 20,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(position.pixels, 0, reason: '换歌这一轮先停在顶部');
+
+      // 下一行变化：恢复跟随（第 21 行居中）
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 200,
+            child: LyricsLinesView(
+              lines: otherLines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 21,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(position.pixels, greaterThan(0));
+    });
+  });
+
   group('滚动行为', () {
     testWidgets('滚轮能滚动，且算手动（暂停跟随）', (tester) async {
       await tester.pumpWidget(

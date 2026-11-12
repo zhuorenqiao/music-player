@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 /** 抽屉滑出 / 收回的时长（与 CSS 动画一致）。 */
-const EXIT_MS = 200;
+export const EXIT_MS = 200;
 
 const CloseIcon = () => (
   <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">

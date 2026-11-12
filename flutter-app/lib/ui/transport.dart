@@ -22,6 +22,7 @@
 // 音量 / 模式 / 播放态这些语义变化都在 `view` 里，进度只在 `position` 里。
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -31,14 +32,15 @@ import '../playback/track.dart';
 import '../playback/transport_controller.dart';
 import '../state/lyrics_page_controller.dart';
 import '../state/player_state.dart';
+import '../state/spectrum_state.dart';
 import 'wave_strip.dart';
 import '../wave/spectrum_pipeline.dart';
 import '../theme/app_tokens.dart';
 import 'autoplay_gate.dart';
-import 'glass_control.dart';
 import 'library_sheet.dart';
-import 'lyric_color_button.dart';
+import 'player_card.dart';
 import 'progress_slider.dart';
+import 'tool_buttons.dart';
 import 'volume_slider.dart';
 
 /// 控制条按钮之间的间距：`.controls { gap: 12px }`（桌面 grid）。
@@ -102,6 +104,7 @@ class TransportBar extends StatelessWidget {
     final desktop = isDesktop(MediaQuery.sizeOf(context).width);
     if (_preview) {
       return _chrome(
+        context: context,
         tokens: tokens,
         desktop: desktop,
         showWaveStrip: false,
@@ -109,6 +112,7 @@ class TransportBar extends StatelessWidget {
         waveTrack: null,
         wavePlaying: playing,
         wavePosition: positionSeconds,
+        wavePositionListenable: null,
         progress: ProgressSlider(
           position: positionSeconds,
           buffered: bufferedSeconds,
@@ -129,16 +133,28 @@ class TransportBar extends StatelessWidget {
     }
     final player = context.read<PlayerState>();
     // M3 T11：歌词页开着时 WaveStrip 显示在 transport 行（app.css:3926），
-    // 首页隐藏（:1111）；帧表由组合根经 SpectrumPipeline 异步预填（T15 接）。
+    // 首页隐藏（:1111）。
     final inLyricsPage = context.watch<LyricsPageController?>()?.isOpen ?? false;
+    // D.3：帧表从组合根注入的 SpectrumState 取。provider 可空 watch ——
+    // 与歌词/封面那几处同一容错模式（纯展示测试没注册时退回装饰回退）。
+    // frameTableFor(id) 保证换曲那一帧不会短暂画出上一首的频谱。
+    final spectrum = context.watch<SpectrumState?>();
+    final waveTrack = player.current;
+    final frameTable = waveTrack == null
+        ? null
+        : spectrum?.frameTableFor(waveTrack.id);
     return _chrome(
+      context: context,
       tokens: tokens,
       desktop: desktop,
       showWaveStrip: inLyricsPage,
-      frameTable: null,
-      waveTrack: player.current,
+      frameTable: frameTable,
+      waveTrack: waveTrack,
       wavePlaying: player.view.value.playing,
       wavePosition: player.position.value,
+      // 真实帧表是按 positionSeconds 取帧的，所以频谱条必须订阅进度。
+      // 只把 notifier 传到 WaveStrip 那一片叶子，不整条控制条跟着 4Hz 重建。
+      wavePositionListenable: inLyricsPage ? player.position : null,
       // 进度行只挂 position：缓冲值在重建时顺带读一次，不单独订阅。
       progress: ValueListenableBuilder<double>(
         valueListenable: player.position,
@@ -182,6 +198,7 @@ class TransportBar extends StatelessWidget {
   }
 
   Widget _chrome({
+    required BuildContext context,
     required AppTokens tokens,
     required bool desktop,
     required bool showWaveStrip,
@@ -189,9 +206,26 @@ class TransportBar extends StatelessWidget {
     required Track? waveTrack,
     required bool wavePlaying,
     required double wavePosition,
+    required ValueListenable<double>? wavePositionListenable,
     required Widget progress,
     required Widget controls,
   }) {
+    // 在 [PlayerCard] 里：`.player > .transport` 要把边框 / 圆角 / 玻璃底 /
+    // 阴影全剥掉（app.css:510-518），只保留 padding 与内部两行，避免合成卡
+    // 中间多出一道缝。纯展示 / 测试没有 scope 时仍是独立卡（既有断言不破）。
+    if (PlayerCardScope.maybeOf(context) != null) {
+      return _body(
+        desktop: desktop,
+        showWaveStrip: showWaveStrip,
+        frameTable: frameTable,
+        waveTrack: waveTrack,
+        wavePlaying: wavePlaying,
+        wavePosition: wavePosition,
+        wavePositionListenable: wavePositionListenable,
+        progress: progress,
+        controls: controls,
+      );
+    }
     return DecoratedBox(
       decoration: BoxDecoration(
         border: Border(
@@ -210,32 +244,65 @@ class TransportBar extends StatelessWidget {
         boxShadow: tokens.shadowBar,
       ),
       // 透明 Material 只为 InkWell 铺一块画布，底色已经在上面画好了
-      child: Material(
-        type: MaterialType.transparency,
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(kRadiusXl),
+      child: _body(
+        desktop: desktop,
+        showWaveStrip: showWaveStrip,
+        frameTable: frameTable,
+        waveTrack: waveTrack,
+        wavePlaying: wavePlaying,
+        wavePosition: wavePosition,
+        wavePositionListenable: wavePositionListenable,
+        progress: progress,
+        controls: controls,
+      ),
+    );
+  }
+
+  /// 卡内的两行内容（wave 行 + 进度 + 控制）。独立卡与 [PlayerCard] 共用。
+  Widget _body({
+    required bool desktop,
+    required bool showWaveStrip,
+    required SpectrumFrameTable? frameTable,
+    required Track? waveTrack,
+    required bool wavePlaying,
+    required double wavePosition,
+    required ValueListenable<double>? wavePositionListenable,
+    required Widget progress,
+    required Widget controls,
+  }) {
+    return Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        // `.transport { padding: 14px 16px calc(12px + safe-area) }`（:1092）；
+        // 窄屏左右 14（老实现沿用）。
+        padding: EdgeInsets.fromLTRB(
+          desktop ? 16 : 14,
+          14,
+          desktop ? 16 : 14,
+          12,
         ),
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            desktop ? 16 : 14,
-            14,
-            desktop ? 16 : 14,
-            12,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            // 拉伸：控制行的 space-between 要的是整行宽度，不是按钮自身宽度
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // M3 T11：进度行上方的「transport__wave」行——左端 T（歌词高
-              // 亮色）与水滴（卡面透明/磨砂），其后 WaveStrip（歌词页显示）。
-              _WaveRow(showWaveStrip: showWaveStrip, frameTable: frameTable, track: waveTrack, playing: wavePlaying, positionSeconds: wavePosition),
-              const SizedBox(height: 6),
-              progress,
-              const SizedBox(height: _barVerticalGap),
-              controls,
-            ],
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          // 拉伸：控制行的 space-between 要的是整行宽度，不是按钮自身宽度
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // M3 T11：进度行上方的「transport__wave」行——简约模式左端是
+            // T（歌词高亮色）、水滴（卡面透明/磨砂）与睡眠定时器，其后
+            // WaveStrip；歌词页（沉浸模式）开着时那三颗按钮搬到歌词页页头，
+            // 这行只剩频谱。
+            _WaveRow(
+              showWaveStrip: showWaveStrip,
+              frameTable: frameTable,
+              track: waveTrack,
+              playing: wavePlaying,
+              positionSeconds: wavePosition,
+              positionListenable: wavePositionListenable,
+            ),
+            const SizedBox(height: 6),
+            progress,
+            const SizedBox(height: _barVerticalGap),
+            controls,
+          ],
         ),
       ),
     );
@@ -243,8 +310,12 @@ class TransportBar extends StatelessWidget {
 }
 
 /// 进度行上方那条（App.tsx:973-977 的 transport__wave 对译）：
-/// 左端 T（歌词高亮色，T12）与水滴（卡面透明/磨砂，T7），其后是 WaveStrip。
+/// 左端 T（歌词高亮色，T12）与水滴（卡面透明/磨砂，T7），其后 WaveStrip。
 /// **首页该行 WaveStrip 隐藏**（app.css:1111），[showWaveStrip] 只在歌词页为真。
+///
+/// **歌词页开着 = 沉浸模式**：这时三颗按钮已经搬到歌词页页头（歌名右边），
+/// 这行只剩频谱 —— 与 React 的 `{!immersive && <ToolButtons />}` 同构
+/// （src/App.tsx:1043-1046）。
 class _WaveRow extends StatelessWidget {
   const _WaveRow({
     required this.showWaveStrip,
@@ -252,6 +323,7 @@ class _WaveRow extends StatelessWidget {
     required this.track,
     required this.playing,
     required this.positionSeconds,
+    this.positionListenable,
   });
 
   final bool showWaveStrip;
@@ -260,24 +332,27 @@ class _WaveRow extends StatelessWidget {
   final bool playing;
   final double positionSeconds;
 
+  /// 进度 notifier：给了就让 WaveStrip 自己订阅（只有这一片叶子跟着 4Hz 重建）。
+  final ValueListenable<double>? positionListenable;
+
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const LyricColorButton(),
-        const SizedBox(width: 8),
-        const GlassControl(),
-        if (showWaveStrip) ...[
+        if (!showWaveStrip) ...[
+          const ToolButtons(),
           const SizedBox(width: 10),
+        ],
+        if (showWaveStrip)
           Expanded(
             child: WaveStrip(
               frameTable: frameTable,
               track: track,
               playing: playing,
               positionSeconds: positionSeconds,
+              positionListenable: positionListenable,
             ),
           ),
-        ],
       ],
     );
   }

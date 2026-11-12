@@ -120,6 +120,8 @@ interface PlayerContextValue {
   player: Player;
   playlist: Playlist;
   togglePlay: () => void;
+  /** 幂等暂停（睡眠定时器到点时用） */
+  pause: () => void;
   playAt: (index: number, options?: { autoplay?: boolean }) => void;
   playNext: (options?: { auto?: boolean }) => void;
   playPrev: () => void;
@@ -325,6 +327,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     player.seek(seconds);
     timeStore.set(seconds);
   }, [player]);
+
+  /**
+   * 幂等暂停：睡眠定时器到点时调用。
+   *
+   * 不能拿 [togglePlay] 顶替 —— 那是「切换」语义：定时器触发的那一刻用户可能
+   * 刚好手动暂停过，再 toggle 一下就把音乐放出来了。这里只保证「此刻是暂停」。
+   */
+  const pause = useCallback(() => {
+    if (!player.paused) {
+      player.pause();
+    }
+    setPlaying(false);
+    clearPendingAutoplay();
+  }, [clearPendingAutoplay, player]);
 
   const seekBy = useCallback((delta: number) => player.seekBy(delta), [player]);
 
@@ -594,9 +610,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const actions = useMemo(() => ({
     togglePlay, playAt: goTo, playNext, playPrev, playPrevTrack, seek, seekBy, setVolume, toggleMute,
     cycleMode, removeTrack, moveTrack, clearList, refresh, syncRecent, removeRecent, clearFailure, persist,
-    notice, showNotice, hideNotice, resumeAutoplay,
+    notice, showNotice, hideNotice, resumeAutoplay, pause,
   }), [
-    clearFailure, cycleMode, clearList, goTo, moveTrack, notice, persist, playNext, playPrev, playPrevTrack,
+    clearFailure, cycleMode, clearList, goTo, moveTrack, notice, pause, persist, playNext, playPrev, playPrevTrack,
     refresh, removeTrack, removeRecent, resumeAutoplay, seek, seekBy, setVolume, showNotice, hideNotice,
     syncRecent, toggleMute, togglePlay,
   ]);

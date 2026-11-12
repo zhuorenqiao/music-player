@@ -1,4 +1,4 @@
-// lib/theme/app_tokens.dart
+﻿// lib/theme/app_tokens.dart
 import 'package:flutter/material.dart';
 
 /// 设计 token 表：字段名与 `src/styles/app.css` 的 `:root` 变量一一对应。
@@ -599,7 +599,7 @@ class AppTokens {
     frostCoverSat: 1.4, // saturate(1.4)
     frostCoverBrightness: 1.35, // brightness(1.35)
     frostVeilA: Color(0x33FFFFFF), // rgb(255 255 255 / 0.2)
-    frostVeilB: Color(0x10FFFFFF), // rgb(255 255 255 / 0.06)（0.06×255=15.3，按任务清单取 0x10；四舍五入是 0x0F，差异已记录）
+    frostVeilB: Color(0x0FFFFFFF), // rgb(255 255 255 / 0.06)：0.06×255=15.3 → 四舍五入 0x0F（M3 D.7 修正）
     vinylLow: Color(0x0FFFFFFF), // 黑胶四色深浅同值（app.css:85-88）
     vinylMid: Color(0x17FFFFFF),
     vinylHi: Color(0x29FFFFFF),
@@ -680,7 +680,7 @@ class AppTokens {
     frostCoverSat: 1.4,
     frostCoverBrightness: 1.35,
     frostVeilA: Color(0x33FFFFFF),
-    frostVeilB: Color(0x10FFFFFF),
+    frostVeilB: Color(0x0FFFFFFF),
     vinylLow: Color(0x0FFFFFFF),
     vinylMid: Color(0x17FFFFFF),
     vinylHi: Color(0x29FFFFFF),
@@ -760,7 +760,7 @@ class AppTokens {
     frostCoverSat: 1.4,
     frostCoverBrightness: 1.35,
     frostVeilA: Color(0x33FFFFFF),
-    frostVeilB: Color(0x10FFFFFF),
+    frostVeilB: Color(0x0FFFFFFF),
     vinylLow: Color(0x0FFFFFFF),
     vinylMid: Color(0x17FFFFFF),
     vinylHi: Color(0x29FFFFFF),

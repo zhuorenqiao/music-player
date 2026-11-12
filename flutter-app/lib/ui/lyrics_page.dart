@@ -6,8 +6,8 @@
 //
 // 结构与原版逐块对齐：
 //   * 头部 `.lyrics-page__head`：左侧 `.lyrics-page__meta`（歌名 + 双语开关一行、
-//     `artist · album` 一行），**右上角本段留空** —— 原版那里是 `WaveStylePicker`，
-//     属于 M3，不在这里凭空造一个；
+//     `artist · album` 一行），**紧跟着三颗工具按钮**（「T」/毛玻璃/睡眠定时器，
+//     沉浸模式里从控制条搬上来的），**右上角是 `WaveStylePicker`**（M3 D.4 补上）；
 //   * 正文 `.lyrics-page__body`：宽 ≥900 两列 `minmax(0, 560px) clamp(240px, 26vw,
 //     360px)`、gap 32、顶上一道 `border-top`；窄屏单列且**整块封面不出现**
 //     （原版靠 `@media` 把 `.lyrics-page__art` 藏掉）；
@@ -51,7 +51,10 @@ import '../theme/app_tokens.dart';
 import 'bilingual_toggle.dart';
 import 'lyrics_status.dart';
 import 'lyrics_view.dart';
+import 'tool_buttons.dart';
+import 'tool_panel.dart';
 import 'vinyl_deck.dart';
+import 'wave_style_picker.dart';
 
 // -- 规格常量（逐字取自 app.css，不要顺手改） ------------------------------
 
@@ -164,6 +167,10 @@ class _LyricsPageState extends State<LyricsPage> {
     final desktop = isDesktop(MediaQuery.sizeOf(context).width);
 
     final titleRow = Row(
+      // mainAxisSize.min：这一行按内容宽收缩（React 的 .lyrics-page__meta 是
+      // `flex: 0 1 auto`，收缩到内容宽），于是页头里的三颗工具按钮能**紧跟在
+      // 歌名后面**，而不是被撑到最右（那是 .wave-style 的地盘）。
+      mainAxisSize: MainAxisSize.min,
       children: [
         Flexible(
           child: Text(
@@ -223,11 +230,31 @@ class _LyricsPageState extends State<LyricsPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
+              // 富余空间全落在「左组」与下拉之间 —— 这就是 React 那道
+              // `margin-left: auto`（app.css 的 .wave-style）：按钮紧跟歌名，
+              // 下拉贴最右。
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _BackButton(onTap: _close),
-                const SizedBox(width: _kHeadGap),
-                Expanded(child: meta),
-                // 右上角本段留空：原版是 WaveStylePicker，属 M3（不要凭空造）。
+                // 左组：「返回」+ 歌名块 + 三颗工具按钮。
+                // 组内用 mainAxisSize.min —— 组不撑开，宽度由内容决定。
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _BackButton(onTap: _close),
+                      const SizedBox(width: _kHeadGap),
+                      Flexible(child: meta),
+                      const SizedBox(width: _kHeadGap),
+                      // 「T」/毛玻璃/睡眠定时器：沉浸模式里从控制条挪到这一格
+                      // （歌名右边、下拉左边），面板随之改向下弹。
+                      const ToolButtons(side: ToolPanelSide.below),
+                    ],
+                  ),
+                ),
+                // M3 D.4：右上角是波形样式下拉（原版 App.tsx:1100 的
+                // WaveStylePicker）。面板用 Overlay 挂在更上层，不会被歌词页的
+                // 裁剪/圆角切掉。
+                const WaveStylePicker(),
               ],
             ),
             const SizedBox(height: _kPageGap),
@@ -494,10 +521,13 @@ class _ArtColumn extends StatelessWidget {
             width: size,
             height: size,
             // 静态、不转：M1 的 CoverDisc 就这个形态（spinning 恒 false）。
+            // 歌词页**不画黑胶外圈**（原版 `.lyrics-page__cover` 只是封面本身，
+            // app.css:3055-3065，没有 `.stage__vinyl` 那层唱机外圈）。
             child: CoverDisc(
               coverPath: coverPath,
               size: size,
               spinning: false,
+              vinyl: false,
               fallbackArtist: fallbackArtist,
               fallbackTitle: fallbackTitle,
             ),

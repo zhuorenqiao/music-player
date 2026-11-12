@@ -23,6 +23,12 @@ export const STORAGE_KEYS = Object.freeze({
   waveColored: 'waveColored',
   /** 歌词高亮色（空字符串 = 跟随主题默认） */
   lyricColor: 'lyricColor',
+  /** 播放卡卡面透明度（0~100，越大越透） */
+  cardTransparency: 'cardTransparency',
+  /** 播放卡毛玻璃强度（0~100，越大越磨砂） */
+  cardFrost: 'cardFrost',
+  /** 睡眠定时器的截止时刻（时间戳 ms）；缺失 = 未启用 */
+  sleepTimer: 'sleepTimer',
   /** 主题：mint（薄荷深色）/ light（白色） */
   /** 明暗模式：system / light / dark */
   themeMode: 'themeMode',

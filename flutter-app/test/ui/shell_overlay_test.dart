@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:light_music/theme/app_theme.dart';
+import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/ui/shell.dart';
 
 Widget harness({Widget? overlay}) => MaterialApp(
+  theme: buildTheme().copyWith(
+    extensions: const [AppTokensData(tokens: AppTokens.dark)],
+  ),
   home: Scaffold(
     body: HomeLayout(
       header: const SizedBox(key: Key('h'), height: 40),

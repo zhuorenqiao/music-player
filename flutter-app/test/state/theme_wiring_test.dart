@@ -8,15 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/app.dart';
 import 'package:light_music/core/app_prefs.dart';
-import 'package:light_music/library/library_repository.dart';
-import 'package:light_music/library/recent_store.dart';
 import 'package:light_music/main.dart';
 import 'package:light_music/playback/audio_driver.dart';
 import 'package:light_music/playback/media_session_bridge.dart';
-import 'package:light_music/playback/transport_controller.dart';
-import 'package:light_music/playback/track.dart';
-import 'package:light_music/state/cover_state.dart';
-import 'package:light_music/state/toast_state.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/theme/color_utils.dart';
 import 'package:light_music/theme/theme_state.dart';
@@ -24,7 +18,6 @@ import 'package:light_music/lyrics/lyrics_source.dart';
 import 'package:light_music/lyrics/query.dart';
 import 'package:light_music/lyrics/translate_source.dart';
 import 'package:light_music/lyrics/upstream.dart';
-import 'package:provider/provider.dart';
 
 class _Matcher implements LyricsMatcher {
   @override
@@ -46,26 +39,6 @@ class _Fetcher implements TranslationFetcher {
     bool useCache = true,
   }) async =>
       const TranslationResult(status: 'not-found', reason: 'song-not-matched');
-}
-
-class _NoRecent implements RecentRecorder {
-  const _NoRecent();
-
-  @override
-  void record(Track track, {DateTime? at}) {}
-}
-
-class _NoToasts implements ToastSink {
-  const _NoToasts();
-
-  @override
-  void show(String message, {String key = '', int durationMs = 3200}) {}
-
-  @override
-  void info(String message) {}
-
-  @override
-  void error(String message, {int durationMs = 3200}) {}
 }
 
 void main() {
@@ -128,9 +101,10 @@ void main() {
         themeState: theme,
       ),
     );
-    addTearDown(bootstrap.player.dispose);
+    final boot = bootstrap!;
+    addTearDown(boot.player.dispose);
 
-    await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
+    await tester.pumpWidget(LightMusicApp(bootstrap: boot));
     await tester.pump();
 
     final context = tester.element(find.byType(Navigator).first);
@@ -138,8 +112,8 @@ void main() {
     expect(tokens.name, 'mint-light', reason: '默认 mode=color → 浅色薄荷');
 
     // 切到深色蓝：token 表换、accent 变。
-    bootstrap.theme.setMode(ThemeModeSetting.dark);
-    bootstrap.theme.setColor(ThemeColorSetting.blue);
+    boot.theme.setMode(ThemeModeSetting.dark);
+    boot.theme.setColor(ThemeColorSetting.blue);
     await tester.pumpAndSettle();
 
     tokens = Theme.of(context).extension<AppTokensData>()!.tokens;

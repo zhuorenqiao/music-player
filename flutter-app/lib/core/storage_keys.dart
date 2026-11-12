@@ -12,6 +12,8 @@ abstract final class StorageKeys {
   static const String lyricColor = 'lyricColor';
   static const String cardTransparency = 'cardTransparency';
   static const String cardFrost = 'cardFrost';
+  /// 睡眠定时器的截止时刻（时间戳 ms）；缺失 = 未启用
+  static const String sleepTimer = 'sleepTimer';
   static const String themeMode = 'themeMode';
   static const String themeColor = 'themeColor';
   /// 老版本的单值主题键，只用于迁移读取（spec §6.3）

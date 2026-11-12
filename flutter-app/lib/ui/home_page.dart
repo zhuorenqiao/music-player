@@ -15,7 +15,9 @@ import '../state/cover_state.dart';
 import '../state/library_state.dart';
 import '../state/lightbox_controller.dart';
 import '../state/lyrics_page_controller.dart';
+import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
+import '../theme/theme_state.dart';
 import 'cover_lightbox.dart';
 import 'header.dart';
 import 'lyrics_page.dart';
@@ -39,9 +41,20 @@ class HomePage extends StatelessWidget {
     // 灯箱开合（M2b T9/T11）：叠在**最顶层**（歌词页保持其下渲染 ——
     // App.tsx:1707 的 lyricsPage 与 :1406 的 Lightbox 是两层独立结构）。
     final lightbox = context.watch<LightboxController>();
-    // 封面 resolver：Stage/Panel 内部各自 watch；这里只需保证 CoverState
-    // 在 provider 之上（已由 app.dart 注册），本层无需读取。
-    context.watch<CoverState>();
+    // 封面 resolver：Stage/Panel 内部各自 watch；这里额外取一次当前封面，
+    // 给 `.player` 卡的玻璃后垫（React `App.tsx:1483` 的 playerCover）。
+    final cover = context.watch<CoverState>();
+    final player = context.watch<PlayerState>();
+    final current = player.view.value.current;
+    final coverPath = current == null
+        ? ''
+        : cover.coverForDisplay(
+            cover: current.cover,
+            artist: current.artist,
+            title: current.title,
+            trackId: current.id,
+          );
+    final frostLevel = context.watch<ThemeState?>()?.frostLevel ?? 0.0;
     return Scaffold(
       backgroundColor: tokens.bg,
       // `body::before`：一整面对角渐变，不参与滚动
@@ -60,10 +73,20 @@ class HomePage extends StatelessWidget {
                 onAddFiles: () => _addFiles(library),
                 onAddFolder: () => _addFolder(library),
                 onClearPlaylist: library.clearPlaylist,
+                // React `App.tsx:1700` 的 onSwitchView：在封面页 / 完整歌词页
+                // 之间切，与「点曲目区进歌词页」共用同一个控制器。
+                onSwitchView: page.toggle,
+                immersive: page.isOpen,
               ),
               stage: const Stage(), // T26 起是真的播放卡
-              panel: const Panel(), // T28 起是真的播放列表 / 最近面板
+              panel: Panel(
+                // M3 D.6：面板与播放卡共用同一套磨砂膜（`.panel::before`）。
+                coverPath: coverPath,
+                frostLevel: frostLevel,
+              ),
               transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
+              coverPath: coverPath,
+              frostLevel: frostLevel,
               overlay: page.isOpen ? const LyricsPage() : null,
             ),
             // 放大层（M2b T11）：全屏 Stack 顶层；关闭走 controller.close

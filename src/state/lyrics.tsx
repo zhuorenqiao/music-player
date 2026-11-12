@@ -159,6 +159,8 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
   const transForceRef = useRef(false);
   /** 本次会话内每首歌词只问一次译文，连「没有」也记住，避免切回来又打一遍接口 */
   const transCacheRef = useRef(new Map<string, { translation: Translation | null; state: TranslationState; reason: string }>());
+  /** 手上这份译文属于哪首曲目：换歌要清掉，同一首关掉再打开要留着 */
+  const translationTrackRef = useRef<string | null>(null);
 
   const trans = useMemo<string[]>(() => {
     if (!bilingual || !translation || displayLines.length === 0) {
@@ -189,33 +191,45 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
 
     if (!track || !translatable) {
       setTranslation(null);
+      translationTrackRef.current = null;
       setTransState('idle');
       setTransReason('');
       return () => controller.abort();
     }
-    if (!bilingual) {
+    // 换歌：上一首的译文不能留在新歌上；同一首只是歌词有变（纯文本升级成带时间轴）就沿用
+    if (translationTrackRef.current !== null && translationTrackRef.current !== track.id) {
       setTranslation(null);
+      translationTrackRef.current = null;
+    }
+    if (!bilingual) {
+      /**
+       * 关掉双语只停显示、不丢数据：再打开要立刻恢复，
+       * 而不是清空后重新等一次网络（刷新慢/失败就会变成「怎么都切不回来」）。
+       */
       setTransState('off');
-      setTransReason('');
       return () => controller.abort();
     }
 
     const cacheKey = `${track.id}|${fingerprint(lyricsText)}`;
-    // force（用户重开开关）要连会话缓存一起绕开，否则「上次说没有」会一直盖住这次重试
-    if (force) {
-      transCacheRef.current.delete(cacheKey);
-    }
     const hit = transCacheRef.current.get(cacheKey);
+    // 已有译文就先显示；force（重开开关）时再在后台带 refresh=1 问一次
+    const reusable = hit?.translation ?? null;
     if (hit) {
       setTranslation(hit.translation);
+      if (hit.translation) {
+        translationTrackRef.current = track.id;
+      }
       setTransState(hit.state);
       setTransReason(hit.reason);
-      return () => controller.abort();
+      if (!force) {
+        return () => controller.abort();
+      }
+    } else {
+      setTranslation(null);
+      translationTrackRef.current = null;
+      setTransState('loading');
+      setTransReason('');
     }
-
-    setTranslation(null);
-    setTransState('loading');
-    setTransReason('');
     void fetchTranslation(track, { signal: controller.signal, useCache: !force }).then((result: {
       status: string; reason?: string; message?: string; source?: string; translatedLyrics?: string; originalLyrics?: string;
     }) => {
@@ -230,6 +244,15 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
         };
         transCacheRef.current.set(cacheKey, { translation: value, state: 'ready', reason: '' });
         setTranslation(value);
+        translationTrackRef.current = track.id;
+        setTransState('ready');
+        return;
+      }
+      /**
+       * 手上已经有一份能用的译文（重开开关触发的后台刷新）：刷新失败 / 查不到都不覆盖，
+       * 保持双语现状，别让一次失败的刷新把本来能看的内容弄没。
+       */
+      if (reusable) {
         setTransState('ready');
         return;
       }

@@ -210,35 +210,47 @@ class CoverState extends ChangeNotifier {
   }
 
   /// 后台预取（covers.tsx:162-176 prefetchCovers 对译）：needsCoverMatch
-  /// 过滤 → 逐首 matchCover → ok 写 `_matched` + 通知 → 每首之间
+  /// 过滤 → 逐首 matchCover → ok 写 `_matched` → 每首之间
   /// [kCoverPrefetchDelayMs] 串行节流。预取允许写 `_matched`（那是真专辑
   /// 图，语义同 React 预取写回 track.cover）；但**不**触发写真下沉 ——
   /// 预取是「切过去时图已就位」的机会主义动作，慢通道留给 matchFor。
+  ///
+  /// **通知按批合并，不是每命中一首就喊一次**：这条链路在冷启动后立刻对整个
+  /// 曲库跑一遍（main.dart 的 unawaited 预取块），而它的订阅者里有 `HomePage`
+  /// /`Stage`/`Panel` 这类「一响就重建整棵树」的大块。逐首 notify 等于让一次
+  /// 冷启动触发「曲库条数」次整树重建 —— 打开就卡的那几秒正是这个窗口。
+  /// 现在写表照旧逐条进行，但只在本批跑完之后统一通知一次。
   Future<void> prefetchCovers(List<CoverPrefetchItem> tracks) async {
     if (!_isOnline()) return;
-    for (final track in tracks) {
-      if (!needsCoverMatch(cover: '', trackId: track.trackId)) {
-        continue;
-      }
-      // 上面的判据只挡「已在线匹配过」的；预取条目没有内嵌 cover 字段，
-      // 调用方构造列表时自行过滤有内嵌封面的曲目（React 同款 ——
-      // prefetchCovers 用 needsCoverMatch(track) 查 track.cover）。
-      try {
-        final match = await matchCover(
-          (title: track.title, artist: track.artist, duration: track.duration),
-          json: json,
-          bytes: bytes,
-          diskStore: diskStore,
-          index: coverIndex,
-        );
-        if (match.status == 'ok' && (match.url?.isNotEmpty ?? false)) {
-          _matched[track.trackId] = match.url!;
-          notifyListeners();
+    var changed = false;
+    try {
+      for (final track in tracks) {
+        if (!needsCoverMatch(cover: '', trackId: track.trackId)) {
+          continue;
         }
-      } catch (_) {
-        // 单条失败继续（预取绝不打扰）。
+        // 上面的判据只挡「已在线匹配过」的；预取条目没有内嵌 cover 字段，
+        // 调用方构造列表时自行过滤有内嵌封面的曲目（React 同款 ——
+        // prefetchCovers 用 needsCoverMatch(track) 查 track.cover）。
+        try {
+          final match = await matchCover(
+            (title: track.title, artist: track.artist, duration: track.duration),
+            json: json,
+            bytes: bytes,
+            diskStore: diskStore,
+            index: coverIndex,
+          );
+          if (match.status == 'ok' && (match.url?.isNotEmpty ?? false)) {
+            _matched[track.trackId] = match.url!;
+            changed = true;
+          }
+        } catch (_) {
+          // 单条失败继续（预取绝不打扰）。
+        }
+        await _sleep(const Duration(milliseconds: kCoverPrefetchDelayMs));
       }
-      await _sleep(const Duration(milliseconds: kCoverPrefetchDelayMs));
+    } finally {
+      // 中途抛也要把已经写进去的那些通知出去，否则界面停在旧封面上。
+      if (changed) notifyListeners();
     }
   }
 

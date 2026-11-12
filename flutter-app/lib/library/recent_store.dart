@@ -10,6 +10,7 @@
 //     窗口必须小，否则用户快速切回刚播过的歌时不会被置顶；
 //   - 读档容忍脏数据：单条结构不完整只丢那一条，整份坏掉回退空列表。
 import 'dart:async';
+import 'dart:collection';
 
 import '../core/app_prefs.dart';
 import '../core/storage_keys.dart';
@@ -97,7 +98,12 @@ class RecentStore implements RecentRecorder {
   final List<void Function()> _changeListeners = [];
 
   /// 只读视图：外部拿到的是快照，改不了内部列表。
-  List<RecentEntry> get entries => List.unmodifiable(_entries);
+  ///
+  /// 用 `UnmodifiableListView` 而不是 `List.unmodifiable(...)`：后者每次访问都
+  /// **复制整份列表**，而这个 getter 在 `_RecentBody.build` 里被调用 —— 面板
+  /// 会因为「换肤滑块、封面到货、播放态变化」等无关原因重建，每次都白复制一份
+  /// 50 条记录。前者只是一层薄视图，零拷贝且同样不可改。
+  List<RecentEntry> get entries => UnmodifiableListView(_entries);
 
   /// 记下「历史变了」这件事（[record] / [remove] / [clear] / [markInPlaylist]
   /// 之后各喊一次），界面层据此重绘。

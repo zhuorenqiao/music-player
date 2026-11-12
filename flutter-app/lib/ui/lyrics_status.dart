@@ -89,13 +89,17 @@ class LyricsStatusLine extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (loading) ...[
-                    SizedBox(
-                      key: const Key('lyrics-status-spinner'),
-                      width: _kSpinnerSize,
-                      height: _kSpinnerSize,
-                      child: _Spinner(
-                        trackColor: tokens.accentSoft,
-                        headColor: tokens.accent,
+                    // 转圈是常驻 60fps 动画：包一层 RepaintBoundary，别让它
+                    // 每帧把整条状态行（含播放卡里的 ClipRRect / 磨砂层）标脏。
+                    RepaintBoundary(
+                      child: SizedBox(
+                        key: const Key('lyrics-status-spinner'),
+                        width: _kSpinnerSize,
+                        height: _kSpinnerSize,
+                        child: _Spinner(
+                          trackColor: tokens.accentSoft,
+                          headColor: tokens.accent,
+                        ),
                       ),
                     ),
                     const SizedBox(width: _kSpinnerGap),

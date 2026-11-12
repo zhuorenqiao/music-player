@@ -160,7 +160,14 @@ class TrackRow extends StatelessWidget {
                               ),
                               if (active) ...[
                                 const SizedBox(width: 6),
-                                BarsIndicator(playing: playing),
+                                // 音柱是 1s 循环的常驻动画（60fps 重绘）。
+                                // 不加隔离的话，它每帧都会把**整行**标脏，
+                                // 而整行和兄弟行共处同一个列表图层 —— 结果是
+                                // 为了 12×13px 的三根小条，把整屏列表跟着重
+                                // 光栅化。隔离后只有这一小块自画。
+                                RepaintBoundary(
+                                  child: BarsIndicator(playing: playing),
+                                ),
                               ],
                             ],
                           ),

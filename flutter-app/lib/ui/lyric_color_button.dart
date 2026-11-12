@@ -9,6 +9,10 @@ import 'package:provider/provider.dart';
 import '../theme/app_tokens.dart';
 import '../theme/color_utils.dart';
 import '../theme/theme_state.dart';
+import 'tool_panel.dart';
+
+/// 色板面板宽度（`_ColorPanel` 的 `width: 176`）。
+const double kLyricColorPanelWidth = 176;
 
 /// 色板顺序按色相排，默认那颗放最前面（LyricColorButton.tsx:14-23 逐字）。
 const List<({String name, String color})> kLyricColorPresets = <({
@@ -27,7 +31,10 @@ const List<({String name, String color})> kLyricColorPresets = <({
 
 /// 歌词高亮色的「T」按钮与色板弹层。
 class LyricColorButton extends StatefulWidget {
-  const LyricColorButton({super.key});
+  const LyricColorButton({super.key, this.side = ToolPanelSide.above});
+
+  /// 色板往哪边弹：控制条上那排向上，歌词页右上角向下。
+  final ToolPanelSide side;
 
   @override
   State<LyricColorButton> createState() => _LyricColorButtonState();
@@ -49,6 +56,15 @@ class _LyricColorButtonState extends State<LyricColorButton> {
     final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
     final pos = box.localToGlobal(Offset.zero);
+    // 落位交给 tool_panelPosition：控制条那排向上弹，歌词页右上角向下弹。
+    final place = toolPanelPosition(
+      anchor: pos,
+      anchorWidth: box.size.width,
+      anchorHeight: box.size.height,
+      panelWidth: kLyricColorPanelWidth,
+      viewport: MediaQuery.sizeOf(context),
+      side: widget.side,
+    );
     _entry = OverlayEntry(
       builder: (context) => Stack(
         children: [
@@ -60,8 +76,9 @@ class _LyricColorButtonState extends State<LyricColorButton> {
             ),
           ),
           Positioned(
-            left: pos.dx,
-            bottom: MediaQuery.sizeOf(context).height - pos.dy + 8,
+            left: place.left,
+            top: place.top,
+            bottom: place.bottom,
             child: Material(
               color: Colors.transparent,
               child: _ColorPanel(onClose: _removeOverlay),
@@ -128,7 +145,7 @@ class _ColorPanel extends StatelessWidget {
     final state = context.watch<ThemeState>();
     final resolvedMode = state.resolvedMode;
     return Container(
-      width: 176,
+      width: kLyricColorPanelWidth,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),

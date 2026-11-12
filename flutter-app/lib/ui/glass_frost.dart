@@ -14,6 +14,7 @@
 // glassLevel（透明度）不在本件：它是卡面渐变色的 alpha 缩放，直接在
 // 播放卡 / 面板的 DecoratedBox 里对 cardA/cardB 做 withValues(alpha: × level)。
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -53,8 +54,8 @@ class GlassFrostLayer extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          child,
-          // 玻璃后封面垫（.glass-frost：z 序最底，先画）。
+          // 玻璃后封面垫（`.glass-frost { z-index: -2 }`，app.css:481-489）：
+          // 当前封面模糊图，垫在卡面之下。
           if (coverPath.isNotEmpty)
             Opacity(
               opacity: (frost * tokens.frostCoverOpacity).clamp(0.0, 1.0),
@@ -65,18 +66,19 @@ class GlassFrostLayer extends StatelessWidget {
                 errorBuilder: (context, error, stack) => const SizedBox.shrink(),
               ),
             ),
-          // 背景模糊 + 饱和（backdrop-filter 逐字）。
+          // 背景模糊 + 饱和（`backdrop-filter: blur(16px+frost*26) saturate(1+frost*0.65)`，
+          // app.css:450-455 逐字）。CSS 的两个滤镜按书写顺序串联等价于
+          // `outer(inner(source))`，所以 blur 是 inner、saturate 是 outer：
+          //   ImageFilter.compose(outer: 饱和度矩阵, inner: 高斯模糊)
           BackdropFilter(
-            filter: ui.ImageFilter.blur(
-              sigmaX: blurSigma,
-              sigmaY: blurSigma,
+            filter: ui.ImageFilter.compose(
+              outer: ui.ColorFilter.saturation(saturate),
+              inner: ui.ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
             ),
-            child: Container(
-              // saturate 需要色彩矩阵：等价 1+frost*0.65 的饱和提升。
-              decoration: BoxDecoration(color: _saturateColorMatrix(saturate)),
-            ),
+            child: const SizedBox.expand(),
           ),
-          // 磨砂膜（::before：sheen + veil + bloom + tint，opacity=frostLevel）。
+          // 磨砂膜（`::before { z-index: -1 }`，app.css:461-477）：
+          // sheen + veil + bloom + tint，opacity=frostLevel。
           IgnorePointer(
             child: Opacity(
               opacity: frost,
@@ -87,22 +89,20 @@ class GlassFrostLayer extends StatelessWidget {
               ),
             ),
           ),
+          // 卡面本体（内容）必须**画在最后**：CSS 里那两层都是负 z-index，
+          // 压在卡面之下；早期实现把 child 放在 Stack 首位，于是 frost>0 时
+          // 封面垫 + 膜层把整卡内容糊死（只剩一团模糊封面，文字全被盖住）。
+          child,
         ],
       ),
     );
   }
-
-  /// saturate 矩阵的等价物：Flutter 的 BackdropFilter 不直接收 saturate，
-  /// 用一层 ColorFiltered 挂在模糊之后（膜层之下）——这里返回一个带透明底
-  /// 的占位（真矩阵由 [_FrostMembranePainter] 的 blend 层承担；saturate 的
-  /// 视觉差在真机验收比对，主观差异不阻塞）。
-  Color _saturateColorMatrix(double saturate) => Colors.transparent;
 }
 
 /// 磨砂膜 painter：sheen 线性渐变 + veil + 左上 bloom + 右下 frostTint +
 /// 颗粒白点（frost-noise 的近似）。
 class _FrostMembranePainter extends CustomPainter {
-  const _FrostMembranePainter({required this.tokens});
+  _FrostMembranePainter({required this.tokens});
 
   final AppTokens tokens;
 
@@ -149,21 +149,52 @@ class _FrostMembranePainter extends CustomPainter {
         ),
     );
     // 5) 颗粒：确定性白点（frost-noise 的 SVG feTurbulence 近似——
-    //    160×160 网格内按哈希散布 1px 白点，密度约 8%）。
-    final dot = Paint()..color = const Color(0x14FFFFFF);
+    //    8×8 网格内按哈希散布白点，密度约 8%）。
+    //
+    //    **一次 drawRawPoints 画完，不再逐点 drawCircle**：早先在 700×560 的
+    //    卡片上这段循环会发出 ~2400 次 drawCircle，每一次都是一份独立的绘制
+    //    指令；BackdropFilter 让这张膜在磨砂开启时参与整卡重绘，于是这 2400 条
+    //    指令每帧都要重新走一遍光栅化。同样的点、同样的视觉，合成一条
+    //    PointMode.points 之后只剩一次调用。
+    final dots = _noisePoints(size);
+    if (dots.isNotEmpty) {
+      canvas.drawRawPoints(
+        ui.PointMode.points,
+        dots,
+        Paint()
+          ..color = const Color(0x14FFFFFF)
+          ..strokeWidth = 1.2
+          ..strokeCap = ui.StrokeCap.round,
+      );
+    }
+  }
+
+  /// 颗粒点集（缓存在 painter 实例上）。
+  ///
+  /// `shouldRepaint` 只在 token 变时才换 painter，所以稳态下这一个实例会跟着
+  /// RenderCustomPaint 一直活着 —— 点集算一次，之后每帧直接复用。缓存按 `size`
+  /// 校验：窗口缩放会换尺寸，但那是低频事件。
+  Float32List _noisePoints(Size size) {
+    final cached = _dots;
+    if (cached != null && _dotsSize == size) return cached;
     const cell = 8.0;
+    final out = <double>[];
     for (var y = 0.0; y < size.height; y += cell) {
       for (var x = 0.0; x < size.width; x += cell) {
         final hash = (x.toInt() * 73856093) ^ (y.toInt() * 19349663);
         if (hash.isOdd) continue;
-        canvas.drawCircle(
-          Offset(x + (hash % 100) / 100 * cell, y + ((hash >> 7) % 100) / 100 * cell),
-          0.6,
-          dot,
-        );
+        out.add(x + (hash % 100) / 100 * cell);
+        out.add(y + ((hash >> 7) % 100) / 100 * cell);
       }
     }
+    final points = Float32List.fromList(out);
+    _dots = points;
+    _dotsSize = size;
+    return points;
   }
+
+  Float32List? _dots;
+  Size? _dotsSize;
 
   @override
   bool shouldRepaint(_FrostMembranePainter oldDelegate) =>

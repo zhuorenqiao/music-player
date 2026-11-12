@@ -29,7 +29,7 @@ T 高亮色、黑胶旋转与唱臂、光晕呼吸、auto-hide 滚动条、reduc
 | `test/wave/wave_styles_test.dart` | 93 用例：ramp 黄金值（ember t=0.5=17，node 复核任务表笔误）、monoColor 边界、17 painter 真画、注册表逐条对表 |
 | `test/ui/wave_strip_test.dart` + transport 相关 | WaveStrip 挂载、首页隐藏/歌词页显示 |
 | `test/ui/theme_color_test.dart`（并入 glass_control/theme_drawer） | T 色板、彩色开关持久化 |
-| `test/ui/vinyl_deck_test.dart` + stage 相关 | 旋转/冻角/唱臂/光晕档位 |
+| `test/ui/vinyl_deck_test.dart` + stage 相关 | 旋转/冻角/唱臂/光晕档位；黑胶外圈（spec §23）：标签位占 62%、盘面与封面同相位、斜向反光固定不转、歌词页无外圈 |
 | `test/theme/contrast_check_test.dart` | **浅色对比度实测**（§D） |
 
 ## C. 真实链路
@@ -40,27 +40,49 @@ T 高亮色、黑胶旋转与唱臂、光晕呼吸、auto-hide 滚动条、reduc
   归一化输出；24bit 源解到 PCM 的路径同一条 native 代码）。
 - MethodChannel 在 `flutter test` 单测形态无宿主（MissingPluginException）——
   探针保留 skip，真机形态在 `integration_test/`。
-- WaveStrip 的**实时频谱**依赖 SpectrumPipeline 的异步预填（当前由装饰回退
-  兜底渲染——帧表未接入装配层的实时调度，见 §D.3）。
+- **WaveStrip 实时频谱（D.3，2026-11-12 补完）**：装配层已接上
+  `SpectrumState`（`lib/state/spectrum_state.dart`）——歌词页打开才懒启动，
+  先读 `.bin` 缓存、miss 才 `SpectrumPipeline.request(prioritize: true)` 排队
+  解码；换曲/关页用 generation 号作废在途结果；SAF `content://` 与解码失败
+  显式降级回装饰形状。帧表经 provider 流到 `WaveStrip.frameTable`，
+  进度由 `positionListenable` 只订阅在频谱条这一片叶子上。
+  用例：`test/state/spectrum_state_test.dart`（10 条状态机）、
+  `test/ui/spectrum_wiring_test.dart`（2 条端到端接线）。
+  **Windows Release 真机验证（2026-11-12）**：
+  - 首页空闲 0 CPU、`spectrum/` 目录未创建 → 懒启动生效；
+  - 按 `L` 打开歌词页 → 真实 FLAC 解码 → 生成 `spectrum/*.bin`
+    **861,524 字节**（≈4487 帧 × 192B，对应 224s 曲目，与 spec §10.1 吻合）；
+  - 临时 `lspc-*` WAV 目录在解码结束后自动清理，CPU 回落到 0；
+  - Esc 关页再按 `L` 开页：**0 秒 CPU**、缓存文件 mtime 未变、无新临时目录
+    → 缓存命中生效，不重复解码。
+  - **仍未验**：频谱条画面的目视比对（是否随音乐实时起伏、暂停冻结、
+    17 样式逐一观感）；这属于视觉验收，不影响链路正确性。
 
 ## D. 未验项 / 已知差异
 
 1. **Android 真机**：捏合、磨砂性能、reduced-motion 实机未跑。
 2. **磨砂膜噪点**：SVG feTurbulence 以 CustomPainter 白点近似（计划裁定），
    真机视觉比对未做。
-3. **WaveStrip 实时帧表调度**：管线（T8）与数据源（T9）都已落地并有单测，
-   但装配层尚未把「播放中曲目 → SpectrumPipeline.request → WaveStrip 帧表」
-   的异步链接上——播放中当前显示的是装饰回退（显式降级状态）。这是本段
-   最大的遗留工作，建议单独补一个小任务。
-4. **WaveStylePicker 下拉**：彩色开关与 17 项列表的状态层已就绪
-   （ThemeState.waveStyleId/waveColored），但歌词页右上角的下拉 UI（含缩略图）
-   未挂到 lyrics_page.dart——React 版此处是 WaveStylePicker，Flutter 侧
-   留待 T12 的后续补挂。
+3. ~~**WaveStrip 实时帧表调度**~~ **已补完（2026-11-12）**：见 §C。余下只有
+   「真机上对真实 FLAC 的目视比对」未跑；状态机与装配接线均有单测覆盖。
+4. ~~**WaveStylePicker 下拉**~~ **已补完（2026-11-12）**：新增
+   `lib/ui/wave_style_picker.dart`，挂到 `lyrics_page.dart` 右上角。触发按钮
+   显示当前样式名；Overlay 面板含固定「彩色」开关 + 17 项可滚动列表（每项
+   76×28 静态缩略图走 `renderWaveThumb`，与 WaveStrip 同一套渲染器）；
+   ↑↓/Home/End 移动高亮、Enter/空格选中、Esc 退回按钮，按键在本层消费
+   以免顺手改音量 / 关掉歌词页。用例 `test/ui/wave_style_picker_test.dart`（5 条）。
+   **真机视觉比对未做**（缩略图观感、面板定位）。
 5. **lightMint 的 accentInk**：CSS 无覆写行，逐字沿用深色 #04231b（浅底上
    实际不可读——T6 的 swatch 只用作选中描边色，文字色走 accentLight；真机验）。
-6. **面板磨砂**：panel.dart 只接了 glassLevel alpha 缩放，未包 GlassFrostLayer
-   （播放卡已包）；React 的 .panel::before 同款磨砂膜待补。
-7. **frostVeilB 浅色**：0.06×255=15.3，取 0x10（四舍五入应为 0x0F），注释已记录。
+   **仍未验**：浅色主题下的真机可读性。
+6. ~~**面板磨砂**~~ **已补完（2026-11-12）**：`panel.dart` 用同一个
+   `GlassFrostLayer` 包住整卡（`.player::before, .panel::before` 同款，
+   app.css:461-477），`HomePage` 注入 `coverPath` / `frostLevel`；弹层版
+   （flush）用自己的 sheet 卡面，不重复挂磨砂。用例
+   `test/ui/panel_frost_test.dart`（3 条）。
+7. ~~**frostVeilB 浅色**~~ **已修正（2026-11-12）**：三档浅色 token 从
+   `0x10` 改为 `0x0F`（0.06×255=15.3 四舍五入），深色三档 `0x24080A0F`
+   保持不动。用例见 `test/ui/wave_style_picker_test.dart` 的 D.7 断言。
 
 ## E. 对比度实测（T15，Dart 现算非截图）
 

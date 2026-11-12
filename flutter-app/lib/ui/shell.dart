@@ -2,11 +2,13 @@
 //
 // 应用骨架：对译 `src/styles/app.css` 的两档结构（`.app` + `.app__main`）。
 //
-//   - 宽 ≥900：外层 padding 24/28/28、gap 18，左列 `minmax(0, 1.02fr)` 放
-//     曲目区与控制区（控制条贴在这一列的底边），右列 `minmax(0, 1fr)` 是面板，
-//     两列同顶同底 —— 也就是原版「控制区底边与右栏面板底边对齐」那条视觉验收；
-//   - 宽 <900：单列 `stage → panel → transport`，padding 16/14/14、gap 14，
-//     控制条吸在视口最底（原版里它是 `position: sticky; bottom: 0`）。
+//   - 宽 ≥900：外层 padding 24/28/28、gap 18，左列 `minmax(0, 1.02fr)` 是一整张
+//     `.player` 卡（曲目区 + 控制区同卡，见 [PlayerCard]），右列 `minmax(0, 1fr)`
+//     是面板，两列同顶同底 —— 原版「控制区底边与右栏面板底边对齐」那条验收；
+//   - 宽 <900：单列，只有那张 `.player` 卡（曲目区吃掉封面/信息区以外的高度，
+//     控制条贴在卡内底部），padding 16/14/14、gap 14。列表面板按 React
+//     `App.tsx:1714` 的 `{!compact && <Panel/>}` 收进底部弹层，窄屏不再常驻
+//     一张中间卡片 —— 这是 React 窄屏截图与旧三段式布局最大的差别。
 //
 // 两档共用一条宽度上限：`.app { max-width: 1180px; margin: 0 auto }`。封顶加在
 // padding **里面**，边距量的是窗口而不是内容框 —— 1920 的窗口里内容 1180 居中，
@@ -17,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/breakpoints.dart';
+import 'player_card.dart';
 
 /// 内容最大宽度：`.app { max-width: 1180px }`（配合 `margin: 0 auto` 居中）。
 const double kMaxContentWidth = 1180;
@@ -38,6 +41,8 @@ class HomeLayout extends StatelessWidget {
     required this.stage,
     required this.panel,
     required this.transport,
+    this.coverPath = '',
+    this.frostLevel = 0,
     this.overlay,
     super.key,
   });
@@ -46,6 +51,13 @@ class HomeLayout extends StatelessWidget {
   final Widget stage;
   final Widget panel;
   final Widget transport;
+
+  /// 播放卡玻璃后垫的封面路径（React `.glass-frost` 用 `useCover(current)`）。
+  /// 由 [HomePage] 注入；不传时为空串（纯展示 / 测试）。
+  final String coverPath;
+
+  /// 磨砂强度（ThemeState.frostLevel）；不传按 0（普通卡面）。
+  final double frostLevel;
 
   /// 盖住「曲目区 + 面板」的可选整块内容（T19 的全屏歌词页）。
   ///
@@ -65,6 +77,16 @@ class HomeLayout extends StatelessWidget {
         final desktop = isDesktop(constraints.maxWidth);
         // 公共字段不参与类型提升，先取到局部变量（`overlay != null` 之后才好用）。
         final overlay = this.overlay;
+        // `.player`：曲目区与控制区合成一张卡（app.css:427-518）。两档都用它，
+        // 差异只在「卡外还有没有一张常驻面板」。
+        Widget playerCard(Widget content) => PlayerCard(
+          coverPath: coverPath,
+          frostLevel: frostLevel,
+          children: [
+            Expanded(child: content),
+            transport,
+          ],
+        );
         return SafeArea(
           child: Padding(
             padding: desktop ? kDesktopPadding : kNarrowPadding,
@@ -81,7 +103,6 @@ class HomeLayout extends StatelessWidget {
                         // 桌面有 overlay：两列一起让位，但 `transport` 必须留下 ——
                         // 「切到歌词页时播放控制仍可见可操作」（原版 `App.tsx:1707`
                         // 也是 `<LyricsPage>` / `<Stage>` 二选一，控制条在两者之外）。
-                        // 无 overlay 时这根控制条仍留在左列内部（骨架原样，不动）。
                         Expanded(child: overlay),
                         const SizedBox(height: 18),
                         transport,
@@ -94,15 +115,7 @@ class HomeLayout extends StatelessWidget {
                               Expanded(
                                 // minmax(0, 1.02fr) / minmax(0, 1fr) 按 102 : 100 取整
                                 flex: 102,
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(child: stage),
-                                    const SizedBox(height: 18),
-                                    transport,
-                                  ],
-                                ),
+                                child: playerCard(stage),
                               ),
                               const SizedBox(width: 18),
                               Expanded(flex: 100, child: panel),
@@ -110,16 +123,14 @@ class HomeLayout extends StatelessWidget {
                           ),
                         )
                     else if (overlay != null) ...[
-                      // 窄屏：歌词页吃掉 stage + panel 的位置，控制条仍在最底。
+                      // 窄屏：歌词页吃掉整块内容区，控制条仍留在最底。
                       Expanded(child: overlay),
                       const SizedBox(height: 14),
                       transport,
                     ] else ...[
-                      stage,
-                      const SizedBox(height: 14),
-                      Expanded(child: panel),
-                      const SizedBox(height: 14),
-                      transport,
+                      // 窄屏无 overlay：只有一张 `.player` 卡吃掉全部可用高度。
+                      // 面板按 React `App.tsx:1714` 收进底部弹层，这里不渲染。
+                      Expanded(child: playerCard(stage)),
                     ],
                   ],
                 ),

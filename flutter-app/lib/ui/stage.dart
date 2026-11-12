@@ -9,9 +9,13 @@
 //   │           曲名 ←→ 双语开关     │  ┐
 //   │           歌手                │  ├ 一整块热区（进歌词页）
 //   │           专辑（有才显示）      │  │
-//   │           ── 歌词条 ──         │  ┘
-//   │          当前 / 总时长（贴底）  │
+//   │           ── 歌词条 ──         │  ┘（在 PlayerCard 内会铺满剩余高度）
+//   │          当前 / 总时长（仅独立预览）│
 //   └──────────────────────────────┘
+//
+// 嵌在 [PlayerCard] 里时（React `.player > .stage`，app.css:510-518）本组件把
+// 自己的卡片外观全部剥掉、并把「当前 / 总时长」藏起来 —— React 的 Stage 没有
+// 这一行，时间只在 transport 进度条两端（App.tsx:979/:1004）。
 //
 // 四条硬约束：
 //   1. 进度不进 `ChangeNotifier`。整卡只在语义变化时重建，`player.position`
@@ -45,6 +49,7 @@ import 'bilingual_toggle.dart';
 import 'lyrics_status.dart';
 // T17 并行产出；本文件只用到 `LyricsView(variant: LyricsVariant.compact)`。
 import 'lyrics_view.dart';
+import 'player_card.dart';
 import 'swipe_to_switch.dart';
 import 'vinyl_deck.dart';
 
@@ -203,42 +208,36 @@ class _StageLyrics extends StatelessWidget {
     final hiddenOnNarrow = narrow && !loading && !failed && note.isEmpty;
     final showStatus = status.isNotEmpty && !hiddenOnNarrow;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (showStatus)
-          LyricsStatusLine(
+    // `.stage__lyrics`：桌面保持 clamp(112,15vh,132) 的预览条；窄屏按
+    // app.css:3977-3987 改成 `flex: 1 1 0 / min-height: 0`，由外层 [PlayerCard]
+    // 用 Expanded 把剩余高度全给歌词 —— 这是 React 窄屏「歌词一直铺到控制区
+    // 上方」与旧 Flutter「只露 3 行」差别的根因。
+    // 不自己包 Expanded：外层 [StagePreview.info] 已经用 Expanded 把整块
+    // 歌词区撑满，这里只需在内部把「状态行以外的高度」交给歌词列表。
+    final inPlayerCard = PlayerCardScope.maybeOf(context) != null;
+    final statusLine = showStatus
+        ? LyricsStatusLine(
             status: status,
             loading: loading,
             failed: failed,
             showRetry: lyrics.showRetry,
             onRetry: lyrics.retry,
-          ),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            // CSS 的 clamp(112px, 15vh, 132px) 是**上限**，不是硬高度：桌面
-            // 卡片被拉满左列时留白充足，照它给；矮视口（例如测试里常见的
-            // 152px 卡片）下父级给不了 112，就按可用高度收缩，绝不把整列
-            // RenderFlex 顶溢出。T15 接上 provider 之前走的是 M1 的 66 占位，
-            // 所以这条守卫只在真实歌词条路径上生效。
-            // CSS 的 clamp(112px, 15vh, 132px) 是**上限**，不是硬高度。矮视口
-            //（测试里常见 584~800px）下 112 的地板会把整列顶溢出，所以再按
-            // 视口高度的 15% 钳一次：正常桌面（≥900px）下 15vh ≥ 135，取 132
-            // 与 CSS 完全一致；小视口下退成 15vh，歌词条不至于挤掉控制条。
-            final viewport = MediaQuery.sizeOf(context).height;
-            final wanted = math.min(
-              compactLyricsHeight(viewport),
-              viewport * 0.15,
-            );
-            final height = constraints.hasBoundedHeight
-                ? math.min(wanted, constraints.maxHeight)
-                : wanted;
-            return SizedBox(
-              height: height,
-              child: const LyricsView(variant: LyricsVariant.compact),
-            );
-          },
-        ),
+          )
+        : null;
+    const lyricsBox = LyricsView(variant: LyricsVariant.compact);
+    final Widget lyricsArea;
+    if (inPlayerCard) {
+      lyricsArea = const Expanded(child: lyricsBox);
+    } else {
+      final viewport = MediaQuery.sizeOf(context).height;
+      final wanted = math.min(compactLyricsHeight(viewport), viewport * 0.15);
+      lyricsArea = SizedBox(height: wanted, child: lyricsBox);
+    }
+    return Column(
+      mainAxisSize: inPlayerCard ? MainAxisSize.max : MainAxisSize.min,
+      children: [
+        ?statusLine,
+        lyricsArea,
       ],
     );
   }
@@ -316,6 +315,13 @@ class StagePreview extends StatelessWidget {
       viewport.width,
       viewportHeight: viewport.height,
     );
+    // 在 [PlayerCard] 内部时：外层已经画好卡面、边框、圆角、玻璃底与阴影，
+    // 这里必须把自己的 chrome 剥掉（app.css:510-518 的
+    // `.player > .stage { border:none; border-radius:0; background:none;
+    // box-shadow:none; backdrop-filter:none }`），否则中间会多出一道缝。
+    // 另外 React 的 Stage 里没有「当前 / 总时长」这一行 —— 时间只在
+    // transport 的进度条两端（App.tsx:979/:1004），所以一并隐藏。
+    final inPlayerCard = PlayerCardScope.maybeOf(context) != null;
 
     final cover = Semantics(
       key: const Key('cover-disc'),
@@ -371,17 +377,19 @@ class StagePreview extends StatelessWidget {
         // 与 M1 那个空实现的可观察行为一致（点了不抛、也不做事）。
         onTap: onOpenLyrics,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: inPlayerCard ? MainAxisSize.max : MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _titleRow(tokens),
-            const SizedBox(height: 4),
+            _titleRow(context, tokens),
+            // `.stage__artist { margin-top: 6px }`、`.stage__album { margin-top: 4px }`
+            // （app.css:1061-1077）。
+            const SizedBox(height: 6),
             Text(
               artist,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12.5, color: tokens.textDim),
+              style: TextStyle(fontSize: 13.5, color: tokens.textDim),
             ),
             if (album.isNotEmpty) ...[
               const SizedBox(height: 4),
@@ -393,21 +401,29 @@ class StagePreview extends StatelessWidget {
                 style: TextStyle(fontSize: 11.5, color: tokens.textFaint),
               ),
             ],
-            const SizedBox(height: 10),
+            // `.stage__lyrics` 与信息区的间距：stage 的 `gap: 16px`（:757），
+            // 窄屏 @media 收到 14（:3944）。
+            SizedBox(height: inPlayerCard ? 14 : 10),
             // 状态层还没接上（或纯展示的调用点没给）时，退回 M1 的占位块。
-            lyrics ?? const _LyricsSlot(),
+            // 在 [PlayerCard] 里歌词区用 Expanded 吃掉剩余高度（React 窄屏
+            // `.stage__lyrics { flex: 1 1 0 }`，app.css:3977-3980）。
+            inPlayerCard
+                ? Expanded(child: lyrics ?? const _LyricsSlot())
+                : (lyrics ?? const _LyricsSlot()),
           ],
         ),
       ),
     );
 
     final content = Column(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: inPlayerCard ? MainAxisSize.max : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Center(child: cover),
-        const SizedBox(height: 14),
-        info,
+        // `.stage { gap: 16px }`（:757），窄屏 @media 收到 14（:3944）。
+        SizedBox(height: inPlayerCard ? 14 : 16),
+        // 在合成卡里，info（含铺满的歌词）吃掉封面以外的全部高度。
+        inPlayerCard ? Expanded(child: info) : info,
       ],
     );
 
@@ -417,6 +433,16 @@ class StagePreview extends StatelessWidget {
       position: position,
       totalFromKernel: totalFromKernel,
     );
+
+    // 在 [PlayerCard] 里：chrome 由外层那张 `.player` 卡统一画，这里只留
+    // padding（`.stage` 窄屏 `clamp(20,4vh,36) 14 16`，app.css:3945）。
+    // 时间行也省掉 —— React 的 Stage 没有它，时间在 transport 进度条两端。
+    if (inPlayerCard) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 20, 14, 0),
+        child: content,
+      );
+    }
 
     // M3 T7：卡面 alpha 按 glassLevel 缩放（--glass-level；1 = 主题原样，
     // 0 = 全透）。frostLevel>0 时整卡包进磨砂玻璃层。
@@ -483,12 +509,17 @@ class StagePreview extends StatelessWidget {
     );
   }
 
+  /// `clamp(19px, 4.8vw, 26px)`（app.css:1054）：视口宽的 4.8%，
+  /// 下限 19、上限 26。
+  static double _titleFontSize(BuildContext context) =>
+      (MediaQuery.sizeOf(context).width * 0.048).clamp(19.0, 26.0);
+
   /// 曲名行：歌名居中省略号截断，右侧依次挂「双语」开关与「损坏」角标。
   ///
   /// 对译 `.stage__title-row`（app.css:1039-1044）：`align-items: center` +
   /// `justify-content: center` + `gap: 10px`；没有尾部槽时这一行只有歌名、
   /// 居中位置不变。
-  Widget _titleRow(AppTokens tokens) {
+  Widget _titleRow(BuildContext context, AppTokens tokens) {
     final trailing = titleTrailing;
     final hasSlot = trailing != null || broken;
     return Row(
@@ -502,8 +533,13 @@ class StagePreview extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+              // `.stage__title { font-size: clamp(19px, 4.8vw, 26px);
+              // font-weight: 700; letter-spacing: 0.2px }`（app.css:1052-1059）。
+              // 窄屏 450px 时 4.8vw = 21.6，取视口算；纯展示无 MediaQuery 时
+              // 用 19 下限（不影响既有几何断言）。
+              fontSize: _titleFontSize(context),
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
               color: tokens.text,
             ),
           ),

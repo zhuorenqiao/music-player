@@ -33,10 +33,26 @@ final Set<LogicalKeyboardKey> kScrollKeys = <LogicalKeyboardKey>{
 };
 
 /// auto-hide 滚动条宿主：包住任意可滚 child（播放列表 / 最近两个 ListView）。
+///
+/// **controller 必须由调用方传进来、并同时喂给那个 [ScrollView]**：
+/// RawScrollbar 要画的 thumb 尺寸来自 `controller.position`，两者不是同一个
+/// controller 时，鼠标一悬停就抛
+/// 「The Scrollbar's ScrollController has no ScrollPosition attached」。
+///
+/// 早前这里取的是 `PrimaryScrollController.maybeOf(context)`（那是外层环境
+/// 的，通常根本没有），而 [ListView] 在桌面上不会自动接纳 PrimaryScrollController
+/// —— 于是悬停必崩。
 class AutoHideScrollbar extends StatefulWidget {
-  const AutoHideScrollbar({required this.child, super.key});
+  const AutoHideScrollbar({
+    required this.child,
+    required this.controller,
+    super.key,
+  });
 
   final Widget child;
+
+  /// 与 [child] 里滚动视图共用的 controller。
+  final ScrollController controller;
 
   @override
   State<AutoHideScrollbar> createState() => _AutoHideScrollbarState();
@@ -47,6 +63,15 @@ class _AutoHideScrollbarState extends State<AutoHideScrollbar> {
   Timer? _hideTimer;
   DateTime _lastInputAt = DateTime.fromMillisecondsSinceEpoch(0);
   final GlobalKey _scrollableKey = GlobalKey();
+
+  /// 键盘监听用的焦点节点。
+  ///
+  /// **必须在这里建、在 [dispose] 里放**：从前它建在 `build()` 里，
+  /// 每重建一次就 new 一个 `FocusNode` 并挂到键盘监听上，旧的那个既没
+  /// `removeListener` 也没 `dispose` —— 列表滚动带动重建时这些节点会一直
+  /// 挂在焦点树上累积，滚动越久越卡。`FocusNode` 是 ChangeNotifier，
+  /// 泄漏的节点同时意味着键盘事件派发链越来越长。
+  final FocusNode _scrollKeyFocus = FocusNode(skipTraversal: true);
 
   void _markInput() {
     _lastInputAt = DateTime.now();
@@ -77,6 +102,7 @@ class _AutoHideScrollbarState extends State<AutoHideScrollbar> {
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _scrollKeyFocus.dispose();
     super.dispose();
   }
 
@@ -94,7 +120,7 @@ class _AutoHideScrollbarState extends State<AutoHideScrollbar> {
         if (event.buttons != 0) _markInput();
       },
       child: KeyboardListener(
-        focusNode: FocusNode(skipTraversal: true),
+        focusNode: _scrollKeyFocus,
         onKeyEvent: (event) {
           if (event is KeyDownEvent && kScrollKeys.contains(event.logicalKey)) {
             _markInput();
@@ -106,7 +132,7 @@ class _AutoHideScrollbarState extends State<AutoHideScrollbar> {
             return false;
           },
           child: RawScrollbar(
-            controller: PrimaryScrollController.maybeOf(context),
+            controller: widget.controller,
             thumbColor:
                 tokens.scrollThumb.withValues(alpha: _visible ? 1 : 0),
             thickness: _visible ? 8 : 0,

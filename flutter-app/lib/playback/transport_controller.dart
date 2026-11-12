@@ -286,6 +286,15 @@ class TransportController {
     await resume();
   }
 
+  /// 幂等暂停：睡眠定时器到点时调用。
+  ///
+  /// 不能拿 [togglePlay] 顶替 —— 那是「切换」语义：定时器触发的那一刻用户可能
+  /// 刚好手动暂停过，再 toggle 一下就把音乐放出来了。这里只保证「此刻是暂停」。
+  Future<void> pause() async {
+    await player.pause();
+    _publish();
+  }
+
   /// 从暂停处继续：从原位置接着放，而不是从头开始。
   ///
   /// 系统侧（锁屏 / 通知栏 / 媒体键）与界面播放按钮共用这一条（[togglePlay]

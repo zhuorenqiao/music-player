@@ -30,8 +30,11 @@ import 'state/lyrics_state.dart';
 import 'state/panel_controller.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
+import 'state/sleep_timer_state.dart';
+import 'state/spectrum_state.dart';
 import 'state/toast_state.dart';
 import 'lyrics/upstream.dart' show HttpJsonClient, HttpJsonClientImpl;
+import 'wave/spectrum_pipeline.dart' show SpectrumFrameTable, SpectrumSource;
 import 'theme/app_theme.dart';
 import 'theme/app_tokens.dart';
 import 'theme/theme_state.dart';
@@ -60,6 +63,10 @@ class AppBootstrap {
     CoverState? cover,
     VoidCallback? onCoverViewChanged,
     ThemeState? theme,
+    SpectrumState? spectrum,
+    VoidCallback? onSpectrumViewChanged,
+    VoidCallback? onSpectrumVisibilityChanged,
+    SleepTimerState? sleepTimer,
   }) : // 全屏歌词页的开合开关（T18 建、T19 接页面本体）。
        // 可空入参 + 在这里兜底建：`buildBootstrap` 传它（Stage 与 T19 的页面 /
        // 快捷键要共用同一份），测试里直接 new `AppBootstrap` 的路径也不必改。
@@ -83,7 +90,19 @@ class AppBootstrap {
        onCoverViewChanged = onCoverViewChanged ?? (() {}),
        // 外观状态机（M3 T4/T5）：兜底用 unloaded（默认值，不读 prefs）——
        // 要验主题的测试自己传真实例。
-       theme = theme ?? ThemeState.unloaded();
+       theme = theme ?? ThemeState.unloaded(),
+       // D.3：实时频谱调度层。测试直接 new AppBootstrap 时给一个「源永远
+       // 返回 null」的离线实例，不发请求就不碰平台通道，也不解码。
+       spectrum = spectrum ?? SpectrumState(source: const _NullSpectrumSource()),
+       onSpectrumViewChanged = onSpectrumViewChanged ?? (() {}),
+       onSpectrumVisibilityChanged =
+           onSpectrumVisibilityChanged ?? (() {}),
+       // 睡眠定时器：可空入参 + 兜底建（同 lyricsPage 的模式）。测试直接 new
+       // AppBootstrap 时不必管它；生产由 buildBootstrap 传真的那份，并在
+       // runApp 之前 restore —— 把上次留下的截止时刻接回来。
+       sleepTimer =
+           sleepTimer ??
+           SleepTimerState(prefs: prefs, player: player, toasts: toasts);
 
   final AppPrefs prefs;
   final LibraryRepository repository;
@@ -158,6 +177,18 @@ class AppBootstrap {
   /// 同 [onLyricsViewChanged] 的「同一个函数对象」要求。
   final VoidCallback onCoverViewChanged;
 
+  /// 实时频谱调度层（D.3）：歌词页的 WaveStrip 从这里取当前曲目的帧表。
+  final SpectrumState spectrum;
+
+  /// `buildBootstrap` 挂在 `player.transport.view` 上的频谱联动回调引用。
+  final VoidCallback onSpectrumViewChanged;
+
+  /// `buildBootstrap` 挂在 `LyricsPageController` 上的可见性联动回调引用。
+  final VoidCallback onSpectrumVisibilityChanged;
+
+  /// 睡眠定时器：到点暂停播放。控制条上的闹钟按钮与这一份读同一处状态。
+  final SleepTimerState sleepTimer;
+
   /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
   Playlist get playlist => library.playlist;
   TransportController get transport => player.transport;
@@ -173,8 +204,37 @@ class AppBootstrap {
   Future<void> dispose() async {
     player.transport.view.removeListener(onLyricsViewChanged);
     player.transport.view.removeListener(onCoverViewChanged);
+    player.transport.view.removeListener(onSpectrumViewChanged);
+    lyricsPage.removeListener(onSpectrumVisibilityChanged);
+    // 频谱状态只关一次：ChangeNotifier.dispose() 在 debug 下重复调用会抛
+    // 「已 dispose」断言，而这份 dispose 是**承诺幂等**的（测试里就调了两次）。
+    if (!_spectrumDisposed) {
+      _spectrumDisposed = true;
+      spectrum.dispose();
+    }
     await durationProbe?.close();
   }
+
+  /// [spectrum] 是否已经 dispose 过（见 [dispose]）。
+  bool _spectrumDisposed = false;
+}
+
+/// 离线兜底源：只在「测试直接 new AppBootstrap、没传 spectrumState」时用。
+/// 永远返回 null，于是 WaveStrip 保持装饰回退，且不碰任何平台通道。
+class _NullSpectrumSource implements SpectrumSource {
+  const _NullSpectrumSource();
+
+  @override
+  Future<SpectrumFrameTable?> cached(String trackKey, String audioPath) async =>
+      null;
+
+  @override
+  Future<SpectrumFrameTable?> request(
+    String trackKey,
+    String audioPath, {
+    bool prioritize = false,
+  }) async =>
+      null;
 }
 
 /// 应用根：注册状态层给 provider，再挂主题、提示条与首页。
@@ -235,6 +295,11 @@ class _LightMusicAppState extends State<LightMusicApp> {
         ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
         // 外观状态机（M3 T5）：换肤 / 玻璃 / 波形 / 歌词色七维共读这一份。
         ChangeNotifierProvider<ThemeState>.value(value: bootstrap.theme),
+        // D.3：实时频谱帧表调度。歌词页的 WaveStrip 从这里取表；
+        // ChangeNotifier 只在「表到货 / 被清掉」时通知，不随进度 tick 重建。
+        ChangeNotifierProvider<SpectrumState>.value(value: bootstrap.spectrum),
+        // 睡眠定时器：控制条上的闹钟按钮读这一份；到点由它暂停播放。
+        ChangeNotifierProvider<SleepTimerState>.value(value: bootstrap.sleepTimer),
         Provider<AppPrefs>.value(value: bootstrap.prefs),
       ],
       child: Consumer<ThemeState>(

@@ -55,6 +55,21 @@
   --bg-grad-b: #070a10;
   --card-a: rgba(255, 255, 255, 0.07);
   --card-b: rgba(255, 255, 255, 0.015);
+  /* 播放卡卡面 alpha 的缩放系数：1 = 主题原样，0 = 完全透出页面底色。
+     由「播放卡透明度」滑杆写进 <html>，只作用于 .player */
+  --glass-level: 1;
+  /* 毛玻璃强度（0 = 普通卡面，1 = 全磨砂）：雾面 / 颗粒 / 模糊封面色雾都按它缩放 */
+  --frost-level: 0;
+  /* 磨砂玻璃膜：乳白雾面 + 左上高光 + 右下主题色晕染 + 细颗粒 */
+  --frost-sheen-a: rgb(255 255 255 / 0.1);
+  --frost-sheen-b: rgb(255 255 255 / 0.03);
+  --frost-bloom: rgb(255 255 255 / 0.18);
+  --frost-tint: rgb(var(--accent-rgb) / 0.1);
+  /* 玻璃后面垫的模糊封面：深色主题压暗 + 深色薄纱，免得亮封面把白歌词冲掉 */
+  --frost-cover-opacity: 0.5;
+  --frost-cover-filter: blur(44px) saturate(1.6) brightness(0.7);
+  --frost-veil: linear-gradient(160deg, rgb(8 10 15 / 0.32), rgb(8 10 15 / 0.14));
+  --frost-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
   --panel-a: #121924;
   --panel-b: #0a0e14;
   --sheet-a: #0d1219;
@@ -154,6 +169,15 @@
   /* 卡面留一点透明度：背景对角渐变能透上来，整页是同一块色，不是白卡盖住背景 */
   --card-a: rgba(255, 255, 255, 0.84);
   --card-b: rgba(248, 251, 254, 0.9);
+  /* 白底上的磨砂膜用更亮的乳白雾面，晕染色也补一点 */
+  --frost-sheen-a: rgb(255 255 255 / 0.55);
+  --frost-sheen-b: rgb(255 255 255 / 0.16);
+  --frost-bloom: rgb(255 255 255 / 0.6);
+  --frost-tint: rgb(var(--accent-rgb) / 0.12);
+  /* 浅色主题要提亮，深色封面糊上来才不会把正文压暗 */
+  --frost-cover-opacity: 0.45;
+  --frost-cover-filter: blur(44px) saturate(1.4) brightness(1.35);
+  --frost-veil: linear-gradient(160deg, rgb(255 255 255 / 0.2), rgb(255 255 255 / 0.06));
   --panel-a: #ffffff;
   --panel-b: #f7fafd;
   --sheet-a: #ffffff;
@@ -187,6 +211,17 @@
 
   --toast-bg: #ffffff;
   --toast-error-bg: #fff1f3;
+}
+
+/* 手机上玻璃层按卡片宽度缩小模糊半径：观感接近，移动 GPU / 老浏览器更稳 */
+@media (max-width: 899px) {
+  :root {
+    --frost-cover-filter: blur(30px) saturate(1.6) brightness(0.7);
+  }
+
+  :root[data-mode="light"] {
+    --frost-cover-filter: blur(30px) saturate(1.4) brightness(1.35);
+  }
 }
 
 /* 浅色底上的粉 / 蓝：只换强调色和背景光斑，面仍然用浅色那套。
@@ -392,6 +427,8 @@ h2 {
 /* 曲目区 / 歌词页 + 控制区合在一张卡里：卡片只留一套圆角、边框与玻璃底，
    内部的 stage / transport 不再各带一套卡片外观（否则中间会多出一道缝） */
 .player {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -399,9 +436,71 @@ h2 {
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
+  /* 第一行给不支持 color-mix 的老浏览器兜底；第二行按 --glass-level 缩放卡面 alpha */
   background: linear-gradient(165deg, var(--card-a), var(--card-b));
-  box-shadow: var(--shadow-card);
-  backdrop-filter: blur(16px);
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--card-a) calc(var(--glass-level) * 100%), transparent),
+    color-mix(in srgb, var(--card-b) calc(var(--glass-level) * 100%), transparent)
+  );
+  /* 磨砂越强，后面的底色被糊得越狠、颜色越浓 —— 玻璃质感而不是「单纯变淡」 */
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgb(255 255 255 / calc(var(--frost-level) * 0.22));
+  -webkit-backdrop-filter:
+    blur(calc(16px + var(--frost-level) * 26px))
+    saturate(calc(100% + var(--frost-level) * 65%));
+  backdrop-filter:
+    blur(calc(16px + var(--frost-level) * 26px))
+    saturate(calc(100% + var(--frost-level) * 65%));
+}
+
+/* 磨砂膜：雾面白 + 细颗粒 + 左上高光 + 右下一点主题色晕染。
+   浓度跟着「磨砂」滑杆长；z-index -1 让它压在卡面背景之上、内容之下。
+   播放卡与播放列表卡共用同一套 */
+.player::before,
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--frost-level);
+  background-image:
+    linear-gradient(150deg, var(--frost-sheen-a), var(--frost-sheen-b) 58%, transparent),
+    var(--frost-veil),
+    radial-gradient(120% 90% at 16% 0%, var(--frost-bloom), transparent 62%),
+    radial-gradient(90% 80% at 100% 100%, var(--frost-tint), transparent 64%),
+    var(--frost-noise);
+  background-size: auto, auto, auto, auto, 160px 160px;
+}
+
+/* 玻璃后面的内容：当前封面糊成一片色雾，再由上面的雾面 / 颗粒罩住。
+   没有它，卡面背后只有一条平滑渐变，模糊 / 磨砂根本看不出来 */
+.glass-frost {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: calc(var(--frost-level) * var(--frost-cover-opacity));
+}
+
+/* 用真实 <img> 而不是把封面 URL 塞进 CSS 变量：移动端浏览器对
+   「超长 data URL 走自定义属性再进 background-image」兼容性不稳，
+   图片直接走 src，data / blob / http 三种封面都只当普通图片加载 */
+.glass-frost img {
+  position: absolute;
+  inset: -12%;
+  width: 124%;
+  height: 124%;
+  max-width: none;
+  object-fit: cover;
+  object-position: center;
+  filter: var(--frost-cover-filter);
+  -webkit-filter: var(--frost-cover-filter);
 }
 
 .player > .stage {
@@ -687,12 +786,35 @@ h2 {
   cursor: pointer;
 }
 
-/* 黑胶外圈：细密纹路 + 斜向反光；中间留出封面标签位（宽高见 --vinyl-label） */
+/* 黑胶外圈：固定的那一层 —— 落影 + 斜向反光（反光在 ::after 里，见下）。
+   内阴影（暗角）挪到 `.stage__vinyl-disc` 上了：inset 阴影画在元素自己的背景层，
+   会被不透明的子元素（盘面）整个盖住 —— 留在外层等于白写。
+   盘面本体在 `.stage__vinyl-disc`（跟着唱片转），中间留出封面标签位（宽高见 --vinyl-label） */
 .stage__vinyl {
   position: absolute;
   inset: 0;
   border-radius: 50%;
+  box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.98);
+  pointer-events: none;
+}
+
+/* 盘面本体：跟着唱片一起转（与封面同一条 cover-rotate、同一个时长 → 同一相位，
+   两层严丝合缝地一起转，中间那道标签位与外圈不会错位）。
+   细密纹路是同心环，转起来本身看不出来 —— 真正让人看出「在转」的是两处柔和高光
+   与那道很淡的弧形高光（唱片轻微翘起时扫过的那道光），它们随盘面转过去。 */
+.stage__vinyl-disc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
   background:
+    /* 弧形高光：很淡（.07），转起来才看得出盘面在动 */
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      rgba(255, 255, 255, 0.07) 22deg,
+      transparent 88deg,
+      transparent 360deg
+    ),
     radial-gradient(circle at 30% 25%, var(--vinyl-hi), transparent 46%),
     radial-gradient(circle at 72% 80%, var(--vinyl-low), transparent 44%),
     repeating-radial-gradient(
@@ -706,11 +828,23 @@ h2 {
       #14161a 2px 3px,
       #0a0b0d 3px 4.4px
     );
+  transform-origin: center;
+  will-change: transform;
+  /* 暗角与内圈亮边画在盘面这层：外层的 inset 阴影会被这层不透明背景整个盖住。 */
   box-shadow:
     inset 0 0 0 1px var(--vinyl-hi),
-    inset 0 0 38px var(--vinyl-low),
-    0 30px 60px -30px rgba(0, 0, 0, 0.98);
-  pointer-events: none;
+    inset 0 0 38px var(--vinyl-low);
+  /* 与封面同一条动画、同一个时长 → 同一相位。暂停时**不摘掉动画**，只把播放状态
+     冻住（和 .stage__cover 同一套语义）。 */
+  animation: cover-rotate var(--cover-spin-duration) linear infinite;
+  animation-play-state: paused;
+}
+
+/* 播放中：盘面跟着封面一起转。封面用 .is-spinning（在它自己身上），
+   盘面在封面之前，兄弟选择器够不着，所以由外层的 .is-playing 驱动 ——
+   两个动画在同一帧解冻，相位一致。 */
+.stage__cover-wrap.is-playing .stage__vinyl-disc {
+  animation-play-state: running;
 }
 
 /* 斜向反光：像灯光扫在黑胶上，固定不随唱片转 */
@@ -999,8 +1133,9 @@ h2 {
   backdrop-filter: blur(20px) saturate(140%);
 }
 
-/* 进度条上方那条：「T」（改歌词高亮色）固定在最左端，两页、所有断点都在这个位置；
-   频谱只有歌词页（≤1024）才排进来，平时不占位 */
+/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器，
+   频谱只有歌词页（≤1024）才排进来，平时不占位；
+   沉浸模式这三颗按钮让位给歌词页右上角那一格（见 .lyric-tools） */
 .transport__wave {
   display: flex;
   align-items: center;
@@ -1249,6 +1384,8 @@ h2 {
    8. 播放列表
    -------------------------------------------------------------------------- */
 .panel {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -1257,8 +1394,22 @@ h2 {
   padding: 16px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
+  /* 与播放卡同一套玻璃：alpha 跟「透明」，磨砂层跟「磨砂」 */
   background: linear-gradient(170deg, var(--card-a), var(--card-b));
-  box-shadow: var(--shadow-card);
+  background: linear-gradient(
+    170deg,
+    color-mix(in srgb, var(--card-a) calc(var(--glass-level) * 100%), transparent),
+    color-mix(in srgb, var(--card-b) calc(var(--glass-level) * 100%), transparent)
+  );
+  box-shadow:
+    var(--shadow-card),
+    inset 0 1px 0 rgb(255 255 255 / calc(var(--frost-level) * 0.22));
+  -webkit-backdrop-filter:
+    blur(calc(16px + var(--frost-level) * 26px))
+    saturate(calc(100% + var(--frost-level) * 65%));
+  backdrop-filter:
+    blur(calc(16px + var(--frost-level) * 26px))
+    saturate(calc(100% + var(--frost-level) * 65%));
 }
 
 .panel__head {
@@ -1565,6 +1716,8 @@ h2 {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+  /* 弹层自己就是一块面，里面的面板只留磨砂层，不用再糊一次背景 */
+  backdrop-filter: none;
 }
 
 .panel--sheet .panel__list {
@@ -2163,7 +2316,73 @@ body.is-sheet-open {
 }
 
 .lyrics-page__meta {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* 三颗小按钮成组：「T」（歌词高亮色）、水滴（卡面毛玻璃）、闹钟（睡眠定时器）。
+   简约模式：排在控制条上方那一排的左端；
+   沉浸模式：整组挪到歌词页右上角 —— 歌名右边、波形样式下拉左边那一格。
+   meta 不再抢满整行（flex:0 1 auto），给它们腾出位置；下拉靠 margin-left:auto 仍贴最右。 */
+.lyric-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.lyrics-page__head .wave-style {
+  margin-left: auto;
+}
+
+/* 头部这一组：面板改成向下弹（头部在上面，下面才是内容）。
+   横向对齐各自的触发按钮，但用「居中」而不是「贴左边」——
+   按钮在页头中间，贴左展开会顶出屏幕右边（窄屏尤其明显）。
+   睡眠定时器的面板 216px 宽，居中也会溢出，改成贴着按钮右缘向左展开。 */
+@keyframes wave-style-in-center {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.lyric-tools--head .lyric-color__panel {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  animation-name: wave-style-in-center;
+}
+
+.lyric-tools--head .glass-control__panel {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 50%;
+  transform: translateX(-50%);
+  animation-name: wave-style-in-center;
+}
+
+.lyric-tools--head .sleep-timer__panel {
+  top: calc(100% + 8px);
+  bottom: auto;
+  right: 0;
+  left: auto;
+}
+
+/* 歌名 + 「双语」：标题占剩余宽度并省略，按钮不缩 */
+.lyrics-page__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lyrics-page__title-row .lyrics-page__title {
+  flex: 0 1 auto;
   min-width: 0;
 }
 
@@ -2305,6 +2524,364 @@ body.is-sheet-open {
   outline-offset: 2px;
 }
 
+/* 「T」右边的毛玻璃透明度：同样 26px 小按钮，点开一条横向滑杆 */
+.glass-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.glass-control__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--accent-light);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.glass-control__icon {
+  width: 14px;
+  height: 14px;
+}
+
+.glass-control__trigger:hover {
+  background: var(--surface-2);
+}
+
+.glass-control__trigger[aria-expanded="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.glass-control__trigger:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 面板同样向上弹，与「T」的色板同底；两行滑杆（透明 / 磨砂）左对齐 */
+.glass-control__panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
+  box-shadow: var(--shadow-pop);
+  animation: wave-style-in 0.16s var(--ease) both;
+  /* 在面板里拖动时由滑杆自己处理手势：不滚页面、不选文字、不长按弹菜单。
+     注意不能在滑杆上 preventDefault（原生 range 会直接拖不动） */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.glass-control__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.glass-control__label,
+.glass-control__value {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.glass-control__label {
+  width: 24px;
+}
+
+.glass-control__value {
+  min-width: 30px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.glass-control__slider {
+  --slider-percent: 0%;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 108px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.glass-control__slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background-image: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--slider-percent),
+    var(--tint-3) var(--slider-percent) 100%
+  );
+}
+
+.glass-control__slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+.glass-control__slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tint-3);
+}
+
+.glass-control__slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.glass-control__slider::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.glass-control__slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.35);
+}
+
+/* 睡眠定时器：与「T」「水滴」同规格的 26px 小按钮（同一排里挨着水滴）。
+   倒计时跑着时按钮撑成一枚药丸，直接显示剩余 mm:ss —— 不用再点开面板看。 */
+.sleep-timer {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.sleep-timer__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--accent-light);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    background-color 0.18s var(--ease),
+    width 0.18s var(--ease);
+}
+
+.sleep-timer__icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+/* 运行中：撑成药丸，把剩余时间写在按钮里 */
+.sleep-timer__trigger.is-running {
+  width: auto;
+  padding: 0 8px;
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.sleep-timer__time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  color: var(--accent-light);
+}
+
+/* 最后一分钟：换个颜色提醒一下 */
+.sleep-timer__trigger.is-ending {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+.sleep-timer__trigger.is-ending .sleep-timer__time {
+  color: var(--danger-ink);
+}
+
+.sleep-timer__trigger:hover {
+  background: var(--surface-2);
+}
+
+.sleep-timer__trigger[aria-expanded="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.sleep-timer__trigger:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 面板与「T」的色板、毛玻璃那条同底，向上弹 */
+.sleep-timer__panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 216px;
+  padding: 10px 12px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
+  box-shadow: var(--shadow-pop);
+  animation: wave-style-in 0.16s var(--ease) both;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.sleep-timer__running {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.sleep-timer__running-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.sleep-timer__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sleep-timer__preset {
+  padding: 5px 9px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    background-color 0.16s var(--ease);
+}
+
+.sleep-timer__preset:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.sleep-timer__preset[data-active] {
+  color: var(--accent-light);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.sleep-timer__preset:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+.sleep-timer__custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sleep-timer__custom-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.sleep-timer__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.sleep-timer__input:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 1px;
+}
+
+.sleep-timer__cancel,
+.sleep-timer__start {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    background-color 0.16s var(--ease);
+}
+
+.sleep-timer__cancel {
+  color: var(--danger-ink);
+  border: 1px solid var(--danger-line);
+  background: var(--danger-soft);
+}
+
+.sleep-timer__cancel:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+}
+
+.sleep-timer__start {
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+  background: var(--accent);
+}
+
+.sleep-timer__start:hover {
+  filter: brightness(1.06);
+}
+
+.sleep-timer__cancel:focus-visible,
+.sleep-timer__start:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
 /* --------------------------------------------------------------------------
    抽屉：从右边缘滑进滑出（菜单 / 换肤共用）
    -------------------------------------------------------------------------- */
@@ -2321,7 +2898,9 @@ body.is-sheet-open {
   position: absolute;
   inset: 0;
   background: var(--scrim);
-  backdrop-filter: blur(2px);
+  /* **不糊背景**：菜单弹出来时后面的内容保持清晰，只压一层暗色把它推远。
+     糊了之后歌词与封面都读不清（浅色主题尤其明显）。Flutter 端
+     `showGeneralDialog(barrierColor:)` 同样不糊（drawer_menu.dart:22）。 */
   animation: drawer-fade 0.2s var(--ease) both;
 }
 
@@ -2344,16 +2923,13 @@ body.is-sheet-open {
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
-  /* 半透明玻璃面：叠在模糊背景上，白底主题也不会是一整块死白 */
+  /* **实色面，不做磨砂**：背景既然不糊，面再半透明就会让后面的内容「清晰地」
+     透出来（菜单里叠着播放器的字）。改成不透明的面，层级才干净 ——
+     与 Flutter 端 drawer_menu.dart 的 sheetA→sheetB 实色渐变同一套做法。 */
   background:
     radial-gradient(120% 58% at 100% 0%, rgb(var(--accent-rgb) / 0.1), transparent 62%),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--panel-a) 88%, transparent),
-      color-mix(in srgb, var(--panel-b) 94%, transparent)
-    );
+    linear-gradient(180deg, var(--panel-a), var(--panel-b));
   box-shadow: var(--shadow-pop);
-  backdrop-filter: blur(18px) saturate(1.15);
   animation: drawer-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -2814,11 +3390,11 @@ body.is-sheet-open {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
-  min-height: 36px;
-  padding: 0 10px;
+  gap: 3px;
+  min-height: 26px;
+  padding: 0 9px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 11.5px;
   color: var(--text-dim);
   white-space: nowrap;
   border: 1px solid var(--tint-3);
@@ -2832,8 +3408,8 @@ body.is-sheet-open {
 }
 
 .lyrics-bilingual .icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .lyrics-bilingual:hover {
@@ -3405,7 +3981,8 @@ body.is-lyrics-page .app__main {
   border-radius: var(--radius-xl);
   object-fit: contain;
   box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.95);
-  cursor: default;
+  /* 未放大时双击可继续放大，光标先说明这件事 */
+  cursor: zoom-in;
   /* 缩放/拖拽：变形绕自身中心，位移与缩放都由 JS 写入 transform */
   transform-origin: center;
   will-change: transform;
@@ -3638,12 +4215,12 @@ body.is-lightbox-open {
     display: flex;
     align-items: center;
     gap: 8px;
-    /* 让出左右时间标签（36px）+ 间距（8px），与 .progress__slider 等长；
+    /* 让出左右时间标签（36px）+ 间距（8px）= 44px，与 .progress__slider 等长；
        负外边距抵消 transport 的 12px 行间距，让频谱与进度条贴合 */
-    margin: 0 22px -19px;
+    margin: 0 44px -19px;
   }
 
-  /* 「T」按钮占的那 34px 从频谱里让出来，不再额外撑宽整块 */
+  /* 三颗小按钮搬去页头了，这行只剩频谱 —— 它按整行宽度铺满 */
   body.is-lyrics-page .transport__wave .lyrics-page__wave {
     display: block;
     flex: 1 1 auto;
@@ -3653,6 +4230,13 @@ body.is-lightbox-open {
 
   /* 频谱挪到进度条上方后，右栏那条收起来，免得出现两条波形 */
   body.is-lyrics-page .lyrics-page__art .lyrics-page__wave {
+    display: none;
+  }
+}
+
+/* 宽屏歌词页：频谱在右栏，控制条上那行已经空了（三颗按钮在页头）—— 整行收掉 */
+@media (min-width: 1025px) {
+  body.is-lyrics-page .transport__wave {
     display: none;
   }
 }
@@ -3936,6 +4520,7 @@ body.is-lightbox-open {
   }
 
   .stage__cover,
+  .stage__vinyl-disc,
   .lyrics-page__cover,
   .stage__cover-wrap.is-playing::before,
   .stage__skeleton.is-visible,

@@ -43,6 +43,11 @@ class ThemeState extends ChangeNotifier {
     return state;
   }
 
+  /// 兜底构造（默认值，不读 prefs）：给「直接 new AppBootstrap 的测试路径」
+  /// 用 —— 要验主题的测试自己传 [load] 出的真实例。
+  factory ThemeState.unloaded({bool Function()? platformDark}) =>
+      ThemeState._(AppPrefs.inMemory(), platformDark: platformDark);
+
   final AppPrefs _prefs;
   final bool Function() _platformDark;
 

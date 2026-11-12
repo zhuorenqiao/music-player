@@ -70,15 +70,16 @@ void main() {
     expect(stage.left, closeTo(1920 - panel.right, 0.5));
   });
 
-  testWidgets('窄屏 420 宽：单列堆叠且控制条在最底', (tester) async {
+  testWidgets('窄屏 420 宽：只有一张播放卡（stage + transport），列表收进弹层', (tester) async {
     await pumpAt(tester, 420, 800);
 
     final stage = tester.getRect(find.byKey(const Key('stage')));
-    final panel = tester.getRect(find.byKey(const Key('panel')));
     final transport = tester.getRect(find.byKey(const Key('transport')));
 
-    expect(stage.bottom, lessThanOrEqualTo(panel.top));
-    expect(panel.bottom, lessThanOrEqualTo(transport.top));
+    // React `App.tsx:1714` 的 `{!compact && <Panel />}`：窄屏不渲染常驻面板。
+    expect(find.byKey(const Key('panel')), findsNothing);
+    // stage 在上、控制条在卡内底部（贴视口底边），两者不重叠。
+    expect(stage.bottom, lessThanOrEqualTo(transport.top));
     expect(transport.bottom, closeTo(800, 1));
   });
 

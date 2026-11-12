@@ -133,6 +133,13 @@ class _SheetPanelState extends State<_SheetPanel> {
     final visible =
         _routeAnimation?.status != AnimationStatus.dismissed &&
         TickerMode.valuesOf(context).enabled;
-    return Panel(onClose: widget.onClose, tickerEnabled: visible);
+    return Panel(
+      onClose: widget.onClose,
+      tickerEnabled: visible,
+      // 弹层自己画了 sheet 卡面（`_SheetCard`），面板只摆内容 —— 对应
+      // `.panel--sheet { border:none; background:transparent; box-shadow:none }`
+      // （app.css:1673-1685）。不剥的话会叠出「卡里套卡」两道边。
+      flush: true,
+    );
   }
 }

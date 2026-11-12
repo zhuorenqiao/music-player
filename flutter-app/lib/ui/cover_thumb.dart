@@ -51,7 +51,7 @@ class CoverThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
-    final hasFile = path.isNotEmpty && File(path).existsSync();
+    final hasFile = path.isNotEmpty && _existsCached(path);
     final useGenerated = !hasFile && fallbackArtist.isNotEmpty;
     final fallback = Icon(
       Icons.music_note,
@@ -71,6 +71,12 @@ class CoverThumb extends StatelessWidget {
           ? Image.file(
               File(path),
               fit: BoxFit.cover,
+              // 缩略图按**显示尺寸的 2 倍**解码，别把 500×500 的原图整幅塞进
+              // 记忆缓存再缩到 44 逻辑像素画：解码开销、内存与每帧的采样成本
+              // 都按面积走，列表一滚就是几十张。设备像素比高时 2× 仍是清晰
+              // 上限，再大肉眼也看不出来。
+              cacheWidth: _decodePx(context, size),
+              cacheHeight: _decodePx(context, size),
               // 切歌时保留上一帧，避免缩略图闪成白块
               gaplessPlayback: true,
               errorBuilder: (imageContext, error, stack) => fallback,
@@ -83,6 +89,38 @@ class CoverThumb extends StatelessWidget {
               : fallback,
     );
   }
+}
+
+/// `path` 是否真的在磁盘上，结果按路径缓存在会话级的小表里。
+///
+/// **`existsSync` 是同步 `stat` 系统调用**，而本件是列表行里的一颗缩略图：
+/// 面板会因为换肤滑块、封面到货、播放态变化等无关原因重建，每次重建都要对每
+/// 一行重跑一遍 `stat` —— 一屏 12 行、播放中每秒数次，就是每秒几十次系统调用
+/// 落在 UI 线程上。封面缓存目录里的文件一旦落盘在本进程生命周期内不会被改写
+/// （同名文件是哈希命名，内容变了就是新名字），所以缓存「存在」是安全的。
+///
+/// **只缓存正结果**：阴性结果不缓存 —— 线上预取正在往这个目录里写文件，
+/// 「此刻还没有」不代表「以后也没有」，缓存它会永远显示占位图。
+/// 文件真的在运行中被删掉时，`errorBuilder` 仍然兜得住（见上方的构造）。
+final Map<String, bool> _existsMemo = <String, bool>{};
+
+bool _existsCached(String path) {
+  final known = _existsMemo[path];
+  if (known == true) return true;
+  final exists = File(path).existsSync();
+  if (exists) _existsMemo[path] = true;
+  return exists;
+}
+
+/// 目标解码边长：显示尺寸 × 设备像素比，夹在 [32, 512]。
+///
+/// 上界 512 是为了两件事：封面文件普遍 ≤500px（原图再大也裁不出更多细节），
+/// 以及同一个文件在「行内缩略图 / 灯箱」两处复用时不会因为 cacheWidth 差别太大
+/// 而各解码一份（Flutter 的图像缓存键含 cacheWidth/Height）。
+int _decodePx(BuildContext context, double logicalSize) {
+  final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
+  final px = (logicalSize * dpr).round();
+  return px.clamp(32, 512);
 }
 
 /// 三根 2.5px 音柱，只在当前曲目那一行的歌手行尾出现。

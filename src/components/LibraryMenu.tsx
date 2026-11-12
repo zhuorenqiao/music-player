@@ -5,8 +5,8 @@
  * 换肤再点一下才弹出二级抽屉（ThemeDrawer），主题选项不混在一级菜单里。
  */
 
-import { useState } from 'react';
-import { Drawer } from './Drawer';
+import { useEffect, useRef, useState } from 'react';
+import { Drawer, EXIT_MS } from './Drawer';
 import { ThemeDrawer } from './ThemeDrawer';
 
 const MoreIcon = () => (
@@ -46,6 +46,9 @@ export function LibraryMenu({ onAdd, onClear }: {
 }) {
   const [open, setOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
+  /** 一级抽屉收完再弹二级的定时器（卸载时清掉）。 */
+  const themeTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(themeTimer.current), []);
 
   return (
     <>
@@ -88,12 +91,22 @@ export function LibraryMenu({ onAdd, onClear }: {
             <span className="menu-row__title">清空播放列表</span>
           </button>
 
-          {/* 二级入口：再点一下才弹换肤抽屉，一级菜单里不混主题选项 */}
+          {/* 二级入口：再点一下才弹换肤抽屉，一级菜单里不混主题选项。
+              **先收一级、等它收完再弹二级**：两层抽屉叠着会让 Esc / 遮罩的语义
+              变糊（关掉二级还剩一级挡着，点遮罩也说不清关的是哪层）。
+              Flutter 端 drawer_menu.dart 是同一套顺序。 */}
           <button
             className="menu-row menu-row--sub"
             type="button"
             aria-haspopup="dialog"
-            onClick={() => setThemeOpen(true)}
+            onClick={() => {
+              setOpen(false);
+              window.clearTimeout(themeTimer.current);
+              themeTimer.current = window.setTimeout(
+                () => setThemeOpen(true),
+                EXIT_MS + 20,
+              );
+            }}
           >
             <span className="menu-row__icon" aria-hidden="true"><PaletteIcon /></span>
             <span className="menu-row__title">换肤</span>

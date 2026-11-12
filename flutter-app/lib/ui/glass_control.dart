@@ -11,21 +11,26 @@
 // 面板；点面板以外收起、Esc 收起（捕获语义在 Flutter 侧由「浮层路由 +
 // barrierDismissible」天然等价——面板用 Overlay 挂，点外关闭由
 // _ExternalTapClose 监听实现）。
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
 import '../theme/theme_state.dart';
+import 'tool_panel.dart';
 
 /// 值域上限（glass.tsx:17 的 MAX_GLASS_TRANSPARENCY）。
 const int kMaxGlassTransparency = 100;
 
+/// 面板宽度（`_GlassPanel` 的 `width: 220`）。
+const double kGlassPanelWidth = 220;
+
 /// 卡面透明度与毛玻璃的控制入口（水滴按钮 + 弹出面板）。
 class GlassControl extends StatefulWidget {
-  const GlassControl({super.key});
+  const GlassControl({super.key, this.side = ToolPanelSide.above});
+
+  /// 面板往哪边弹：控制条上那排向上，歌词页右上角向下。
+  final ToolPanelSide side;
 
   @override
   State<GlassControl> createState() => _GlassControlState();
@@ -49,6 +54,17 @@ class _GlassControlState extends State<GlassControl> {
     final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return;
     final pos = box.localToGlobal(Offset.zero);
+    // 落位交给 toolPanelPosition：控制条那排向上弹（偏左 40px，面板比按钮
+    // 宽），歌词页右上角向下弹（以按钮中心对齐）。
+    final place = toolPanelPosition(
+      anchor: pos,
+      anchorWidth: box.size.width,
+      anchorHeight: box.size.height,
+      panelWidth: kGlassPanelWidth,
+      viewport: MediaQuery.sizeOf(context),
+      side: widget.side,
+      leftBias: -40,
+    );
     _entry = OverlayEntry(
       builder: (context) => Stack(
         children: [
@@ -61,8 +77,9 @@ class _GlassControlState extends State<GlassControl> {
             ),
           ),
           Positioned(
-            left: math.max(8, pos.dx - 40),
-            bottom: MediaQuery.sizeOf(context).height - pos.dy + 8,
+            left: place.left,
+            top: place.top,
+            bottom: place.bottom,
             child: Material(
               color: Colors.transparent,
               child: _GlassPanel(onClose: _removeOverlay),
@@ -128,7 +145,7 @@ class _GlassPanel extends StatelessWidget {
       // 拖滑杆别让手势冒泡到页面（React 版 onPointerDown stopPropagation 对译）。
       onTap: () {},
       child: Container(
-        width: 220,
+        width: kGlassPanelWidth,
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
         decoration: BoxDecoration(
           borderRadius: radius,

@@ -1,0 +1,30 @@
+
+> light-music-player@0.1.0 dev
+> vite
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m887[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://10.55.253.214:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.17.128.1:[1m5173[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.20.16.1:[1m5173[22m/[39m
+[2m[32m  ➜[39m[22m[2m  press [22m[1mh + enter[22m[2m to show help[22m
+[2m09:55:40[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m09:55:46[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m09:55:53[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m09:55:59[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m09:58:55[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:00:39[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:03:58[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:04:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:04:56[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m10:05:05[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m10:06:03[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m10:06:18[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m10:17:30[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:19:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:19:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m10:19:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m
+[2m10:19:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/App.tsx[22m
+[2m10:20:29[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/app.css[22m

@@ -115,8 +115,22 @@ class PlayerState extends ChangeNotifier {
 
   void _onView() {
     if (_disposed) return;
+    // `TransportView` 实现了 `==`（transport_controller.dart:123-145），而
+    // `view` 是个 ValueNotifier —— 值没变时它自己就不通知，所以这里多数情况
+    // 本来就不会被调到。真正的冗余在**装配层**：`main.dart` 另有一条
+    // `transport.view.addListener(syncLyricsTrack)`，那条会跑，与本条无关。
+    //
+    // 这里再兜一层显式判等：只要 `view` 的值与上次通知出去的不同就不再重建
+    // 整棵树。`Panel` / `Stage` / `HomePage` 都 `watch<PlayerState>()`，
+    // 一次多余的通知就是「面板 + 统计行的 O(n) 求和 + 整张播放卡」白重建。
+    final next = transport.view.value;
+    if (identical(_lastPublishedView, next)) return;
+    _lastPublishedView = next;
     notifyListeners();
   }
+
+  /// 上一次因 [view] 变化而通知出去的那份快照（见 [_onView] 的判等）。
+  TransportView? _lastPublishedView;
 
   Future<void> playTrack(String id) async {
     await transport.playTrack(id);
@@ -125,6 +139,12 @@ class PlayerState extends ChangeNotifier {
 
   Future<void> togglePlay() async {
     await transport.togglePlay();
+    schedulePersist();
+  }
+
+  /// 幂等暂停（睡眠定时器到点时用）：只保证「此刻是暂停」，不做切换。
+  Future<void> pause() async {
+    await transport.pause();
     schedulePersist();
   }
 

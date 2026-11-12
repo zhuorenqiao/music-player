@@ -124,7 +124,11 @@ class PanelHarness {
   /// 「继续播放」被点了几次（终审 I5 / ledger T28：这条从前没有断言）。
   int get gestureCalls => _harnessPlayer.gestures;
 
-  Widget build() => MultiProvider(
+  Widget build({
+    bool flush = false,
+    double frostLevel = 0,
+    String coverPath = '',
+  }) => MultiProvider(
     providers: [
       ChangeNotifierProvider<LibraryState>.value(value: library),
       ChangeNotifierProvider<PlayerState>.value(value: player),
@@ -133,7 +137,14 @@ class PanelHarness {
       ChangeNotifierProvider<ThemeState>.value(value: theme),
       ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
     ],
-    child: SizedBox(height: tall ? 700 : null, child: const Panel()),
+    child: SizedBox(
+      height: tall ? 700 : null,
+      child: Panel(
+        flush: flush,
+        frostLevel: frostLevel,
+        coverPath: coverPath,
+      ),
+    ),
   );
 
   void dispose() {
