@@ -21,6 +21,12 @@ import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
 import 'cover_thumb.dart';
 
+/// 一行的固定高度：`minHeight: 56`，曲名与副行都是单行（长名走省略号），
+/// 所以每一行正好 56 —— 列表若是懒建的，「滚到当前行」只能靠
+/// `index * kTrackRowExtent` 算偏移（滚出屏幕的行没有 Element，
+/// `ensureVisible` 无从下手），改行高务必同步这里。
+const double kTrackRowExtent = 56;
+
 /// 一行曲目。纯 props，不碰状态层 —— 播放列表面板（T28）负责把
 /// `Track` / `index` 映射成这些字段。
 class TrackRow extends StatelessWidget {
@@ -77,7 +83,7 @@ class TrackRow extends StatelessWidget {
       onTap: onPlay,
       borderRadius: BorderRadius.circular(kRadiusLg),
       child: Container(
-        constraints: const BoxConstraints(minHeight: 56),
+        constraints: const BoxConstraints(minHeight: kTrackRowExtent),
         padding: const EdgeInsets.fromLTRB(8, 7, 4, 7),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(kRadiusLg),
@@ -145,44 +151,46 @@ class TrackRow extends StatelessWidget {
                             ],
                           ),
                           const SizedBox(height: 3),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  artistLine,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    color: tokens.textFaint,
-                                  ),
-                                ),
-                              ),
-                              if (active) ...[
-                                const SizedBox(width: 6),
-                                // 音柱是 1s 循环的常驻动画（60fps 重绘）。
-                                // 不加隔离的话，它每帧都会把**整行**标脏，
-                                // 而整行和兄弟行共处同一个列表图层 —— 结果是
-                                // 为了 12×13px 的三根小条，把整屏列表跟着重
-                                // 光栅化。隔离后只有这一小块自画。
-                                RepaintBoundary(
-                                  child: BarsIndicator(playing: playing),
-                                ),
-                              ],
-                            ],
+                          Text(
+                            artistLine,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: tokens.textFaint,
+                            ),
                           ),
                         ],
                       ),
                     ),
+                    // `.track__tail { display: flex; align-items: center;
+                    // gap: 6px }`（app.css:4251-4256）：音柱和时长是**同一行**，
+                    // 垂直居中，音柱在时长左边。
+                    // 旧实现把音柱挂在副标题那行的末尾 —— 它于是掉到时长下面、
+                    // 贴着卡面右边，与时长既不同行也不同心（截图里就是这个样子）。
                     const SizedBox(width: 6),
-                    Text(
-                      duration,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: tokens.textDim,
-                        // 等宽数字：时长列不抖
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (active) ...[
+                          // 音柱是常驻动画（60fps 重绘）。不加隔离的话它每帧都会
+                          // 把**整行**标脏，而整行和兄弟行共处同一个列表图层 ——
+                          // 为了 12×13px 的三根小条，整屏列表跟着重光栅化。
+                          RepaintBoundary(
+                            child: BarsIndicator(playing: playing),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Text(
+                          duration,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: tokens.textDim,
+                            // 等宽数字：时长列不抖
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

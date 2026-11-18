@@ -405,6 +405,56 @@ function useTrackSwipe() {
   };
 }
 
+/**
+ * 黑胶盘面（不带封面）：简朴模式与歌词页右栏共用同一套纹路 / 反光 / 唱臂。
+ *
+ * 盘面分两层：`.stage__vinyl-disc` 是跟着唱片转的那层（纹路 + 柔和高光 +
+ * 一道很淡的弧形高光），外层 `.stage__vinyl` 只留反光与内阴影 —— 灯光固定
+ * 不动，唱片转。反光留在外层才不会跟着盘面一起转。
+ */
+function VinylPlatter({ spinning }: { spinning: boolean }) {
+  return (
+    <>
+      <span className="stage__vinyl" aria-hidden="true">
+        <span className={`stage__vinyl-disc${spinning ? ' is-spinning' : ''}`} />
+      </span>
+      {/* 唱臂：播放时落到盘面，暂停时摆到右侧（由 .is-playing 驱动） */}
+      <span className="stage__tonearm" aria-hidden="true">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            {/* 金属臂杆：从支点到唱头方向的高光渐变 */}
+            <linearGradient id="stageArmMetal" gradientUnits="userSpaceOnUse" x1="97" y1="3" x2="78.5" y2="29.5">
+              <stop offset="0%" stopColor="#e4e9ed" />
+              <stop offset="48%" stopColor="#97a2aa" />
+              <stop offset="100%" stopColor="#525b62" />
+            </linearGradient>
+            {/* 支点底座：深色同心金属盘 */}
+            <radialGradient id="stageArmBase" cx="0.42" cy="0.38" r="0.62">
+              <stop offset="0%" stopColor="#39424a" />
+              <stop offset="62%" stopColor="#171c20" />
+              <stop offset="100%" stopColor="#0a0e11" />
+            </radialGradient>
+          </defs>
+          {/* 支点底座 + 薄荷绿轴心 */}
+          <circle cx="97" cy="3" r="3.6" fill="url(#stageArmBase)" stroke="rgba(255,255,255,0.3)" strokeWidth="0.5" />
+          <circle cx="97" cy="3" r="1.5" fill="none" stroke="url(#stageArmMetal)" strokeWidth="0.7" />
+          <circle cx="97" cy="3" r="0.75" fill="var(--accent, #2ee6a8)" />
+          {/* 臂杆：投影 → 深色轮廓 → 金属内芯 → 顶部高光 */}
+          <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="rgba(0,0,0,0.55)" strokeWidth="3" strokeLinecap="round" transform="translate(0.7,0.9)" />
+          <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="#0a0e11" strokeWidth="2.5" strokeLinecap="round" />
+          <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="url(#stageArmMetal)" strokeWidth="1.7" strokeLinecap="round" />
+          <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="0.5" strokeLinecap="round" transform="translate(0.15,-0.3)" />
+          {/* 唱头：深色壳体 + 薄荷绿识别线 */}
+          <g transform="rotate(-45 78.5 29.5)">
+            <rect x="75" y="27.5" width="7" height="4" rx="2" fill="#12181c" stroke="rgba(255,255,255,0.26)" strokeWidth="0.4" />
+            <rect x="76.4" y="28.9" width="4.2" height="1.1" rx="0.55" fill="var(--accent, #2ee6a8)" opacity="0.9" />
+          </g>
+        </svg>
+      </span>
+    </>
+  );
+}
+
 function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLElement | null) => void; discRef: React.RefObject<HTMLImageElement> }) {
   const { current, playing, loading, seek } = usePlayer();
   const { cues, status, state, showRetry, retry, trans, transNote } = useLyrics();
@@ -476,10 +526,9 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
           盘面分两层：`.stage__vinyl-disc` 是跟着唱片转的那层（纹路 + 柔和高光 +
           一道很淡的弧形高光），外层 `.stage__vinyl` 只留反光与内阴影 —— 灯光固定
           不动，唱片转。反光留在外层才不会跟着盘面一起转。
+          与歌词页右栏的唱片外观共用同一个组件（见 VinylPlatter）。
         */}
-        <span className="stage__vinyl" aria-hidden="true">
-          <span className="stage__vinyl-disc" />
-        </span>
+        <VinylPlatter spinning={playing} />
         <img
           ref={discRef}
           className={`stage__cover${playing ? ' is-spinning' : ''}`}
@@ -497,39 +546,6 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
         />
         {/* 封面/音频加载中的微光骨架屏（vanilla 用 #coverSkeleton + .is-visible） */}
         <span className={`stage__skeleton${loading ? ' is-visible' : ''}`} aria-hidden="true" />
-        {/* 唱臂：播放时落到盘面，暂停时摆到右侧（由 .is-playing 驱动） */}
-        <span className="stage__tonearm" aria-hidden="true">
-          <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              {/* 金属臂杆：从支点到唱头方向的高光渐变 */}
-              <linearGradient id="stageArmMetal" gradientUnits="userSpaceOnUse" x1="97" y1="3" x2="78.5" y2="29.5">
-                <stop offset="0%" stopColor="#e4e9ed" />
-                <stop offset="48%" stopColor="#97a2aa" />
-                <stop offset="100%" stopColor="#525b62" />
-              </linearGradient>
-              {/* 支点底座：深色同心金属盘 */}
-              <radialGradient id="stageArmBase" cx="0.42" cy="0.38" r="0.62">
-                <stop offset="0%" stopColor="#39424a" />
-                <stop offset="62%" stopColor="#171c20" />
-                <stop offset="100%" stopColor="#0a0e11" />
-              </radialGradient>
-            </defs>
-            {/* 支点底座 + 薄荷绿轴心 */}
-            <circle cx="97" cy="3" r="3.6" fill="url(#stageArmBase)" stroke="rgba(255,255,255,0.3)" strokeWidth="0.5" />
-            <circle cx="97" cy="3" r="1.5" fill="none" stroke="url(#stageArmMetal)" strokeWidth="0.7" />
-            <circle cx="97" cy="3" r="0.75" fill="var(--accent, #2ee6a8)" />
-            {/* 臂杆：投影 → 深色轮廓 → 金属内芯 → 顶部高光 */}
-            <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="rgba(0,0,0,0.55)" strokeWidth="3" strokeLinecap="round" transform="translate(0.7,0.9)" />
-            <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="#0a0e11" strokeWidth="2.5" strokeLinecap="round" />
-            <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="url(#stageArmMetal)" strokeWidth="1.7" strokeLinecap="round" />
-            <path d="M95.6 4.6 C 91 12, 85 21, 78.5 29.5" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="0.5" strokeLinecap="round" transform="translate(0.15,-0.3)" />
-            {/* 唱头：深色壳体 + 薄荷绿识别线 */}
-            <g transform="rotate(-45 78.5 29.5)">
-              <rect x="75" y="27.5" width="7" height="4" rx="2" fill="#12181c" stroke="rgba(255,255,255,0.26)" strokeWidth="0.4" />
-              <rect x="76.4" y="28.9" width="4.2" height="1.1" rx="0.55" fill="var(--accent, #2ee6a8)" opacity="0.9" />
-            </g>
-          </svg>
-        </span>
       </button>
 
       <div className="stage__meta">
@@ -999,7 +1015,7 @@ function ToolButtons({ variant }: { variant?: 'head' }) {
     <div className={`lyric-tools${variant === 'head' ? ' lyric-tools--head' : ''}`}>
       <LyricColorButton />
       <GlassControl />
-      <SleepTimerButton />
+      <SleepTimerButton variant={variant} />
     </div>
   );
 }
@@ -1038,11 +1054,12 @@ function Transport({ onOpenQueue, queueOpen, immersive }: {
 
   return (
     <section className="transport" aria-label="播放控制">
-      {/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器，
-          频谱只在歌词页跟它们同排；沉浸模式这三颗按钮挪到歌词页右上角了（见 ToolButtons） */}
+      {/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器。
+          沉浸模式（完整歌词页）这三颗按钮挪到歌词页右上角了（见 ToolButtons），
+          大屏下方那条频谱也搬到这一行、紧贴进度条上方（间距由 CSS 的 2px padding 控制）。 */}
       <div className="transport__wave">
         {!immersive && <ToolButtons />}
-        <WaveStrip />
+        {immersive && <WaveStrip />}
       </div>
       <div className="progress">
         <span className="progress__time">{formatTime(shownTime)}</span>
@@ -1133,14 +1150,20 @@ function Transport({ onOpenQueue, queueOpen, immersive }: {
 // ---------------------------------------------------------------------------
 
 function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement | null) => void }) {
-  const { current } = usePlayer();
+  const { current, playing } = usePlayer();
   const { status, state, showRetry, retry, transNote } = useLyrics();
   const cover = useCover(current);
   const swipe = useTrackSwipe();
+  /**
+   * 右栏封面的两种外观：方图 ⇄ 唱片（把简约模式那套黑胶 + 唱臂直接搬过来）。
+   * 点歌词正文那块空白翻一面（再点翻回来），不退出歌词页 ——
+   * 退出仍然靠左上角「返回」或 Esc。
+   */
+  const [disc, setDisc] = useState(false);
 
   /**
-   * 点歌词以外的空白处也返回播放界面：按钮、输入框、歌词文字各有自己的交互；
-   * 歌词行的左右留白算空白，点它会返回（但不会跳转进度）。
+   * 点歌词以外的空白处 → 翻转右栏封面（方图 ⇄ 唱片）。
+   * 按钮、输入框、歌词文字、封面本身各有自己的交互，不参与翻转。
    */
   const onBlankClick = (event: React.MouseEvent<HTMLElement>) => {
     const target = event.target as Element;
@@ -1148,11 +1171,21 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
       return;
     }
     // .lyric-tools 是右上角那三颗小按钮连同它们弹出的面板：
-    // 面板里有滑杆和输入框，点它们都不该被当成「空白处」把歌词页关掉
+    // 面板里有滑杆和输入框，点它们都不该被当成「空白处」翻转封面。
     if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status, .wave-style, .lyric-tools')) {
       return;
     }
-    window.dispatchEvent(new CustomEvent('app:close-lyrics-page'));
+    /**
+     * 顶部那条带（歌名 / 工具按钮 / 波形下拉）整片都不翻转 —— 那是最容易误触的一带。
+     * 用坐标判断而不是只靠 `.lyrics-page__head`：
+     * 头部行是 flex 布局且左右有页面内边距，点在这条带上但落在头部行的
+     * 左右 padding 里时，target 是 section 本身而非 head，只按 closest 会漏。
+     */
+    const head = event.currentTarget.querySelector<HTMLElement>('.lyrics-page__head');
+    if (head !== null && event.clientY <= head.getBoundingClientRect().bottom) {
+      return;
+    }
+    setDisc((value) => !value);
   };
 
   return (
@@ -1190,7 +1223,9 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
         ) : (
           <LyricsView variant="full" />
         )}
-        <aside className="lyrics-page__art">
+        <aside
+          className={`lyrics-page__art${disc ? ' is-disc' : ''}${playing ? ' is-playing' : ''}`}
+        >
           <button
             className="lyrics-page__art-btn"
             type="button"
@@ -1198,24 +1233,49 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
             title="点击放大封面"
             onClick={(event) => onOpenLightbox(event.currentTarget)}
           >
-            <img
-              className="lyrics-page__cover"
-              src={cover}
-              alt=""
-              width={600}
-              height={600}
-              decoding="async"
-              onError={(event) => {
-                const img = event.currentTarget;
-                if (img.dataset.fallbackApplied === '1') return;
-                img.dataset.fallbackApplied = '1';
-                img.src = DEFAULT_COVER;
-              }}
-            />
+            {/*
+              两种外观共用同一个按钮：
+              - 方图：直接显示 .lyrics-page__cover；
+              - 唱片：外面套一圈黑胶盘面 + 唱臂（VinylPlatter，与简约模式同一套），
+                封面缩成中央标签位跟着转。
+            */}
+            {disc ? (
+              <span className={`lyrics-page__disc${playing ? ' is-playing' : ''}`}>
+                <VinylPlatter spinning={playing} />
+                <img
+                  className="lyrics-page__disc-label"
+                  src={cover}
+                  alt=""
+                  width={600}
+                  height={600}
+                  decoding="async"
+                  onError={(event) => {
+                    const img = event.currentTarget;
+                    if (img.dataset.fallbackApplied === '1') return;
+                    img.dataset.fallbackApplied = '1';
+                    img.src = DEFAULT_COVER;
+                  }}
+                />
+              </span>
+            ) : (
+              <img
+                className="lyrics-page__cover"
+                src={cover}
+                alt=""
+                width={600}
+                height={600}
+                decoding="async"
+                onError={(event) => {
+                  const img = event.currentTarget;
+                  if (img.dataset.fallbackApplied === '1') return;
+                  img.dataset.fallbackApplied = '1';
+                  img.src = DEFAULT_COVER;
+                }}
+              />
+            )}
           </button>
-          {/* 律动波形收在右栏最下面（「T」统一在进度条上方那条里） */}
-          <WaveStrip />
-          {/* 歌词来源：桌面放在封面/频谱下方；窄屏该栏隐藏，也就不再显示这行说明 */}
+          {/* 律动频谱已搬到进度条上方（Transport 的 transport__wave 行）；
+              这里只留歌词来源：桌面放在封面下方，窄屏该栏隐藏也就不再显示 */}
           {state === 'ready' && (transNote || status) && (
             <p className="lyrics-page__status lyrics-page__status--art" role="status" aria-live="polite">{transNote || status}</p>
           )}

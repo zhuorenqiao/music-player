@@ -38,11 +38,15 @@ Future<List<String>> pickAudioFiles() async {
   }
 }
 
-/// 选一个目录，返回绝对路径；取消或平台报错时返回 null。
-Future<String?> pickAudioFolder() async {
+/// 选一个目录，返回目录 URI；取消或平台报错时返回 null。
+///
+/// Android 上是 SAF `content://` 目录树 URI（应用真正能读的形态），交给
+/// `saf_bridge.dart` 复制成本地文件后再导入；其它平台是 `file` URI，
+/// `uri.toFilePath()` 即本地路径。
+Future<Uri?> pickAudioFolder() async {
   try {
-    final path = await FilePicker.getDirectoryPath();
-    return (path == null || path.isEmpty) ? null : path;
+    final uri = await FilePicker.pickDirectory();
+    return (uri == null || uri.toString().isEmpty) ? null : uri;
   } catch (_) {
     return null;
   }

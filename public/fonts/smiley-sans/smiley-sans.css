@@ -1,0 +1,10 @@
+/* 得意黑 Smiley Sans（Oblique，单一字重）—— 开源显示体，SIL OFL 1.1，许可证见 LICENSE.txt
+   字形本身已是倾斜设计，所以这里声明 font-style: normal，避免浏览器再叠一次倾斜。
+   只在用户选中「得意黑」时才注入这张表白，1.1MB 的 woff2 不会拖慢正常使用。 */
+@font-face {
+  font-family: 'Lyric Smiley';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./SmileySans-Oblique.ttf.woff2') format('woff2');
+}

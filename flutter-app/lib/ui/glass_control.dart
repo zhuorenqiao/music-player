@@ -40,8 +40,11 @@ class _GlassControlState extends State<GlassControl> {
   final OverlayPortalController _portal = OverlayPortalController();
   final GlobalKey _anchorKey = GlobalKey();
 
+  /// 已进 dispose：展开态要 setState，而 dispose 里也会走 `_removeOverlay`。
+  bool _disposed = false;
+
   void _toggle() {
-    if (_portal.isShowing) {
+    if (_entry != null) {
       _removeOverlay();
     } else {
       _showOverlay();
@@ -89,15 +92,20 @@ class _GlassControlState extends State<GlassControl> {
       ),
     );
     Overlay.of(context).insert(_entry!);
+    // 展开态要换描边与底色（CSS 的 `[aria-expanded="true"]`）。
+    setState(() {});
   }
 
   void _removeOverlay() {
+    final had = _entry != null;
     _entry?.remove();
     _entry = null;
+    if (had && !_disposed && mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _removeOverlay();
     super.dispose();
   }
@@ -115,13 +123,15 @@ class _GlassControlState extends State<GlassControl> {
           key: _anchorKey,
           behavior: HitTestBehavior.opaque,
           onTap: _toggle,
-          child: SizedBox(
-            width: 26,
-            height: 26,
+          // 26×26 / 圆角 8 / 1px border-strong / surface 底：与「T」、闹钟同一套壳
+          // （之前这里只有一颗裸图标，三颗并排看出来少了个框）。
+          // 图标 14×14 + `--accent-light`（`.glass-control__icon:2787-2796`）。
+          child: ToolTriggerChrome(
+            active: _entry != null,
             child: Icon(
               Icons.water_drop_outlined,
-              size: 15,
-              color: tokens.textDim,
+              size: 14,
+              color: tokens.accentLight,
             ),
           ),
         ),

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知小图标（品牌图标）覆盖。
+
+  flutter_media_session 3.2.0 用 Media3 的 DefaultMediaNotificationProvider 建
+  播放通知，而它内部固定引用 `R.drawable.media3_notification_small_icon`
+  （media3-session 的 values 里把它指到 media3_icon_circular_play —— 一个
+  「圆圈 + 播放三角」的通用占位图）。这就是安卓快捷播放器上那颗播放图标的
+  来源，插件没有开放 setSmallIcon 的 Dart 接口。
+
+  应用模块的资源优先级高于依赖库，在这里用同名 drawable 别名覆盖即可让
+  Media3 拿到我们的 logo，不用改插件源码。
+-->
+<resources>
+    <drawable name="media3_notification_small_icon">@drawable/ic_stat_light_music</drawable>
+</resources>

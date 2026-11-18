@@ -230,6 +230,13 @@ class MediaSessionCoordinator {
     _publish();
   }
 
+  /// 外部状态（封面显示层异步命中在线图 / 写真）变化后重推一次快照。
+  ///
+  /// 封面可能晚于切歌到位：在线匹配是异步的，`track.cover` 不变，transport
+  /// view 不会再发事件，通知栏就一直挂着占位图。封面表到货后由装配层调这里
+  /// 补推；`_publish` 内部按元数据指纹去重，封面没变时不会重复打平台。
+  void refresh() => _publish();
+
   /// 系统侧动作 → transport 的既有方法。这里是唯一的翻译点。
   ///
   /// 播放走 [TransportController.resume]（不重载、接着放），停止走

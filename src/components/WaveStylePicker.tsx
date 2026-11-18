@@ -57,6 +57,18 @@ function Thumb({ style, colored, lyricColor, themeKey }: { style: WaveStyle; col
   );
 }
 
+/** 把某一项滚到列表中间。用 差值改 scrollTop 而不是 scrollIntoView：
+    后者会连带滚动外层容器，这里只想动列表自己；
+    程序化滚动也不会点亮滚动条（useAutoHideScroll 只认用户输入后的滚动）。 */
+function centerOption(list: HTMLDivElement | null, item: HTMLDivElement | null) {
+  if (!list || !item) {
+    return;
+  }
+  const listRect = list.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  list.scrollTop += (itemRect.top + itemRect.height / 2) - (listRect.top + listRect.height / 2);
+}
+
 export function WaveStylePicker() {
   const { style, select, colored, setColored, lyricColor } = useWaveStyle();
   const { themeKey } = useTheme();
@@ -68,14 +80,18 @@ export function WaveStylePicker() {
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const { ref: listRef, scrolling } = useAutoHideScroll<HTMLDivElement>();
 
-  /** 面板常驻，靠 hidden 收起，所以打开时要把焦点挪过去。 */
+  /** 面板常驻，靠 hidden 收起，所以打开时要把焦点挪过去；
+      顺带把当前选中的那项滚到可见处 —— 17 种样式排在列表里，选中的常常在下面看不见。 */
   useEffect(() => {
     if (!open) {
       return;
     }
-    const raf = window.requestAnimationFrame(() => listRef.current?.focus());
+    const raf = window.requestAnimationFrame(() => {
+      listRef.current?.focus();
+      centerOption(listRef.current, itemRefs.current[currentIndex]);
+    });
     return () => window.cancelAnimationFrame(raf);
-  }, [open, listRef]);
+  }, [open, listRef, currentIndex]);
 
   /** 点面板以外任何地方收起。 */
   useEffect(() => {

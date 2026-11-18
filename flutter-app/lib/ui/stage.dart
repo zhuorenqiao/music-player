@@ -322,6 +322,7 @@ class StagePreview extends StatelessWidget {
     // 另外 React 的 Stage 里没有「当前 / 总时长」这一行 —— 时间只在
     // transport 的进度条两端（App.tsx:979/:1004），所以一并隐藏。
     final inPlayerCard = PlayerCardScope.maybeOf(context) != null;
+    final desktop = isDesktop(viewport.width);
 
     final cover = Semantics(
       key: const Key('cover-disc'),
@@ -403,13 +404,15 @@ class StagePreview extends StatelessWidget {
             ],
             // `.stage__lyrics` 与信息区的间距：stage 的 `gap: 16px`（:757），
             // 窄屏 @media 收到 14（:3944）。
-            SizedBox(height: inPlayerCard ? 14 : 10),
+            SizedBox(height: inPlayerCard ? (desktop ? 16 : 14) : 10),
             // 状态层还没接上（或纯展示的调用点没给）时，退回 M1 的占位块。
             // 在 [PlayerCard] 里歌词区用 Expanded 吃掉剩余高度（React 窄屏
             // `.stage__lyrics { flex: 1 1 0 }`，app.css:3977-3980）。
+            // 桌面档再套一道宽度上限（`.stage__lyrics { max-width }`，见
+            // [stageLyricsMaxWidth]）：原版那一列居中、不随卡片一起摊宽。
             inPlayerCard
-                ? Expanded(child: lyrics ?? const _LyricsSlot())
-                : (lyrics ?? const _LyricsSlot()),
+                ? Expanded(child: _capLyricsWidth(context, lyrics ?? const _LyricsSlot()))
+                : _capLyricsWidth(context, lyrics ?? const _LyricsSlot()),
           ],
         ),
       ),
@@ -421,7 +424,7 @@ class StagePreview extends StatelessWidget {
       children: [
         Center(child: cover),
         // `.stage { gap: 16px }`（:757），窄屏 @media 收到 14（:3944）。
-        SizedBox(height: inPlayerCard ? 14 : 16),
+        SizedBox(height: inPlayerCard ? (desktop ? 16 : 14) : 16),
         // 在合成卡里，info（含铺满的歌词）吃掉封面以外的全部高度。
         inPlayerCard ? Expanded(child: info) : info,
       ],
@@ -439,7 +442,18 @@ class StagePreview extends StatelessWidget {
     // 时间行也省掉 —— React 的 Stage 没有它，时间在 transport 进度条两端。
     if (inPlayerCard) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(14, 20, 14, 0),
+        // 桌面：`.stage { padding: 26px 24px }`（≥900，app.css:4944-4949）；
+        // 窄屏：`padding: clamp(20px, 4vh, 36px) 14px 16px`（app.css:4631-4634）。
+        // 从前这里写死 14/20/14/0，桌面左右只剩 14、窄屏底边也少了 16 ——
+        // 卡片一大，左右留白和「歌词到控制区」的那截距离都不对。
+        padding: desktop
+            ? const EdgeInsets.fromLTRB(24, 26, 24, 26)
+            : EdgeInsets.fromLTRB(
+                14,
+                (viewport.height * 0.04).clamp(20.0, 36.0),
+                14,
+                16,
+              ),
         child: content,
       );
     }
@@ -449,19 +463,11 @@ class StagePreview extends StatelessWidget {
     // glassLevel 由**调用方**注入（[Stage] 从 ThemeState 读；纯展示的
     // StagePreview 缺省 1——保持「无 provider 也能画」的既有契约）。
     final glass = glassLevel ?? 1.0;
-    final scaledA = tokens.cardA.withValues(alpha: tokens.cardA.a * glass);
-    final scaledB = tokens.cardB.withValues(alpha: tokens.cardB.a * glass);
 
     final Widget card = Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kRadiusXl),
         border: Border.all(color: tokens.border),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [scaledA, scaledB],
-        ),
-        boxShadow: glass > 0 ? tokens.shadowCard : null,
       ),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
       child: LayoutBuilder(
@@ -505,6 +511,13 @@ class StagePreview extends StatelessWidget {
     return GlassFrostLayer(
       coverPath: coverPath,
       frostLevel: frost,
+      glassLevel: glass,
+      colorA: tokens.cardA,
+      colorB: tokens.cardB,
+      // `.player { background: linear-gradient(165deg, …) }`（app.css:444）
+      gradientDegrees: 165,
+      // 卡外投影也归玻璃层（画在卡面之下；留在装饰里会盖在卡面上）
+      shadow: glass > 0 ? tokens.shadowCard : null,
       child: card,
     );
   }
@@ -513,6 +526,22 @@ class StagePreview extends StatelessWidget {
   /// 下限 19、上限 26。
   static double _titleFontSize(BuildContext context) =>
       (MediaQuery.sizeOf(context).width * 0.048).clamp(19.0, 26.0);
+
+  /// `.stage__lyrics` 的宽度上限（宽 <900 时没有上限，原样返回）。
+  ///
+  /// 原版是 `max-width` + `.stage { align-items: center }`：块本身居中、宽度
+  /// 停在 460 / 520 / 620（见 [stageLyricsMaxWidth]），卡片再宽也不跟着摊开。
+  /// 卡片里包的是 `Expanded`，所以只收宽度、高度照旧吃满剩余空间。
+  Widget _capLyricsWidth(BuildContext context, Widget child) {
+    final maxWidth = stageLyricsMaxWidth(MediaQuery.sizeOf(context).width);
+    if (maxWidth == null) return child;
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: child,
+      ),
+    );
+  }
 
   /// 曲名行：歌名居中省略号截断，右侧依次挂「双语」开关与「损坏」角标。
   ///

@@ -111,6 +111,51 @@ void main() {
     expect(silentWave.every((v) => v == 0), isTrue);
   });
 
+  test('computeSpectrumSync：归一化回归——纯音不该把 64 段整体顶到饱和', () {
+    final t = computeSpectrumSync(wavFile.path);
+    // 用第 5 帧（时间平滑已收敛）看稳态。
+    final f5 = t.bands.sublist(5 * 64, 6 * 64);
+    final lowEnd = _avg(f5.sublist(0, 16));
+    final highEnd = _avg(f5.sublist(40, 64));
+    final peak = f5.reduce((a, b) => a > b ? a : b);
+    // 旧实现：|X[k]| 未归一化，dB 整体 +54dB → 连 Hann 旁瓣与噪声底都贴到
+    // 映射窗高位，低频端均值实测 135（0.53），64 段一起挤在 130~255。
+    // 归一化后：440Hz 谱线只在段 30-31，其余应接近 0.02 下限。
+    expect(lowEnd, lessThan(12), reason: '低频端在谱线之外，应贴 0.02 下限');
+    expect(highEnd, lessThan(40), reason: '高频端同理');
+    expect(peak, greaterThan(150), reason: '峰段仍应点亮');
+  });
+
+  test('fftInPlace：与朴素 DFT 逐 bin 一致（n=64）', () {
+    const n = 64;
+    final re = Float64List(n);
+    for (var i = 0; i < n; i++) {
+      re[i] = 0.7 * math.sin(2 * math.pi * 5 * i / n) +
+          0.3 * math.cos(2 * math.pi * 13 * i / n) +
+          0.1;
+    }
+    // 朴素 DFT 作基准。
+    final refRe = Float64List(n);
+    final refIm = Float64List(n);
+    for (var k = 0; k < n; k++) {
+      var sr = 0.0;
+      var si = 0.0;
+      for (var i = 0; i < n; i++) {
+        final ang = -2 * math.pi * k * i / n;
+        sr += re[i] * math.cos(ang);
+        si += re[i] * math.sin(ang);
+      }
+      refRe[k] = sr;
+      refIm[k] = si;
+    }
+    final im = Float64List(n);
+    fftInPlace(re, im);
+    for (var k = 0; k < n; k++) {
+      expect(re[k], closeTo(refRe[k], 1e-9), reason: 'bin $k 实部');
+      expect(im[k], closeTo(refIm[k], 1e-9), reason: 'bin $k 虚部');
+    }
+  });
+
   test('toBin/fromBin 往返：字段一致、bands/wave 逐位一致', () {
     final t = computeSpectrumSync(wavFile.path);
     final bin = t.toBin();
@@ -118,7 +163,7 @@ void main() {
     // 头字段直接断言（小端）。
     expect(String.fromCharCodes(bin.sublist(0, 4)), 'LSPC');
     final bd = ByteData.sublistView(bin);
-    expect(bd.getUint16(4, Endian.little), 1);
+    expect(bd.getUint16(4, Endian.little), kBinVersion);
     expect(bd.getUint32(6, Endian.little), 44100);
     expect(bd.getUint16(10, Endian.little), 50);
     expect(bd.getUint16(12, Endian.little), 64);
@@ -164,10 +209,11 @@ void main() {
     final badMagic = Uint8List.fromList(bin);
     badMagic[0] = 0x58; // 'X'
     expect(SpectrumFrameTable.fromBin(badMagic), isNull);
-    // 版本坏。
+    // 版本坏（kBinVersion 是 2，改成 1 也算坏——旧版缓存必须被拒收）。
     final badVer = Uint8List.fromList(bin);
-    ByteData.sublistView(badVer).setUint16(4, 2, Endian.little);
-    expect(SpectrumFrameTable.fromBin(badVer), isNull);
+    ByteData.sublistView(badVer).setUint16(4, 1, Endian.little);
+    expect(SpectrumFrameTable.fromBin(badVer), isNull,
+        reason: 'v1 缓存（未归一化的饱和谱）必须被拒收，触发重算');
     // 长度不符（截尾）。
     expect(SpectrumFrameTable.fromBin(bin.sublist(0, bin.length - 1)), isNull);
     // 太短。

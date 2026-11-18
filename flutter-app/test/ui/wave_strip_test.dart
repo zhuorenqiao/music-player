@@ -12,12 +12,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'dart:typed_data';
+
 import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/playback/track.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/theme/theme_state.dart';
 import 'package:light_music/ui/wave_strip.dart';
+import 'package:light_music/wave/spectrum_pipeline.dart';
 
 Track _track() => Track(
   id: 't1',
@@ -103,5 +106,82 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
     await tester.pump();
     expect(tester.takeException(), isNull);
+  });
+
+  // 「音谱图左右两边没有淡出的效果」：CSS `.lyrics-page__wave` 用
+  // `mask-image: linear-gradient(90deg, transparent 0, #000 10%, #000 90%,
+  // transparent 100%)`（app.css:2492-2493）把两端渐隐。这里守那层蒙版还在，
+  // 且确实是包在频谱画布外面的 dstIn 蒙版。
+  testWidgets('两端淡出：画布外面套着 dstIn 蒙版', (tester) async {
+    await tester.pumpWidget(shell(theme: theme, child: strip(playing: false)));
+    await tester.pump();
+
+    final mask = find.byKey(const Key('wave-fade-mask'));
+    expect(mask, findsOneWidget, reason: '没有这层蒙版，彩虹条会在栏边硬切断');
+    final widget = tester.widget<ShaderMask>(mask);
+    expect(widget.blendMode, BlendMode.dstIn, reason: '淡出靠 alpha 乘进去');
+
+    // 蒙版必须在画布之外：祖先链上先遇到 CustomPaint 说明蒙版没套住它。
+    expect(
+      find.descendant(of: mask, matching: find.byType(CustomPaint)),
+      findsWidgets,
+    );
+  });
+
+  // 「音谱有的时候会消失不见」：离线帧表在数字静音段整帧都是 0.02 的下限，
+  // 48px 画布上只有 0.6px —— 看上去就是一片空白。这里守一条显示下限。
+  group('静音帧不会画成空白', () {
+    test('段值被抬到显示下限，正常响度不受影响', () {
+      final bands = Float32List.fromList([0, 0.02, 0.05, 0.06, 0.4, 1.0]);
+      applyBandDisplayFloor(bands);
+      // Float32List 存的是 float32，0.06 实际是 0.0599999986…
+      const eps = 1e-6;
+      expect(bands[0], closeTo(kWaveBandDisplayFloor, eps));
+      expect(bands[1], closeTo(kWaveBandDisplayFloor, eps),
+          reason: '0.02 是数据下限，画出来只有 0.6px');
+      expect(bands[2], closeTo(kWaveBandDisplayFloor, eps));
+      expect(bands[3], closeTo(kWaveBandDisplayFloor, eps));
+      expect(bands[4], closeTo(0.4, eps), reason: '已经比下限高的值一律不动');
+      expect(bands[5], closeTo(1.0, eps));
+    });
+
+    test('48px 条子上静音帧的柱子 ≥ 2.9px（肉眼可见，不再是一条空条）', () {
+      // `_drawSpectrum`：baseline = h - 8，maxAmp = baseline - 8。
+      const h = 48.0;
+      final bands = Float32List.fromList(List.filled(64, 0.02));
+      applyBandDisplayFloor(bands);
+      final maxAmp = (h - 8) - 8;
+      final px = bands.first * maxAmp;
+      expect(px, closeTo(2.88, 0.05));
+      expect(px, lessThan(4.5), reason: '只是兜底，别把静音画成中等响度');
+    });
+
+    testWidgets('静音帧表 + 暂停：条子照常渲染，尺寸不塌', (tester) async {
+      final silent = SpectrumFrameTable(
+        sampleRate: 44100,
+        frameMs: 50,
+        frameCount: 40,
+        bands: Uint8List.fromList(List.filled(40 * 64, 5)), // 全部贴 0.02 下限
+        wave: Int8List.fromList(List.filled(40 * 128, 0)),
+      );
+      await tester.pumpWidget(
+        shell(
+          theme: theme,
+          child: WaveStrip(
+            frameTable: silent,
+            track: _track(),
+            playing: false,
+            positionSeconds: 1.0,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSize(find.byType(WaveStrip)).height,
+        kWaveStripHeight,
+        reason: '静音不该让条子塌掉',
+      );
+    });
   });
 }

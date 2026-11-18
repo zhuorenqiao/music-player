@@ -211,6 +211,17 @@ class _ProgressSliderState extends State<ProgressSlider> {
                           color: tokens.accent,
                           width: trackWidth * _ratio,
                           keyName: 'progress-fill',
+                          // 原版 `.progress__fill` 是 accent→略浅白的横向渐变
+                          // + 一圈 accent 光晕（app.css:1194-1197）：
+                          // `linear-gradient(90deg, color-mix(accent 78%, #fff), accent)`
+                          // + `box-shadow: 0 0 12px -2px rgb(accent / .85)`。
+                          gradient: LinearGradient(
+                            colors: [
+                              Color.lerp(tokens.accent, tokens.sliderThumb, 0.22)!,
+                              tokens.accent,
+                            ],
+                          ),
+                          glow: tokens.accent,
                         ),
                         if (_total > 0)
                           Positioned(
@@ -238,12 +249,28 @@ class _ProgressSliderState extends State<ProgressSlider> {
 }
 
 /// 一层轨道：左端对齐，宽度由调用方按秒数比例算好。
+///
+/// [gradient] 给了就走渐变填充（原版 `.progress__fill` 的
+/// `linear-gradient(90deg, color-mix(accent 78%, #fff), accent)` + 一圈光晕，
+/// app.css:1194-1197）；没给就是纯色（rail / buffer 两层）。
 class _Layer extends StatelessWidget {
-  const _Layer({required this.color, required this.width, this.keyName});
+  const _Layer({
+    required this.color,
+    required this.width,
+    this.keyName,
+    this.gradient,
+    this.glow,
+  });
 
   final Color color;
   final double width;
   final String? keyName;
+
+  /// 填充段的横向渐变（null = 纯色）。
+  final Gradient? gradient;
+
+  /// 填充段的光晕颜色（null = 不发光）。
+  final Color? glow;
 
   @override
   Widget build(BuildContext context) {
@@ -254,8 +281,19 @@ class _Layer extends StatelessWidget {
         height: _trackHeight,
         width: width,
         decoration: BoxDecoration(
-          color: color,
+          color: gradient == null ? color : null,
+          gradient: gradient,
           borderRadius: BorderRadius.circular(_trackRadius),
+          boxShadow: glow == null
+              ? null
+              : [
+                  // `box-shadow: 0 0 12px -2px rgb(accent / 0.85)`
+                  BoxShadow(
+                    color: glow!.withValues(alpha: 0.85),
+                    blurRadius: 12,
+                    spreadRadius: -2,
+                  ),
+                ],
         ),
       ),
     );

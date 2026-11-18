@@ -127,7 +127,7 @@ void main() {
     lyrics.dispose();
   });
 
-  testWidgets('头部：返回、歌名、双语开关；正文有歌词行', (tester) async {
+  testWidgets('头部：歌名、双语开关、三颗工具按钮；正文有歌词行', (tester) async {
     useDesktopViewport(tester);
     lyrics.attach(Track(
       id: 't', src: '/m/t.flac', title: 'Yesterday', artist: 'The Beatles', album: 'Help!',
@@ -140,7 +140,10 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('返回'), findsOneWidget);
+    // 原版头部只有「歌名块 + 三颗工具按钮 + 波形下拉」，没有「返回」胶囊
+    // （退出走 Esc / L，见 lib/ui/lyrics_page.dart 文件头）。这条断言把
+    // 「别再把返回按钮加回来」钉住。
+    expect(find.text('返回'), findsNothing);
     expect(find.text('Yesterday'), findsOneWidget);
     expect(find.text('The Beatles · Help!'), findsOneWidget);
     expect(find.byKey(const Key('bilingual-toggle')), findsOneWidget);
@@ -149,8 +152,31 @@ void main() {
     expect(find.byKey(const Key('lyrics-page-cover')), findsOneWidget);
   });
 
-  testWidgets('窄屏隐藏封面', (tester) async {
+  testWidgets('大屏（≥1280）歌词页两列放宽：封面 clamp(280, 24vw, 400)', (tester) async {
     addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1400, 900);
+    lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
+    await bilingual.settle();
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+    final cover = tester.getRect(find.byKey(const Key('lyrics-page-cover')));
+    // app.css:5045-5048：≥1280 换 `clamp(280px, 24vw, 400px)`，1400×0.24 = 336
+    expect(cover.width, closeTo(336, 0.6));
+
+    // ≥1680 再抬一档：`clamp(360px, 25vw, 480px)`，1700×0.25 = 425
+    tester.view.physicalSize = const Size(1700, 900);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getRect(find.byKey(const Key('lyrics-page-cover'))).width,
+      closeTo(425, 0.6),
+    );
+  });
+
+  testWidgets('窄屏隐藏封面', (tester) async {    addTearDown(tester.view.reset);
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(700, 900);
     lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
@@ -177,5 +203,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('未找到「A」的歌词'), findsOneWidget);
     expect(find.byKey(const Key('lyrics-retry')), findsOneWidget);
+  });
+
+  testWidgets('页面内边距分档：桌面 18/20/6，窄屏 16/16/6', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
+    await bilingual.settle();
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+
+    // 桌面：`.lyrics-page { padding: 18px 20px 6px }`（≥900，app.css:4944-4949）
+    tester.view.physicalSize = const Size(1280, 900);
+    await tester.pumpAndSettle();
+    // `Padding` 自身的 rect 就是外框，量不到留白；量它里面那层内容列。
+    final desktop = tester.getRect(
+      find
+          .descendant(
+            of: find.byKey(const Key('lyrics-page-body')),
+            matching: find.byType(Column),
+          )
+          .first,
+    );
+    final card = tester.getRect(find.byType(LyricsPage));
+    expect(desktop.left - card.left, closeTo(20, 0.6)); // padding 左右 20
+    expect(desktop.top - card.top, closeTo(18, 0.6)); // padding 上 18
+
+    // 窄屏：`padding: 16px 16px 6px`
+    tester.view.physicalSize = const Size(700, 900);
+    await tester.pumpAndSettle();
+    final narrow = tester.getRect(
+      find
+          .descendant(
+            of: find.byKey(const Key('lyrics-page-body')),
+            matching: find.byType(Column),
+          )
+          .first,
+    );
+    final narrowCard = tester.getRect(find.byType(LyricsPage));
+    expect(narrow.left - narrowCard.left, closeTo(16, 0.6));
+    expect(narrow.top - narrowCard.top, closeTo(16, 0.6));
   });
 }

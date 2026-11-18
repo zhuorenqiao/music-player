@@ -90,4 +90,40 @@ void main() {
     expect(find.byType(ThemeDrawer), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('三颗色点是固定原色：切主题色它们都不跟着变（含薄荷）', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 800);
+    addTearDown(tester.view.reset);
+    final state = await ThemeState.load(AppPrefs.inMemory());
+    await tester.pumpWidget(wrap(state));
+
+    Color dotOf(String id) {
+      final box = tester
+          .widget<Container>(find.byKey(Key('swatch-dot-$id')));
+      return (box.decoration! as BoxDecoration).color!;
+    }
+
+    // app.css:3471-3491：写死的 #2ee6a8 / #ff6aa8 / #4d8dff。
+    void expectFixedDots(String reason) {
+      expect(dotOf('mint'), kSwatchDotMint, reason: reason);
+      expect(dotOf('pink'), kSwatchDotPink, reason: reason);
+      expect(dotOf('blue'), kSwatchDotBlue, reason: reason);
+    }
+
+    expectFixedDots('默认薄荷');
+
+    // 切粉色：薄荷那颗点必须**还是**薄荷绿（以前取 tokens.accent，会一起变粉）。
+    await tester.tap(find.text('粉色'));
+    await tester.pumpAndSettle();
+    expect(state.themeKey, 'light-pink');
+    expectFixedDots('切到粉色后');
+
+    // 切蓝色同理 —— 用户截图圈红的就是这一档。
+    await tester.tap(find.text('蓝色'));
+    await tester.pumpAndSettle();
+    expect(state.themeKey, 'light-blue');
+    expectFixedDots('切到蓝色后');
+    expect(tester.takeException(), isNull);
+  });
 }

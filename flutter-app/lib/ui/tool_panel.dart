@@ -17,6 +17,74 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_tokens.dart';
+
+/// 触发按钮的正方形边长（三处 CSS 都是 `26px`）。
+const double kToolTriggerSize = 26;
+
+/// 三颗触发按钮的统一外观：`26×26`、圆角 8、1px 描边、居中。
+///
+/// 这套值在原版 CSS 里被**逐字写了三遍**（`src/styles/app.css` 的
+/// `.lyric-color__trigger:2502-2522`、`.glass-control__trigger:2770-2785`、
+/// `.sleep-timer__trigger:2919-2937`），内容完全一致：
+/// `width/height: 26px; padding: 0; border: 1px solid var(--border-strong);
+/// border-radius: 8px; background: var(--surface); display: inline-flex;
+/// align-items: center; justify-content: center`。
+/// 展开态（`[aria-expanded="true"]`）三处也都是
+/// `border-color: var(--accent-line); background: var(--accent-soft)`。
+///
+/// 之前 Flutter 侧只有「T」和闹钟自己拼了这套壳、水滴是一颗裸图标，
+/// 闹钟还把图标怼在左边缘 —— 三颗并排就一眼看出不齐。统一收到这里。
+class ToolTriggerChrome extends StatelessWidget {
+  const ToolTriggerChrome({
+    required this.active,
+    required this.child,
+    this.width = kToolTriggerSize,
+    this.padding = EdgeInsets.zero,
+    this.danger = false,
+    super.key,
+  });
+
+  /// 展开中（或睡眠定时器运行中）：accent 描边 + accent 软底。
+  final bool active;
+
+  /// 运行中的睡眠定时器进入最后一分钟（CSS 的 `is-ending`）：同一套壳换 danger 色。
+  final bool danger;
+
+  /// 图标 / 文字。
+  final Widget child;
+
+  /// 定宽；睡眠定时器运行中要撑成「药丸」（CSS 的 `width: auto`），此时传 null。
+  final double? width;
+
+  /// 药丸态的左右内边距（CSS 的 `padding: 0 8px`），默认 0。
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.tokens;
+    return Container(
+      width: width,
+      height: kToolTriggerSize,
+      padding: padding,
+      // 居中交给容器自己：三个按钮里的图标/文字都在这 26×26 的正中间。
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: active
+            ? (danger ? tokens.dangerSoft : tokens.accentSoft)
+            : tokens.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: active
+              ? (danger ? tokens.dangerLine : tokens.accentLine)
+              : tokens.borderStrong,
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+
 /// 弹层相对触发按钮的展开方向。
 enum ToolPanelSide {
   /// 向上展开（控制条上那排）。

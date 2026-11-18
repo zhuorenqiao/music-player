@@ -23,6 +23,10 @@ export const STORAGE_KEYS = Object.freeze({
   waveColored: 'waveColored',
   /** 歌词高亮色（空字符串 = 跟随主题默认） */
   lyricColor: 'lyricColor',
+  /** 歌词字号缩放（百分比，100 = 默认大小；「T」面板里的字号滑杆） */
+  lyricScale: 'lyricScale',
+  /** 歌词字体 id（「T」面板里的字体那一排；default = 跟随界面字体） */
+  lyricFont: 'lyricFont',
   /** 播放卡卡面透明度（0~100，越大越透） */
   cardTransparency: 'cardTransparency',
   /** 播放卡毛玻璃强度（0~100，越大越磨砂） */

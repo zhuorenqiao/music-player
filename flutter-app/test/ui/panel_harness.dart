@@ -128,6 +128,9 @@ class PanelHarness {
     bool flush = false,
     double frostLevel = 0,
     String coverPath = '',
+    // 换成别的子树（例如「先摆一个按钮、点它再弹出播放列表弹层」的探针）：
+    // 状态层照旧由本壳提供，只是 Panel 不再是根。
+    Widget? child,
   }) => MultiProvider(
     providers: [
       ChangeNotifierProvider<LibraryState>.value(value: library),
@@ -139,11 +142,13 @@ class PanelHarness {
     ],
     child: SizedBox(
       height: tall ? 700 : null,
-      child: Panel(
-        flush: flush,
-        frostLevel: frostLevel,
-        coverPath: coverPath,
-      ),
+      child:
+          child ??
+          Panel(
+            flush: flush,
+            frostLevel: frostLevel,
+            coverPath: coverPath,
+          ),
     ),
   );
 

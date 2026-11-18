@@ -23,6 +23,22 @@ import '../theme/app_tokens.dart';
 import '../theme/theme_state.dart';
 import 'drawer_menu.dart' show scrimColor;
 
+/// 三颗色点的**固定原色**（app.css:3471-3491）：
+///
+///   ```css
+///   .theme-swatch--mint .theme-swatch__dot { background: #2ee6a8; }
+///   .theme-swatch--pink .theme-swatch__dot { background: #ff6aa8; }
+///   .theme-swatch--blue .theme-swatch__dot { background: #4d8dff; }
+///   ```
+///
+/// CSS 注释写得很直白：**色点固定是该颜色的原色，不跟随当前主题变**。
+/// 之前「薄荷」那一颗误用了 `tokens.accent`（= 当前主题的强调色），于是
+/// 一切到粉色 / 蓝色，薄荷的圆点也跟着变粉 / 变蓝 —— 用户看到的就是
+/// 「薄荷前面的圆点颜色一直在变、颜色不对」。
+const Color kSwatchDotMint = Color(0xFF2EE6A8);
+const Color kSwatchDotPink = Color(0xFFFF6AA8);
+const Color kSwatchDotBlue = Color(0xFF4D8DFF);
+
 /// 换肤抽屉本体。宽度取 `min(312, 可用宽)`（React 的 default 档 288 加一点
 /// 给三段按钮的呼吸感）。
 class ThemeDrawer extends StatelessWidget {
@@ -201,12 +217,17 @@ class _ColorSwatches extends StatelessWidget {
               child: Row(
                 children: [
                   Container(
+                    key: Key('swatch-dot-${color.name}'),
                     width: 12,
                     height: 12,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: dot,
-                      border: Border.all(color: tokens.borderStrong),
+                      // 选中态描边换成强调线（app.css:3493-3498 的双圈
+                      // accent-soft / accent-line，这里按 12px 的点收成一圈）。
+                      border: Border.all(
+                        color: selected ? tokens.accentLine : tokens.borderStrong,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -232,11 +253,12 @@ class _ColorSwatches extends StatelessWidget {
 
     return Row(
       children: [
-        swatch(ThemeColorSetting.mint, '薄荷', tokens.accent),
+        // 三颗点都是写死原色，不取 `tokens.accent`（那是「当前」主题色）。
+        swatch(ThemeColorSetting.mint, '薄荷', kSwatchDotMint),
         const SizedBox(width: 6),
-        swatch(ThemeColorSetting.pink, '粉色', const Color(0xFFFF6AA8)),
+        swatch(ThemeColorSetting.pink, '粉色', kSwatchDotPink),
         const SizedBox(width: 6),
-        swatch(ThemeColorSetting.blue, '蓝色', const Color(0xFF4D8DFF)),
+        swatch(ThemeColorSetting.blue, '蓝色', kSwatchDotBlue),
       ],
     );
   }

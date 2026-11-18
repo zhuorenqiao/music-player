@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
+import 'package:light_music/ui/glass_frost.dart';
 
 import 'panel_harness.dart';
 
@@ -18,23 +19,20 @@ Widget wrap(Widget child) => MaterialApp(
   home: Scaffold(body: child),
 );
 
-/// 面板自己那层「卡面」的判定：一个带圆角 + 渐变 + 边框的 Container。
-/// 侧栏版必须有且只有一层；弹层版（flush）一个都不该有。
+/// 面板自己那层「卡面」的判定：M4 起卡面渐变由 GlassFrostLayer 画在磨砂层
+/// 之下（CSS 的负 z-index 层序），所以「有卡面」= 一个带 colorA/colorB 的
+/// GlassFrostLayer。侧栏版必须有且只有一层；弹层版（flush）一个都不该有。
 int _cardShellCount(WidgetTester tester) {
   var count = 0;
-  for (final element in find.byType(Container).evaluate()) {
-    final widget = element.widget as Container;
-    final decoration = widget.decoration;
-    if (decoration is! BoxDecoration) continue;
-    final hasBorder = decoration.border != null;
-    final hasGradient = decoration.gradient != null;
-    if (hasBorder && hasGradient) count++;
+  for (final element in find.byType(GlassFrostLayer).evaluate()) {
+    final widget = element.widget as GlassFrostLayer;
+    if (widget.colorA != null && widget.colorB != null) count++;
   }
   return count;
 }
 
 void main() {
-  testWidgets('侧栏版面板保留自己的卡面（一行边框 + 渐变）', (tester) async {
+  testWidgets('侧栏版面板保留自己的卡面（一层玻璃卡面）', (tester) async {
     final harness = PanelHarness(tall: true);
     addTearDown(harness.dispose);
     await tester.pumpWidget(wrap(harness.build()));

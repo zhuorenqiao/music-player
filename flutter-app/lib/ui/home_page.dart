@@ -55,6 +55,7 @@ class HomePage extends StatelessWidget {
             trackId: current.id,
           );
     final frostLevel = context.watch<ThemeState?>()?.frostLevel ?? 0.0;
+    final glassLevel = context.watch<ThemeState?>()?.glassLevel ?? 1.0;
     return Scaffold(
       backgroundColor: tokens.bg,
       // `body::before`：一整面对角渐变，不参与滚动
@@ -87,6 +88,8 @@ class HomePage extends StatelessWidget {
               transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
               coverPath: coverPath,
               frostLevel: frostLevel,
+              // 融合卡整张底色的 alpha 缩放（`.app__main` 的 color-mix）
+              glassLevel: glassLevel,
               overlay: page.isOpen ? const LyricsPage() : null,
             ),
             // 放大层（M2b T11）：全屏 Stack 顶层；关闭走 controller.close
@@ -110,9 +113,16 @@ class HomePage extends StatelessWidget {
   }
 
   /// 「添加整个文件夹」：同理，取消不提示。
+  ///
+  /// Android 给的是 SAF `content://` 树 URI，走原生桥接复制成本地文件再导入；
+  /// 桌面给的是 `file` URI，按本地目录扫描导入。
   Future<void> _addFolder(LibraryState library) async {
-    final folder = await pickAudioFolder();
-    if (folder == null) return;
-    await library.importDirectory(folder);
+    final uri = await pickAudioFolder();
+    if (uri == null) return;
+    if (uri.isScheme('content')) {
+      await library.importSafTree(uri.toString());
+    } else {
+      await library.importDirectory(uri.toFilePath());
+    }
   }
 }

@@ -58,6 +58,7 @@ class AppBootstrap {
     required this.lyrics,
     required this.bilingual,
     required this.onLyricsViewChanged,
+    this.onCoverStateChanged,
     LyricsPageController? lyricsPage,
     LightboxController? lightbox,
     CoverState? cover,
@@ -177,6 +178,10 @@ class AppBootstrap {
   /// 同 [onLyricsViewChanged] 的「同一个函数对象」要求。
   final VoidCallback onCoverViewChanged;
 
+  /// `buildBootstrap` 挂在 [CoverState] 上的回调引用：在线封面 / 写真到货后
+  /// 补推一次媒体会话快照。[dispose] 用它 removeListener。
+  final VoidCallback? onCoverStateChanged;
+
   /// 实时频谱调度层（D.3）：歌词页的 WaveStrip 从这里取当前曲目的帧表。
   final SpectrumState spectrum;
 
@@ -205,6 +210,8 @@ class AppBootstrap {
     player.transport.view.removeListener(onLyricsViewChanged);
     player.transport.view.removeListener(onCoverViewChanged);
     player.transport.view.removeListener(onSpectrumViewChanged);
+    final coverStateChanged = onCoverStateChanged;
+    if (coverStateChanged != null) cover.removeListener(coverStateChanged);
     lyricsPage.removeListener(onSpectrumVisibilityChanged);
     // 频谱状态只关一次：ChangeNotifier.dispose() 在 debug 下重复调用会抛
     // 「已 dispose」断言，而这份 dispose 是**承诺幂等**的（测试里就调了两次）。

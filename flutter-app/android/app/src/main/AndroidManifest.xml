@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 联网权限：歌词（LRCLIB）、封面（iTunes / Wikipedia）、中文译文（网易云）
+         都要在运行时直连 HTTPS 接口。该权限必须放在 main 源集 —— debug / profile
+         源集里那份仅用于 Flutter 工具调试，release 构建不会合并，缺了它 release
+         包内所有网络请求都会被系统拒绝（SocketException → 「连不上歌词库」）。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- 媒体会话 / 前台服务（spec §7.1、§7.2）：
          - WAKE_LOCK + FOREGROUND_SERVICE(+MEDIA_PLAYBACK)：息屏续播要前台服务，
            Android 14 起缺 mediaPlayback 类型会被系统直接拒绝启动服务；

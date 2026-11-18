@@ -13,10 +13,11 @@
 //   3. 歌词列表在「行号没变」的进度 tick 上必须复用同一个 widget 实例
 //      （否则 4Hz 重建整棵树）；
 //   4. 常驻动画的叶子（音柱 / 转圈 / 频谱条）各自隔离，别把祖先拖下水。
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:light_music/core/app_prefs.dart';
-import 'package:light_music/cover/cover_disk_cache.dart';
+import 'package:light_music/core/app_prefs.dart';import 'package:light_music/cover/cover_disk_cache.dart';
 import 'package:light_music/cover/cover_source.dart';
 import 'package:light_music/lyrics/lyrics_source.dart';
 import 'package:light_music/lyrics/query.dart';
@@ -38,6 +39,9 @@ import 'package:light_music/ui/cover_thumb.dart';
 import 'package:light_music/ui/glass_frost.dart';
 import 'package:light_music/ui/lyrics_view.dart';
 import 'package:light_music/ui/vinyl_deck.dart';
+import 'package:light_music/ui/wave_strip.dart';
+import 'package:light_music/wave/spectrum_pipeline.dart';
+import 'package:light_music/wave/wave_signal.dart';
 import 'package:provider/provider.dart';
 
 Widget wrap(Widget child) => MaterialApp(
@@ -224,6 +228,108 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('频谱条：每帧只重绘，不重建、不分配', () {
+    testWidgets('播放中连续 vsync 不替换 CustomPaint 实例', (tester) async {
+      tester.view.physicalSize = const Size(800, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final track = Track(id: 't1', title: '测试歌曲', src: 'x', duration: 120);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ThemeState>.value(
+          value: ThemeState.unloaded(),
+          child: wrap(
+            Center(
+              child: SizedBox(
+                width: 360,
+                child: WaveStrip(
+                  frameTable: _frameTable(),
+                  track: track,
+                  playing: true,
+                  positionSeconds: 0,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final mask = find.byKey(const Key('wave-fade-mask'));
+      CustomPaint paint() => tester.widget<CustomPaint>(
+        find.descendant(of: mask, matching: find.byType(CustomPaint)),
+      );
+      final first = paint();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(
+        identical(first, paint()),
+        isTrue,
+        reason: '每帧换了 CustomPaint 实例 → 每个 vsync 都在重建整棵子树',
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    test('连续取帧复用同一块缓冲（每帧零分配）', () {
+      final source = WaveSource()..attach(_frameTable(), 't1');
+      WaveFrame read(double t) => source.read(
+        playing: true,
+        positionSeconds: t,
+        phase: t,
+        dt: 1 / 60,
+        track: Track(id: 't1', title: '测试歌曲', src: 'x', duration: 120),
+        bandCount: 90,
+        waveCount: 360,
+        width: 360,
+        height: kWaveStripHeight,
+      );
+      final a = read(0);
+      final b = read(0.05);
+      expect(identical(a.bands, b.bands), isTrue);
+      expect(identical(a.wave, b.wave), isTrue);
+    });
+
+    test('暂停复用最后一帧真实数据（不再拷贝冻结帧）', () {
+      final source = WaveSource()..attach(_frameTable(), 't1');
+      WaveFrame read(double t, {required bool playing}) => source.read(
+        playing: playing,
+        positionSeconds: t,
+        phase: t,
+        dt: 1 / 60,
+        track: Track(id: 't1', title: '测试歌曲', src: 'x', duration: 120),
+        bandCount: 90,
+        waveCount: 360,
+        width: 360,
+        height: kWaveStripHeight,
+      );
+      final live = List<double>.of(read(0.4, playing: true).bands);
+      final paused = read(9.9, playing: false);
+      expect(paused.live, isTrue);
+      for (var i = 0; i < live.length; i++) {
+        expect(paused.bands[i], closeTo(live[i], 1e-6));
+      }
+    });
+  });
+}
+
+/// 一张最小但形状可辨的帧表（20fps、64 段）。
+SpectrumFrameTable _frameTable() {
+  const frames = 240;
+  final bands = Uint8List(frames * 64);
+  for (var f = 0; f < frames; f++) {
+    for (var b = 0; b < 64; b++) {
+      bands[f * 64 + b] = (30 + 200 * ((f + b) % 7) / 7).round();
+    }
+  }
+  return SpectrumFrameTable(
+    sampleRate: 44100,
+    frameMs: 50,
+    frameCount: frames,
+    bands: bands,
+    wave: Int8List(frames * 128),
+  );
 }
 
 class _NullRecent implements RecentRecorder {

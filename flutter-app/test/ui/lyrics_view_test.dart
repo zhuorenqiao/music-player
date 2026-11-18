@@ -29,6 +29,7 @@ import 'package:light_music/state/lyrics_state.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
+import 'package:light_music/theme/theme_state.dart';
 import 'package:light_music/ui/lyrics_view.dart';
 import 'package:provider/provider.dart';
 
@@ -963,6 +964,108 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(harness.driver.calls.length, before);
+    });
+  });
+
+  // 同步 React「T」面板（app.css: `font-size: calc(19px * var(--lyric-scale))`
+  // + `font-family: var(--lyric-font)`，:1971-1990）
+  group('歌词字号缩放与字体', () {
+    /// 两行原文 + 两行译文，完整歌词页那一套（19 / 14）。
+    Widget scaledLyrics({int activeIndex = 0}) => SizedBox(
+      height: 400,
+      child: LyricsLinesView(
+        lines: cued([(0, '第一句'), (1, '第二句')]),
+        trans: const ['first', 'second'],
+        variant: LyricsVariant.full,
+        activeIndex: activeIndex,
+      ),
+    );
+
+    testWidgets('150%：原文 19→28.5、译文 14→21（乘的，不是换字号）', (tester) async {
+      final prefs = AppPrefs.inMemory();
+      final theme = await ThemeState.load(prefs, platformDark: () => false);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ThemeState>.value(
+          value: theme,
+          child: wrap(scaledLyrics()),
+        ),
+      );
+
+      // 100% 时就是规格表那套数值
+      expect(tester.widget<Text>(find.text('第一句')).style!.fontSize, 19);
+      expect(tester.widget<Text>(find.text('first')).style!.fontSize, 14);
+
+      theme.setLyricScale(150);
+      await tester.pump();
+
+      expect(
+        tester.widget<Text>(find.text('第一句')).style!.fontSize,
+        closeTo(28.5, 0.001),
+      );
+      expect(
+        tester.widget<Text>(find.text('first')).style!.fontSize,
+        closeTo(21, 0.001),
+      );
+    });
+
+    testWidgets('选「霞鹜文楷」：原文与译文一起换成随包字体，默认那款不设家族', (
+      tester,
+    ) async {
+      final prefs = AppPrefs.inMemory();
+      final theme = await ThemeState.load(prefs, platformDark: () => false);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ThemeState>.value(
+          value: theme,
+          child: wrap(scaledLyrics(activeIndex: 1)),
+        ),
+      );
+
+      // 默认那款跟随界面字体：不写 fontFamily
+      expect(tester.widget<Text>(find.text('第一句')).style!.fontFamily, isNull);
+
+      theme.setLyricFont('wenkai');
+      await tester.pump();
+
+      final active = tester.widget<Text>(find.text('第一句')).style!;
+      expect(active.fontFamily, 'LyricWenKai');
+      expect(active.fontFamilyFallback, contains('LXGW WenKai'));
+      // 译文行同样换字
+      expect(
+        tester.widget<Text>(find.text('first')).style!.fontFamily,
+        'LyricWenKai',
+      );
+    });
+
+    testWidgets('紧凑版也吃同一份缩放（17 * scale）', (tester) async {
+      final prefs = AppPrefs.inMemory();
+      final theme = await ThemeState.load(prefs, platformDark: () => false);
+      addTearDown(theme.dispose);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<ThemeState>.value(
+          value: theme,
+          child: wrap(
+            SizedBox(
+              height: 300,
+              child: LyricsLinesView(
+                lines: cued([(0, '第一句')]),
+                trans: const [],
+                variant: LyricsVariant.compact,
+                activeIndex: 0,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.widget<Text>(find.text('第一句')).style!.fontSize, 17);
+      theme.setLyricScale(70);
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.text('第一句')).style!.fontSize,
+        closeTo(11.9, 0.001),
+      );
     });
   });
 }

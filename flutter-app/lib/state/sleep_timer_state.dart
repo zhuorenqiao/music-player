@@ -20,13 +20,11 @@ import '../core/storage_keys.dart';
 import 'player_state.dart';
 import 'toast_state.dart';
 
-/// 预设档位（分钟）。10 分钟是默认档。
-const List<int> kSleepTimerPresets = <int>[10, 15, 20, 30, 60];
-
-/// 缺省时长（分钟）：面板打开时这一档默认选中，自定义输入也预填它。
+/// 缺省时长（分钟）：面板打开时滑杆停在这一档，自定义输入也预填它。
 const int kSleepTimerDefaultMinutes = 10;
 
-/// 自定义输入的范围（分钟）。
+/// 时长范围（分钟）：滑杆走的是这一整段（1 分钟 ~ 16 小时 39 分钟），
+/// 自定义输入框也夹在这里。
 const int kSleepTimerMinMinutes = 1;
 const int kSleepTimerMaxMinutes = 999;
 

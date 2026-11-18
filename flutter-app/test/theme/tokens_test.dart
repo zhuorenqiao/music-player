@@ -81,7 +81,7 @@ void main() {
     expect(isUltraCompact(480), isFalse);
   });
 
-  test('封面尺寸三档 clamp', () {
+  test('封面尺寸四档 cascade', () {
     // <900：clamp(108, 24vh, 150)
     expect(kCoverSize(360, viewportHeight: 300), 108);
     expect(kCoverSize(360, viewportHeight: 500), closeTo(120, 0.01));
@@ -89,11 +89,20 @@ void main() {
     // ≥900：clamp(166, 18vw, 232)
     expect(kCoverSize(900), 166);
     expect(kCoverSize(1000), closeTo(180, 0.01));
-    // ≥1180：固定 248
+    // ≥1180 固定 248（app.css:4980-4996）
     expect(kCoverSize(1180), 248);
+    // ≥1280 抬到 268（app.css:5054-5056）—— 大屏上封面不跟着长，
+    // 会缩成卡片中间一小坨
+    expect(kCoverSize(1280), 268);
+    expect(kCoverSize(1679), 268);
+    // ≥1680 抬到 288（app.css:5102-5104）
+    expect(kCoverSize(1680), 288);
+    expect(kCoverSize(1920), 288);
     // 桌面端再受 min(基准值, 46vh, 340px) 夹紧：视口矮时按 46vh 收。
-    expect(kCoverSize(1300, viewportHeight: 400), 184); // min(248, 184, 340)
-    expect(kCoverSize(1300, viewportHeight: 900), 248); // min(248, 414, 340)
+    expect(kCoverSize(1300, viewportHeight: 400), closeTo(184, 0.01)); // min(268, 184)
+    expect(kCoverSize(1300, viewportHeight: 900), 268); // min(268, 414, 340)
+    expect(kCoverSize(1920, viewportHeight: 500), closeTo(230, 0.01)); // min(288, 230)
+    expect(kCoverSize(1920, viewportHeight: 900), 288); // min(288, 414, 340)
   });
 
   test('主题装配把 token 挂到 ThemeExtension 上，滑杆 / 分隔线 / 去水波纹都接上', () {

@@ -147,6 +147,69 @@ void main() {
     expect(bridge.published.last.playing, isFalse);
   });
 
+  test('artUriFor 接管封面解析：在线匹配 / 写真路径由回调进通知', () async {
+    final bridge = FakeMediaSessionBridge();
+    final transport = TransportController(
+      player: AudioPlayer(FakeAudioDriver(), scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1')]),
+    );
+    await MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+      artUriFor: (track) => '/matched/${track.id}.jpg',
+    ).attach();
+    await transport.playTrack('1');
+    await settle();
+    // 回调结果覆盖曲目自带的内嵌封面路径。
+    expect(bridge.published.last.artUri, '/matched/1.jpg');
+  });
+
+  test('artUriFor 返回空串时封面为 null（生成卡不进通知）', () async {
+    final bridge = FakeMediaSessionBridge();
+    final transport = TransportController(
+      player: AudioPlayer(FakeAudioDriver(), scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1')]),
+    );
+    await MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+      artUriFor: (_) => '',
+    ).attach();
+    await transport.playTrack('1');
+    await settle();
+    expect(bridge.published.last.artUri, isNull);
+  });
+
+  test('封面异步到货后 refresh 补推新封面，通知栏不留占位图', () async {
+    String? matchedUri;
+    final bridge = FakeMediaSessionBridge();
+    final transport = TransportController(
+      player: AudioPlayer(FakeAudioDriver(), scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1')]),
+    );
+    final coordinator = MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+      artUriFor: (_) => matchedUri ?? '',
+    );
+    await coordinator.attach();
+    await transport.playTrack('1');
+    await settle();
+    expect(bridge.published.last.artUri, isNull);
+
+    // 在线封面晚到：封面表通知 → 装配层调 refresh 补推一次。
+    matchedUri = '/matched/1.jpg';
+    coordinator.refresh();
+    await settle();
+    expect(bridge.published.last.artUri, '/matched/1.jpg');
+  });
+
   test('没有当前曲目时推空元数据并停掉会话，不抛', () async {
     final bridge = FakeMediaSessionBridge();
     final transport = TransportController(

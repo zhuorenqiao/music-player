@@ -10,6 +10,10 @@ abstract final class StorageKeys {
   static const String waveStyle = 'waveStyle';
   static const String waveColored = 'waveColored';
   static const String lyricColor = 'lyricColor';
+  /// 歌词字号缩放（百分比，100 = 默认；「T」面板里的字号滑杆）
+  static const String lyricScale = 'lyricScale';
+  /// 歌词字体 id（「T」面板里的字体那一排；default = 跟随界面字体）
+  static const String lyricFont = 'lyricFont';
   static const String cardTransparency = 'cardTransparency';
   static const String cardFrost = 'cardFrost';
   /// 睡眠定时器的截止时刻（时间戳 ms）；缺失 = 未启用

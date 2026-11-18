@@ -17,6 +17,7 @@ import 'package:light_music/playback/play_mode.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/state/cover_state.dart';
 import 'package:light_music/state/library_state.dart';
+import 'package:light_music/state/lyrics_page_controller.dart';
 import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
@@ -27,6 +28,7 @@ import 'package:light_music/ui/panel.dart';
 import 'package:light_music/ui/progress_slider.dart';
 import 'package:light_music/ui/transport.dart';
 import 'package:light_music/ui/volume_slider.dart';
+import 'package:light_music/ui/wave_strip.dart';
 import 'package:provider/provider.dart';
 import 'package:provider/single_child_widget.dart';
 
@@ -147,7 +149,7 @@ void main() {
     );
     expect(find.byKey(const Key('volume-slider')), findsOneWidget);
     expect(find.byKey(const Key('volume-input')), findsOneWidget);
-    // 桌面右栏常驻列表，列表入口不在控制条上重复出现
+    // 桌面左栏常驻列表，列表入口不在控制条上重复出现
     expect(find.byKey(const Key('btn-queue')), findsNothing);
   });
 
@@ -421,5 +423,44 @@ void main() {
     await settleOut(tester);
     expect(find.byType(Panel), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('歌词页波形行高度分档：48，满宽档（≥1680）56', (tester) async {
+    final harness = PanelHarness(titles: <String>['十年']);
+    addTearDown(harness.dispose);
+    final lyricsPage = LyricsPageController();
+    addTearDown(lyricsPage.dispose);
+    lyricsPage.open();
+
+    List<SingleChildWidget> providers() => <SingleChildWidget>[
+      ChangeNotifierProvider<LibraryState>.value(value: harness.library),
+      ChangeNotifierProvider<PlayerState>.value(value: harness.player),
+      ChangeNotifierProvider<RecentState>.value(value: harness.recent),
+      ChangeNotifierProvider<CoverState>.value(value: harness.cover),
+      ChangeNotifierProvider<ThemeState>.value(value: harness.theme),
+      ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
+      ChangeNotifierProvider<LyricsPageController>.value(value: lyricsPage),
+    ];
+
+    // 1440：`.lyrics-page__wave { height: 48px }` 基数
+    await pump(
+      tester,
+      const TransportBar(),
+      width: 1440,
+      height: 900,
+      providers: providers(),
+    );
+    expect(find.byType(WaveStrip), findsOneWidget);
+    expect(tester.getSize(find.byType(WaveStrip)).height, kWaveStripHeight);
+
+    // 1800：≥1680 抬到 56px（app.css:5098-5100）
+    await pump(
+      tester,
+      const TransportBar(),
+      width: 1800,
+      height: 900,
+      providers: providers(),
+    );
+    expect(tester.getSize(find.byType(WaveStrip)).height, kWaveStripHeightUltra);
   });
 }

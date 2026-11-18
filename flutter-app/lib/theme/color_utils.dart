@@ -66,6 +66,24 @@ String toHexString(Color color) {
   return '#${two(_ch(color.r))}${two(_ch(color.g))}${two(_ch(color.b))}';
 }
 
+/// `--lyric-hl` 的解析结果：用户没选过（`''`）就跟随 `--accent-light`；
+/// 选过就用那个色，浅色主题下再按 [highlightOnLight] 压暗。
+///
+/// 对应 React `src/state/theme.tsx:66-70`（歌词当前行）与 `:160-219`（压暗公式）：
+/// 歌词当前行和「T」按钮里的那个字母**在 React 里都是 `--lyric-hl`**，所以两边
+/// 必须用同一份算法 —— 之前 Flutter 侧把这段内联在 `lyrics_view.dart` 里，
+/// 「T」按钮另写一份就成了两套口径。
+Color lyricHighlightColor({
+  required String picked,
+  required Color accentLight,
+  required Brightness brightness,
+}) {
+  if (picked.isEmpty) return accentLight;
+  final parsed = parseHexColor(picked);
+  if (parsed == null) return accentLight;
+  return brightness == Brightness.light ? highlightOnLight(parsed) : parsed;
+}
+
 /// HSL 三元组（h 0-360，s/l 0-100）。
 class Hsl {
   const Hsl({required this.h, required this.s, required this.l});

@@ -16,10 +16,10 @@
 //
 // 与原版的两处有意差异（改之前先读）：
 //
-// 1. **返回按钮放在左上角，原版没有这颗按钮**。原版靠「点歌词以外的空白」
-//    （`:1074-1083` 的 `onBlankClick`）+ Esc 关闭；M2a 的布局里歌词页占满内容区，
-//    触屏与读屏用户需要一个明确的出口，所以计划在头部左侧加一颗「返回」。
-//    读屏名固定「关闭歌词页」（图标 + 文案，`Semantics(button: true)`）。
+// 1. **没有「返回」按钮，与原版一致**（早先版本在头部左侧加过一颗，已按原版
+//    的感受去掉）。退出走全局快捷键：Esc / L（`src/App.tsx:1595` 的 `Escape`、
+//    `:1603` 的 `KeyL`，Flutter 侧在 `core/shortcuts.dart` 的
+//    `CloseOverlayIntent` / `ToggleLyricsPageIntent`），以及开合按钮本身。
 //
 // 2. **状态行用 T16 的 `LyricsStatusLine`，位置从右栏脚注挪到左列顶部**。
 //    原版那句 `.lyrics-page__status--art`（`:1146`）挂在右栏封面下方；本工程窄屏
@@ -35,31 +35,44 @@
 //   * `LyricsStatusLine` 的 `loading` / `failed` / `showRetry` 是**三个独立标量**，
 //     从 `LyricsState` 的枚举映射出来（见 [_statusBlock]）。
 //
-// 关闭后焦点还给曲目区（`:1085-1090` 的 `onClose` 语义）：打开时记住当前焦点，
-// 关闭时 `requestFocus`；拿不到就退到 `stage-hit-area` 那个语义节点。
+// 关闭后焦点还给曲目区（`:1085-1090` 的 `onClose` 语义）：本页自己不再提供
+// 「关闭」入口（原版就没有这颗按钮，退出靠 Esc / L），所以也不需要在页内搬焦点。
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/breakpoints.dart';
+import '../cover/generated_cover.dart';
 import '../playback/track.dart';
 import '../state/bilingual_state.dart';
 import '../state/cover_state.dart';
-import '../state/lyrics_page_controller.dart';
 import '../state/lightbox_controller.dart';
 import '../state/lyrics_state.dart';
 import '../theme/app_tokens.dart';
 import 'bilingual_toggle.dart';
+import 'generated_cover_view.dart';
 import 'lyrics_status.dart';
 import 'lyrics_view.dart';
+import 'player_card.dart';
 import 'tool_buttons.dart';
 import 'tool_panel.dart';
-import 'vinyl_deck.dart';
 import 'wave_style_picker.dart';
 
 // -- 规格常量（逐字取自 app.css，不要顺手改） ------------------------------
 
-/// 页面内边距：`padding: 16px 16px 6px`（:2042）。
+/// 页面内边距：`padding: 16px 16px 6px`（:2042）；
+/// 桌面档 `18px 20px 6px`（≥900，app.css:4944-4949）—— 卡片一大，左右
+/// 16 就显得贴边，原版在这一档把上 / 左右都收了一档。
 const EdgeInsets _kPagePadding = EdgeInsets.fromLTRB(16, 16, 16, 6);
+
+/// 桌面档页面内边距。
+const EdgeInsets _kPagePaddingDesktop = EdgeInsets.fromLTRB(20, 18, 20, 6);
+
+/// 取当前宽度档的页面内边距。
+EdgeInsets _pagePadding(double viewportWidth) => viewportWidth >= Breaks.desktop
+    ? _kPagePaddingDesktop
+    : _kPagePadding;
 
 /// 页面容器与内容之间的间距：`gap: 10px`（:2036）。
 const double _kPageGap = 10;
@@ -86,9 +99,17 @@ const double _kBodyGap = 32;
 const double _kBodyPaddingTop = 20;
 
 /// 左列（歌词）的宽度上限：`minmax(0, 560px)`（:2328）。
+///
+/// 大屏两档各自放宽（[`_columnMaxWidth`]）：
+///   - ≥1280：`minmax(0, 640px)`（app.css:5048-5052，左列放宽的同时
+///     `.lyrics-page .lyrics--full { max-width: 640px }` 也放开）；
+///   - ≥1680：`minmax(0, 800px)`（app.css:5076-5080）。
 const double _kColumnMaxWidth = 560;
 
 /// 右栏封面宽度：`clamp(240px, 26vw, 360px)`（:2328）。
+///
+/// 大屏两档：≥1280 `clamp(280px, 24vw, 400px)`（app.css:5045-5048）、
+/// ≥1680 `clamp(360px, 25vw, 480px)`（app.css:5072-5075）。
 const double _kCoverMinWidth = 240;
 const double _kCoverMaxWidth = 360;
 
@@ -113,50 +134,19 @@ const double _kEmptyRetryMinHeight = 32;
 const double _kEmptyRetryHorizontalPadding = 16;
 const double _kEmptyRetryFontSize = 13;
 
-/// 「返回」按钮：与原版 `--radius-pill` 同族的胶囊，高度跟头部一行走（36）。
-const double _kBackHeight = 36;
-const double _kBackHorizontalPadding = 12;
-const double _kBackFontSize = 12.5;
-const double _kBackIconSize = 16;
-
 /// 状态行与正文之间的间距（T16 的 `LyricsStatusLine` 自带 bottom 4，
 /// 这里再补一点，免得贴着第一行歌词）。
 const double _kStatusLineBottomGap = 6;
 
-/// 曲目区语义节点的 key（T18 的 `stage.dart` 用的是同一个字面量）。
-///
-/// 关闭歌词页后如果原来的焦点节点已经没了，理论上该回落到这里；但 Flutter 没有
-/// 「按 Key 取 FocusNode」的公开 API，而曲目区那块的可点区域也不持有可注入的
-/// 节点 —— 所以本页只做「还回原焦点」，剩下的交给快捷键宿主的 autofocus。
-/// 这条常量留着是为了让 T20 验收时能一眼看出「回落到哪里」的约定。
-const Key kStageHitAreaKey = Key('stage-hit-area');
-
 /// 全屏歌词页。由 `HomeLayout.overlay` 槽挂上，开合由 `LyricsPageController` 决定。
 class LyricsPage extends StatefulWidget {
-  const LyricsPage({this.onClose, super.key});
-
-  /// 关闭动作。装配层传 `LyricsPageController.close`；测试可注入别的实现。
-  /// 给了它就用它，没给就直接调 provider 上的控制器。
-  final VoidCallback? onClose;
+  const LyricsPage({super.key});
 
   @override
   State<LyricsPage> createState() => _LyricsPageState();
 }
 
 class _LyricsPageState extends State<LyricsPage> {
-  /// 打开这一页时页面焦点所在（关闭后要还回去）。
-  ///
-  /// 原版没有这一步（它没有返回按钮，关闭靠空白点击 / Esc，焦点本来就还在
-  /// 曲目区上）。M2a 加了返回按钮，点它之后焦点落在这颗按钮上，直接关掉会
-  /// 悬空 —— 所以进页面时记一份、关时还一份。
-  FocusNode? _returnFocus;
-
-  @override
-  void initState() {
-    super.initState();
-    _returnFocus = FocusManager.instance.primaryFocus;
-  }
-
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
@@ -212,6 +202,67 @@ class _LyricsPageState extends State<LyricsPage> {
       ],
     );
 
+    // 在 [PlayerCard] 里：`.player > .lyrics-page` 要把边框 / 圆角 / 渐变 /
+    // 阴影全剥掉（app.css:510-518），卡面只留**一张** —— 沉浸模式与简约模式
+    // 因此长得一样（原版截图里歌词页与控制条同在一张卡里，卡内没有第二道缝）。
+    // 纯展示 / 测试没有 scope 时仍是独立卡（既有几何断言不破）。
+    final body = Padding(
+      key: const Key('lyrics-page-body'),
+      padding: _pagePadding(MediaQuery.sizeOf(context).width),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            // 富余空间全落在「左组」与下拉之间 —— 这就是 React 那道
+            // `margin-left: auto`（app.css 的 .wave-style）：按钮紧跟歌名，
+            // 下拉贴最右。
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // 左组：歌名块 + 三颗工具按钮（原版 `header.lyrics-page__head`
+              // 就是 meta → ToolButtons → WaveStylePicker 三个孩子，没有返回按钮）。
+              // 组内用 mainAxisSize.min —— 组不撑开，宽度由内容决定。
+              Flexible(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(child: meta),
+                    const SizedBox(width: _kHeadGap),
+                    // 「T」/毛玻璃/睡眠定时器：沉浸模式里从控制条挪到这一格
+                    // （歌名右边、下拉左边），面板随之改向下弹。
+                    const ToolButtons(side: ToolPanelSide.below),
+                  ],
+                ),
+              ),
+              // M3 D.4：右上角是波形样式下拉（原版 App.tsx:1100 的
+              // WaveStylePicker）。面板用 Overlay 挂在更上层，不会被歌词页的
+              // 裁剪/圆角切掉。
+              // 与左侧工具按钮之间补头部 gap（React `.lyrics-page__head { gap: 12px }`）：
+              // 这一行是 spaceBetween，空间紧张时左组会把下拉挤到贴住工具按钮，
+              // 没有这段固定间距两颗控件边框会相贴。
+              const SizedBox(width: _kHeadGap),
+              const WaveStylePicker(),
+            ],
+          ),
+          const SizedBox(height: _kPageGap),
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: tokens.border)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(top: _kBodyPaddingTop),
+                child: desktop
+                    ? _desktopBody(lyrics: lyrics, bilingual: bilingual)
+                    : _narrowBody(lyrics: lyrics, bilingual: bilingual),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (PlayerCardScope.maybeOf(context) != null) {
+      return body;
+    }
     return DecoratedBox(
       decoration: BoxDecoration(
         // `background: linear-gradient(170deg, var(--card-a), var(--card-b))`
@@ -224,73 +275,28 @@ class _LyricsPageState extends State<LyricsPage> {
         border: Border.all(color: tokens.border),
         boxShadow: tokens.shadowCard,
       ),
-      child: Padding(
-        padding: _kPagePadding,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              // 富余空间全落在「左组」与下拉之间 —— 这就是 React 那道
-              // `margin-left: auto`（app.css 的 .wave-style）：按钮紧跟歌名，
-              // 下拉贴最右。
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // 左组：「返回」+ 歌名块 + 三颗工具按钮。
-                // 组内用 mainAxisSize.min —— 组不撑开，宽度由内容决定。
-                Flexible(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _BackButton(onTap: _close),
-                      const SizedBox(width: _kHeadGap),
-                      Flexible(child: meta),
-                      const SizedBox(width: _kHeadGap),
-                      // 「T」/毛玻璃/睡眠定时器：沉浸模式里从控制条挪到这一格
-                      // （歌名右边、下拉左边），面板随之改向下弹。
-                      const ToolButtons(side: ToolPanelSide.below),
-                    ],
-                  ),
-                ),
-                // M3 D.4：右上角是波形样式下拉（原版 App.tsx:1100 的
-                // WaveStylePicker）。面板用 Overlay 挂在更上层，不会被歌词页的
-                // 裁剪/圆角切掉。
-                const WaveStylePicker(),
-              ],
-            ),
-            const SizedBox(height: _kPageGap),
-            Expanded(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  border: Border(top: BorderSide(color: tokens.border)),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.only(top: _kBodyPaddingTop),
-                  child: desktop
-                      ? _desktopBody(lyrics: lyrics, bilingual: bilingual)
-                      : _narrowBody(lyrics: lyrics, bilingual: bilingual),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+      child: body,
     );
   }
 
   /// 桌面：左歌词、右封面，两列作为整体居中（`justify-content: center`）。
   ///
   /// 列宽逐字对译 CSS 的 `grid-template-columns: minmax(0, 560px)
-  /// clamp(240px, 26vw, 360px)`（:2328）：
-  ///   * 左列上限 560（`minmax(0, 560px)` 的下界 0 由 [Flexible] 承担 —— 窗口
-  ///     变窄时它先缩，不会把两列撑破）；
-  ///   * 右列固定 `clamp(240, 26vw, 360)`；
+  /// clamp(240px, 26vw, 360px)`（:2328），大屏两档各自放宽
+  /// （[`_columnMaxWidth`] / [`_coverWidth`] / [`_bodyColumnGap`]）：
+  ///   * 左列上限 560 / 640（≥1280）/ 800（≥1680）（`minmax(0, N)` 的下界 0
+  ///     由 [Flexible] 承担 —— 窗口变窄时它先缩，不会把两列撑破）；
+  ///   * 右列固定 `clamp(...)`；
   ///   * 两者一起居中，所以左边距与右边距相等（原版注释专门写过：左列以前是
   ///     `1fr`，词块在轨道里再居中，结果左侧多出一截、右侧封面却贴边）。
   Widget _desktopBody({
     required LyricsState lyrics,
     required BilingualState bilingual,
   }) {
-    final artWidth = _coverWidth(MediaQuery.sizeOf(context).width);
+    final viewportWidth = MediaQuery.sizeOf(context).width;
+    final artWidth = _coverWidth(viewportWidth);
+    final columnMax = _columnMaxWidth(viewportWidth);
+    final columnGap = _bodyColumnGap(viewportWidth);
     final track = lyrics.track;
     // M2b T10：封面源走 resolver（四级兜底；CoverState 可空 watch，同
     // stage.dart 的容错模式 —— 测试环境没注册时退回 M1 的内嵌路径）。
@@ -309,11 +315,11 @@ class _LyricsPageState extends State<LyricsPage> {
       children: [
         Flexible(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: _kColumnMaxWidth),
+            constraints: BoxConstraints(maxWidth: columnMax),
             child: _leftColumn(lyrics: lyrics, bilingual: bilingual),
           ),
         ),
-        const SizedBox(width: _kBodyGap),
+        SizedBox(width: columnGap),
         SizedBox(
           width: artWidth,
           child: _ArtColumn(
@@ -380,33 +386,6 @@ class _LyricsPageState extends State<LyricsPage> {
       ],
     );
   }
-
-  /// 关页：先让控制器翻掉（`HomeLayout.overlay` 随之摘掉），再把焦点还回去。
-  void _close() {
-    final injected = widget.onClose;
-    if (injected != null) {
-      injected();
-    } else {
-      context.read<LyricsPageController>().close();
-    }
-    _restoreFocus();
-  }
-
-  void _restoreFocus() {
-    final previous = _returnFocus;
-    // 还焦点必须在页面被摘掉之后：这一页里的按钮还在焦点域里时 requestFocus
-    // 会被它抢回去。排到下一帧（overlay 已经换成原来的 stage）。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      // 原来的焦点节点还活着就还给它（`context` 是节点是否仍挂载的判据）。
-      if (previous != null && previous.context != null) {
-        previous.requestFocus();
-      }
-      // 拿不到就什么都不做：焦点会回落到快捷键宿主的 autofocus 节点
-      // （`AppShortcuts` 里那个 `autofocus: true` 的 Focus），
-      // 键盘操作照常可用。原版也没有更强的「回焦到曲目区」保证。
-    });
-  }
 }
 
 /// `loading` / `missing` / `error` 三态共用同一套「状态块」判据。
@@ -416,12 +395,38 @@ class _LyricsPageState extends State<LyricsPage> {
 bool _isFailedState(LyricsLoad state) =>
     state == LyricsLoad.missing || state == LyricsLoad.error;
 
-/// 封面宽度：`clamp(240px, 26vw, 360px)`。
-double _coverWidth(double viewportWidth) =>
-    (viewportWidth * _kCoverViewportRatio).clamp(
-      _kCoverMinWidth,
-      _kCoverMaxWidth,
-    );
+/// 封面宽度：`clamp(240px, 26vw, 360px)`；大屏两档各自放宽
+/// （≥1280 `clamp(280, 24vw, 400)`、≥1680 `clamp(360, 25vw, 480)`）。
+double _coverWidth(double viewportWidth) {
+  if (viewportWidth >= Breaks.ultra) {
+    return _clamp(360, viewportWidth * 0.25, 480);
+  }
+  if (viewportWidth >= Breaks.wide) {
+    return _clamp(280, viewportWidth * 0.24, 400);
+  }
+  return _clamp(
+    _kCoverMinWidth,
+    viewportWidth * _kCoverViewportRatio,
+    _kCoverMaxWidth,
+  );
+}
+
+/// 左列上限：560 / 640（≥1280）/ 800（≥1680）。
+double _columnMaxWidth(double viewportWidth) {
+  if (viewportWidth >= Breaks.ultra) return 800;
+  if (viewportWidth >= Breaks.wide) return 640;
+  return _kColumnMaxWidth;
+}
+
+/// 两列间距：`gap: 32px`；≥1280 抬到 40、≥1680 抬到 56（阅读列放宽后要跟上）。
+double _bodyColumnGap(double viewportWidth) {
+  if (viewportWidth >= Breaks.ultra) return 56;
+  if (viewportWidth >= Breaks.wide) return 40;
+  return _kBodyGap;
+}
+
+double _clamp(double min, double value, double max) =>
+    value < min ? min : (value > max ? max : value);
 
 /// `[artist, album].filter(Boolean).join(' · ') || '未知歌手'`（App.tsx:1101）。
 String _artistAlbum(Track? track) {
@@ -431,61 +436,6 @@ String _artistAlbum(Track? track) {
     if (track.album.isNotEmpty) track.album,
   ];
   return parts.isEmpty ? '未知歌手' : parts.join(' · ');
-}
-
-/// 「返回」胶囊：图标 + 文案，读屏名「关闭歌词页」。
-class _BackButton extends StatelessWidget {
-  const _BackButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return Semantics(
-      button: true,
-      label: '关闭歌词页',
-      excludeSemantics: true,
-      onTap: onTap,
-      child: Material(
-        color: tokens.tint1,
-        borderRadius: BorderRadius.circular(999),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(999),
-          overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
-          child: Container(
-            height: _kBackHeight,
-            padding: const EdgeInsets.symmetric(
-              horizontal: _kBackHorizontalPadding,
-            ),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: tokens.progressTrack),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.arrow_back_ios_new,
-                  size: _kBackIconSize,
-                  color: tokens.textDim,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '返回',
-                  style: TextStyle(
-                    fontSize: _kBackFontSize,
-                    color: tokens.textDim,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 /// 右栏：封面（原版外壳是按钮 —— 点它开灯箱，App.tsx:1121-1137 的
@@ -509,30 +459,45 @@ class _ArtColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tokens = context.tokens;
     return Center(
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // 圆碟按可用宽度收，与右栏宽度一致（`aspect-ratio: 1 / 1` 的等价写法）。
+          // 方图（`aspect-ratio: 1 / 1`），与右栏宽度一致。
           final size = constraints.maxWidth.isFinite
               ? constraints.maxWidth
               : _kCoverMaxWidth;
-          final disc = SizedBox(
-            key: const Key('lyrics-page-cover'),
-            width: size,
-            height: size,
-            // 静态、不转：M1 的 CoverDisc 就这个形态（spinning 恒 false）。
-            // 歌词页**不画黑胶外圈**（原版 `.lyrics-page__cover` 只是封面本身，
-            // app.css:3055-3065，没有 `.stage__vinyl` 那层唱机外圈）。
-            child: CoverDisc(
-              coverPath: coverPath,
-              size: size,
-              spinning: false,
-              vinyl: false,
-              fallbackArtist: fallbackArtist,
-              fallbackTitle: fallbackTitle,
+          // **不是黑胶碟面**：原版的 `.lyrics-page__cover` 是一张
+          // 「1px 描边 + 24px 圆角 + 落影」的方图（app.css:3318-3327），
+          // 没有 `.stage__vinyl` 那圈唱机外圈，也不是正圆。
+          // 从前这里复用 [CoverDisc]，于是画成了圆形碟面 —— 与原版差一截。
+          final art = ClipRRect(
+            borderRadius: BorderRadius.circular(kRadiusXl),
+            child: Container(
+              key: const Key('lyrics-page-cover'),
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                border: Border.all(color: tokens.borderStrong),
+                borderRadius: BorderRadius.circular(kRadiusXl),
+                color: tokens.tint1,
+                boxShadow: tokens.shadowCard,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(kRadiusXl - 1),
+                child: coverPath.isNotEmpty
+                    ? Image.file(
+                        File(coverPath),
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                        errorBuilder: (context, error, stack) =>
+                            _GeneratedCover(artist: fallbackArtist, title: fallbackTitle),
+                      )
+                    : _GeneratedCover(artist: fallbackArtist, title: fallbackTitle),
+              ),
             ),
           );
-          if (onOpenLightbox == null) return disc;
+          if (onOpenLightbox == null) return art;
           return Semantics(
             button: true,
             label: '放大封面图片',
@@ -541,12 +506,40 @@ class _ArtColumn extends StatelessWidget {
               onTap: onOpenLightbox,
               child: Focus(
                 canRequestFocus: true,
-                child: disc,
+                child: art,
               ),
             ),
           );
         },
       ),
+    );
+  }
+}
+
+/// 无封面文件时的生成卡（与 [CoverImage] 同一套派生）。
+class _GeneratedCover extends StatelessWidget {
+  const _GeneratedCover({required this.artist, required this.title});
+
+  final String artist;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    if (artist.isEmpty) {
+      return ColoredBox(
+        color: context.tokens.progressTrack,
+        child: Center(
+          child: Icon(
+            Icons.music_note,
+            size: 28,
+            color: context.tokens.textFaint,
+          ),
+        ),
+      );
+    }
+    return GeneratedCoverView(
+      spec: generatedCoverSpec(artist, title),
+      size: double.infinity,
     );
   }
 }

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  状态栏 / 锁屏 / 媒体卡片的通知小图标（品牌图标）。
+
+  取应用 logo 的主形：五根圆头声波柱（外短、中高、正中最高）。
+  通知小图标只认 alpha 通道、由系统单色着色，所以这里只画柱体、
+  不带 logo 的圆角方底 —— 否则会糊成一块实心方块。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M2.2,8.75 L2.2,15.25 M7.1,6.5 L7.1,17.5 M12,3.75 L12,20.25 M16.9,6.5 L16.9,17.5 M21.8,8.75 L21.8,15.25"
+        android:strokeWidth="2.6"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

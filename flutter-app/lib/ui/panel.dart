@@ -26,6 +26,7 @@
 //
 // 只做布局与接线：没有 Scaffold、没有路由，T29 的弹层直接复用同一个 [Panel]。
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -43,6 +44,7 @@ import '../theme/app_tokens.dart';
 import '../theme/theme_state.dart';
 import 'autoplay_gate.dart';
 import 'empty_state.dart';
+import 'fused_card.dart';
 import 'glass_frost.dart';
 import 'recent_row.dart';
 import 'auto_hide_scrollbar.dart';
@@ -141,9 +143,9 @@ class Panel extends StatelessWidget {
       ?notice,
     ];
     // M3 T7：面板卡面 alpha 按 glassLevel 缩放（.panel 与 .player 同一套）。
+    // React 的 `.panel` 直接用 `--card-a/--card-b`（app.css:1434-1439），不是
+    // panel-a/panel-b；这两个 token 是**不透明**的，透明度滑杆在面板上会失效。
     final glass = context.watch<ThemeState>().glassLevel;
-    final scaledA = tokens.panelA.withValues(alpha: tokens.panelA.a * glass);
-    final scaledB = tokens.panelB.withValues(alpha: tokens.panelB.a * glass);
     final content = LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxHeight < minComfortableHeight) {
@@ -171,16 +173,19 @@ class Panel extends StatelessWidget {
         child: content,
       );
     }
+    // 融合卡里：卡面 chrome 与磨砂层都归外层那张整卡（[FusedCard]），本面板
+    // 只留内容与内边距 —— 留住 18/16 是因为竖线要跟内容区留同样的上下余量。
+    if (FusedCardScope.isFused(context)) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+        child: content,
+      );
+    }
     final card = Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kRadiusXl),
         border: Border.all(color: tokens.border),
-        // `.panel` 的 170deg 玻璃：panel-a → panel-b
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [scaledA, scaledB],
-        ),
+        // 卡面渐变由 GlassFrostLayer 画（要压在磨砂膜/色雾之下，见 glass_frost.dart）
       ),
       padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
       child: content,
@@ -192,6 +197,11 @@ class Panel extends StatelessWidget {
     return GlassFrostLayer(
       coverPath: coverPath,
       frostLevel: frostLevel,
+      glassLevel: glass,
+      colorA: tokens.cardA,
+      colorB: tokens.cardB,
+      // `.panel { background: linear-gradient(170deg, …) }`（app.css:1434-1439）
+      gradientDegrees: 170,
       child: card,
     );
   }
@@ -454,6 +464,45 @@ class _PlaylistBodyState extends State<_PlaylistBody> {
   final ScrollController _controller = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    // 打开播放列表就把正在播放的那首滚到可视区中间（原版 `src/App.tsx:671-689`）。
+    // 只在挂载时执行：弹层每次打开都是新挂载、切回「播放列表」标签也是新挂载，
+    // 正好对上原版那两条触发路径（弹层打开 / 页面载入、tab 切回 playlist）。
+    // 刻意**不跟**当前曲目变化联动 —— 播放中自动切歌时，用户正在往下翻的
+    // 列表不该被拽走。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _centerOnCurrent());
+  }
+
+  /// 把当前行滚到列表垂直中间。
+  ///
+  /// 偏移按「行高恒定」算（[kTrackRowExtent]）：列表是懒建的，滚出屏幕的行
+  /// 根本没有 Element，`ensureVisible` 对它们无从下手；而每行高度固定，
+  /// `index * kTrackRowExtent` 就是行顶，不需要等它被建出来。
+  void _centerOnCurrent() {
+    if (!mounted || !_controller.hasClients) {
+      return;
+    }
+    final currentId = widget.library.currentId;
+    if (currentId == null) {
+      return;
+    }
+    final tracks = widget.library.filteredTracks;
+    final index = tracks.indexWhere((track) => track.id == currentId);
+    // 被搜索关键词滤掉 / 列表里没有这一首：没有目标行，保持在原位
+    if (index < 0) {
+      return;
+    }
+    final position = _controller.position;
+    final centered =
+        index * kTrackRowExtent -
+        (position.viewportDimension - kTrackRowExtent) / 2;
+    _controller.jumpTo(
+      math.max(0.0, math.min(centered, position.maxScrollExtent)),
+    );
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
@@ -487,6 +536,10 @@ class _PlaylistBodyState extends State<_PlaylistBody> {
           key: const Key('playlist-list'),
           controller: _controller,
           padding: EdgeInsets.zero,
+          // 行高恒定（[kTrackRowExtent]）：懒建的列表只有在 itemExtent 给定
+          // 时**首帧**就知道真实的总高度，`maxScrollExtent` 才不是「只算出
+          // 已建那几行」的估值 —— 否则打开面板时的居中会被裁到第一屏内。
+          itemExtent: kTrackRowExtent,
           itemCount: tracks.length,
           itemBuilder: (context, index) {
             final track = tracks[index];

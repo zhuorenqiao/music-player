@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
+import 'package:light_music/ui/fused_card.dart';
 import 'package:light_music/ui/glass_frost.dart';
 
 import 'panel_harness.dart';
@@ -46,6 +47,22 @@ void main() {
     final harness = PanelHarness(tall: true);
     addTearDown(harness.dispose);
     await tester.pumpWidget(wrap(harness.build(flush: true, frostLevel: 0.5)));
+    await tester.pump();
+
+    expect(find.byType(GlassFrostLayer), findsNothing);
+    expect(find.byType(BackdropFilter), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('融合卡里（FusedCardScope）：磨砂归外层整卡，面板自己不再挂一层', (tester) async {
+    final harness = PanelHarness(tall: true);
+    addTearDown(harness.dispose);
+    // 桌面双栏融合后，磨砂层在 FusedCard 上；面板若仍挂 GlassFrostLayer，
+    // 一张卡里就会叠出第二道磨砂（`.panel:not(.panel--sheet)::before` 被
+    // display:none 的那件事）。
+    await tester.pumpWidget(
+      wrap(FusedCardScope(child: harness.build(frostLevel: 0.5))),
+    );
     await tester.pump();
 
     expect(find.byType(GlassFrostLayer), findsNothing);

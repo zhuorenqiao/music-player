@@ -303,23 +303,58 @@ void _drawSpectrum(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Float
   final step = w / count;
   final barWidth = math.max(1.0, step - 1);
 
+  // React 版（wave-styles.ts:327-345）是 `ctx.shadowColor=白色0.3`
+  // + `shadowBlur=6`：**柱体本身锐利**，模糊只作用在它背后那层白色投影上。
+  //
+  // 旧实现把 `MaskFilter.blur(BlurStyle.normal, 3)` 直接挂到填充柱子的
+  // paint 上，等于把柱体边缘整个抹掉：bandCount≈150 时每根柱子只有
+  // ~3px 宽、间隔 1px，各自的 3px 模糊晕互相重叠，最后糊成一整条彩虹
+  // 色带、柱形完全看不出来（Windows 真机截图确认）。
+  //
+  // 这里**彻底不在柱体上用 MaskFilter**：Canvas 的 shadowBlur 在 Flutter
+  // 没有等价物（MaskFilter 是「把形状本身模糊」，不是「形状外发光」），
+  // 硬套只会毁掉柱形。改为「锐利渐变柱 + 柱顶一条 2px 白色高光线」，
+  // 用纯几何保住 CSS 那点柔光观感，且绝不牺牲边界清晰度。
+  //
+  // **批量绘制**：同一帧里所有柱子共用一个渐变 shader，它们本来就是一次
+  // 填充的两个部分（柱体 / 柱顶高光），逐根 drawRect 会在 360px 宽的条子上
+  // 变成 ~200 条绘制指令。合成一条 Path 后是 1 条填充 + 1 条高光 + 1 次
+  // drawRawPoints（峰值点），绘制指令数从 O(列数) 降到常数 —— 真机掉帧主要
+  // 就出在这种「GPU 每帧要处理两百多条指令」的地方。
   final fill = _paint(palette.grad, palette.colorAt(0));
-  // shadowBlur 6（rgba(255,255,255,0.3)）→ MaskFilter.blur sigma=3。
-  fill.maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 3);
+  final highlight = ui.Paint()..color = const Color(0x4DFFFFFF); // 白 0.3
+  final bars = ui.Path();
+  final caps = ui.Path();
+  // 峰值点：0.55 白、半径 1px（等价 strokeWidth=2 + 圆头）。每个段的坐标
+  // 直接写进这块复用缓冲，避免逐点造 Offset。
+  final dots = Float32List(count ~/ 3 * 2 + 2);
+  var dotAt = 0;
   for (var i = 0; i < count; i++) {
     final amp = bands[i] * maxAmp;
-    canvas.drawRect(
-      ui.Rect.fromLTWH(i * step, baseline - amp, barWidth, amp),
-      fill,
-    );
     if (amp > peaks[i]) peaks[i] = amp;
+    if (amp <= 0) continue;
+    final rect = ui.Rect.fromLTWH(i * step, baseline - amp, barWidth, amp);
+    bars.addRect(rect);
+    // 柱顶 2px 高光：对应 shadowColor 那点白色，但边界是直的、不糊。
+    caps.addRect(
+      ui.Rect.fromLTWH(rect.left, rect.top, rect.width, math.min(2.0, rect.height)),
+    );
+    if (i % 3 == 0 && peaks[i] > 0) {
+      dots[dotAt++] = i * step + barWidth / 2;
+      dots[dotAt++] = baseline - peaks[i] - 6;
+    }
   }
-  final dot = ui.Paint()..color = const Color(0x8CFFFFFF); // rgba(255,255,255,0.55)
-  for (var i = 0; i < count; i += 3) {
-    if (peaks[i] <= 0) continue;
-    canvas.drawCircle(
-      ui.Offset(i * step + barWidth / 2, baseline - peaks[i] - 6),
-      1,
+  canvas.drawPath(bars, fill);
+  canvas.drawPath(caps, highlight);
+  if (dotAt > 0) {
+    final dot = ui.Paint()
+      ..color = const Color(0x8CFFFFFF) // rgba(255,255,255,0.55)
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = ui.StrokeCap.round;
+    canvas.drawRawPoints(
+      ui.PointMode.points,
+      Float32List.sublistView(dots, 0, dotAt),
       dot,
     );
   }
@@ -684,24 +719,35 @@ void _drawHistogram(ui.Canvas canvas, WaveFrame frame, WavePalette palette, Floa
   final step = w / idx.length;
   final barWidth = math.max(2.0, step - 2.4);
 
+  // 与 spectrum 同样的批量思路：所有柱子合成一条 Path，一次填充。
   final fill = _paint(palette.grad, palette.colorAt(0));
+  final bars = ui.Path();
+  final dots = Float32List(idx.length * 2);
+  var dotAt = 0;
   for (var k = 0; k < idx.length; k++) {
     final bandIndex = idx[k];
     final amp = math.max(1.5, bands[bandIndex] * maxAmp);
     final x = k * step + (step - barWidth) / 2;
-    canvas.drawPath(
+    bars.addPath(
       _roundBarPath(x, baseline - amp, barWidth, amp, barWidth / 2),
-      fill,
+      ui.Offset.zero,
     );
     if (amp > peaks[bandIndex]) peaks[bandIndex] = amp;
+    if (peaks[bandIndex] > 0) {
+      dots[dotAt++] = k * step + step / 2;
+      dots[dotAt++] = baseline - peaks[bandIndex] - 4;
+    }
   }
-  final dot = ui.Paint()..color = const Color(0x80FFFFFF); // rgba(255,255,255,0.5)
-  for (var k = 0; k < idx.length; k++) {
-    final bandIndex = idx[k];
-    if (peaks[bandIndex] <= 0) continue;
-    canvas.drawCircle(
-      ui.Offset(k * step + step / 2, baseline - peaks[bandIndex] - 4),
-      1,
+  canvas.drawPath(bars, fill);
+  if (dotAt > 0) {
+    final dot = ui.Paint()
+      ..color = const Color(0x80FFFFFF) // rgba(255,255,255,0.5)
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = ui.StrokeCap.round;
+    canvas.drawRawPoints(
+      ui.PointMode.points,
+      Float32List.sublistView(dots, 0, dotAt),
       dot,
     );
   }

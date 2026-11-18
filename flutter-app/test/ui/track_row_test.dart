@@ -51,6 +51,35 @@ void main() {
     expect(played, 1);
   });
 
+  testWidgets('当前行：音柱与时长同一行、垂直居中、音柱在左（`.track__tail`）', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      TrackRow(
+        title: 'I Do',
+        artistLine: '周杰伦 · 太阳之子',
+        duration: '03:36',
+        active: true,
+        playing: true,
+        broken: false,
+        onPlay: () {},
+        onRemove: () {},
+      ),
+    );
+
+    final bars = tester.getRect(find.byType(BarsIndicator));
+    final duration = tester.getRect(find.text('03:36'));
+    // `display: flex; align-items: center; gap: 6px`：同一行、同一中心线
+    expect(
+      bars.center.dy,
+      closeTo(duration.center.dy, 1),
+      reason: '音柱要和控制行里的时长垂直居中对齐，而不是掉到它下面',
+    );
+    // 顺序：音柱在时长左边（App.tsx:806-815 的 tail 里箭头在前）
+    expect(bars.right, lessThan(duration.left));
+  });
+
   testWidgets('删除按钮点击不冒泡到播放', (tester) async {
     var played = 0;
     var removed = 0;

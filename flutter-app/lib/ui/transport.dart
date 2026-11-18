@@ -184,6 +184,11 @@ class TransportBar extends StatelessWidget {
           onVolume: (value) => unawaited(player.setVolume(value)),
           onMute: () => unawaited(player.toggleMute()),
           onQueue: () => showLibrarySheet(context),
+          // 桌面档：歌词页占掉右栏时才补列表入口（React 同款规则）。
+          // 大屏（≥1280）歌词页左列已常驻列表，这颗入口就多余了
+          // （`body.is-lyrics-page .controls__queue { display: none }`，app.css:5035-5037）。
+          showQueue: inLyricsPage &&
+              !isWide(MediaQuery.sizeOf(context).width),
         ),
       ),
     );
@@ -337,6 +342,8 @@ class _WaveRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 画布高度按视口分档：48，满宽档（≥1680）56（app.css:2488-2494 / :5098-5100）。
+    final ultra = isUltraWide(MediaQuery.sizeOf(context).width);
     return Row(
       children: [
         if (!showWaveStrip) ...[
@@ -351,6 +358,7 @@ class _WaveRow extends StatelessWidget {
               playing: playing,
               positionSeconds: positionSeconds,
               positionListenable: positionListenable,
+              height: ultra ? kWaveStripHeightUltra : kWaveStripHeight,
             ),
           ),
       ],
@@ -373,6 +381,7 @@ class _ControlsRow extends StatelessWidget {  const _ControlsRow({
     this.onVolume,
     this.onMute,
     this.onQueue,
+    this.showQueue = false,
   });
 
   final bool desktop;
@@ -390,6 +399,15 @@ class _ControlsRow extends StatelessWidget {  const _ControlsRow({
   final ValueChanged<double>? onVolume;
   final VoidCallback? onMute;
   final VoidCallback? onQueue;
+
+  /// 是否显示「播放列表」入口（桌面档）。
+  ///
+  /// React 规则（app.css:1379-1381 / 4377-4379）：`.controls__queue` 默认
+  /// `display:none`，**只在歌词页让出右栏时**才出现（`body.is-lyrics-page
+  /// .controls__queue { display: inline-flex }`）—— 桌面平时右栏常驻列表，
+  /// 不需要重复一个入口；歌词页占掉右栏，列表面板没处摆，才补这颗按钮。
+  /// 窄屏（≤899px）则常驻（原版窄屏没有右栏）。
+  final bool showQueue;
 
   @override
   Widget build(BuildContext context) {
@@ -452,7 +470,10 @@ class _ControlsRow extends StatelessWidget {  const _ControlsRow({
           const SizedBox(width: _controlsGap),
           next,
           const SizedBox(width: _controlsGap),
-          // 音量：min(200px, 100%) 靠右，行宽不够时被挤压的只有滑轨
+          // 音量：React 的 `.volume` 是 `flex: 1 1 auto`（grid-column 1/-1），
+          // 滑杆 `flex: 1 1 auto` 吃掉剩余宽度、按钮 `flex: 0 0 auto` 钉死
+          // 40px 不被压扁；`.volume__input` 上限 200px（app.css:1307-1331）。
+          // 这里保持同一形状：滑杆撑开、音量钮固定在最左、整体靠右。
           Expanded(
             child: Align(
               alignment: Alignment.centerRight,
@@ -467,6 +488,17 @@ class _ControlsRow extends StatelessWidget {  const _ControlsRow({
               ),
             ),
           ),
+          // 列表入口：桌面平时右栏常驻列表，不重复给；歌词页占掉右栏时才出现
+          // （React `body.is-lyrics-page .controls__queue`，app.css:4377-4379）。
+          if (showQueue) ...[
+            const SizedBox(width: _controlsGap),
+            _TransportButton(
+              id: 'btn-queue',
+              label: '播放列表',
+              icon: Icons.queue_music,
+              onTap: onQueue,
+            ),
+          ],
         ],
       );
     }

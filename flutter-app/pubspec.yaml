@@ -36,3 +36,15 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # 「T」面板里两款随包歌词字体（对译 React 版 public/fonts 的两份开源字体）：
+  # 得意黑（Smiley Sans Oblique，由 woff2 转 ttf）与霞鹜文楷（LXGW WenKai Regular）。
+  # 家族名带 Lyric 前缀，与 React 版 font-family 的 'Lyric Smiley' / 'Lyric WenKai'
+  # 同一套命名，避免和用户系统里装着的同名开源字体打架。
+  # 体积：得意黑 2.5MB、文楷 24.7MB（OFL 授权，LICENSE 随包放在同目录）。
+  fonts:
+    - family: LyricSmiley
+      fonts:
+        - asset: assets/fonts/LyricSmiley.ttf
+    - family: LyricWenKai
+      fonts:
+        - asset: assets/fonts/LyricWenKai.ttf

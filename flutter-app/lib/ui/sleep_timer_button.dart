@@ -1,26 +1,61 @@
 // lib/ui/sleep_timer_button.dart
 //
-// 睡眠定时器的入口：对译 React `src/components/SleepTimerButton.tsx`。
+// 睡眠定时器的入口：对译 React `src/components/SleepTimerButton.tsx`（工作区
+// 里那一版，面板已从「5 档预设」改成滑杆）。
 //
-//   ┌──────────────────────────────┐
-//   │ 10 分钟 15 分钟 20 分钟 …    │  ← 预设 5 档（10 分钟默认选中）
-//   │ 自定义  [ 10 ] 分钟          │  ← 1~999 分钟
-//   │            [ 开始 ]          │
-//   └──────────────────────────────┘
+//   ┌────────────────────────────────┐
+//   │ 剩余 09:32            [取消定时] │  ← 只有倒计时跑着时才有这一行
+//   │ 30 分钟            1 分钟 – 16 小时 39 分钟 │
+//   │ ▁▁▁▁▁▁▁▁●▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁       │  ← 滑杆走对数量级，短时长行程更宽
+//   │ 自定义  [ 30 ]  分钟             │
+//   │ [            开始            ]   │  ← 运行中变「重新计时」
+//   └────────────────────────────────┘
 //
 // 闹钟小按钮（T 与水滴右侧 26×26 那一排）；倒计时跑着时按钮撑成一枚药丸，直接
 // 显示剩余 mm:ss —— 不用再点开面板看。面板用 Overlay 挂：点面板以外收起
 // （与 GlassControl 同一套做法）。
+//
+// 滑杆映射照 React 原样：**指数**（1~999 分钟，低端 1、2、3… 分辨得很清，
+// 高端自然变粗到 999），所以位置↔分钟数是 [minutesForPosition] /
+// [positionForMinutes] 这一对反函数，面板里不另存刻度表。
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../core/breakpoints.dart';
 import '../state/sleep_timer_state.dart';
 import '../theme/app_tokens.dart';
 import 'tool_panel.dart';
 
-/// 面板宽度（`_SleepTimerPanel` 的 `width: 224`）。
-const double kSleepTimerPanelWidth = 224;
+/// 面板宽度（React `.sleep-timer__panel` 的 `width: 244px`）。
+const double kSleepTimerPanelWidth = 244;
+
+/// 滑杆位置（0~100）→ 分钟数。
+int minutesForPosition(double position) {
+  final t = (position / 100).clamp(0.0, 1.0);
+  final value = kSleepTimerMinMinutes *
+      math.pow(kSleepTimerMaxMinutes / kSleepTimerMinMinutes, t);
+  return value.round().clamp(kSleepTimerMinMinutes, kSleepTimerMaxMinutes);
+}
+
+/// 分钟数 → 滑杆位置（上面的反函数）。
+double positionForMinutes(int minutes) {
+  final clamped = minutes
+      .clamp(kSleepTimerMinMinutes, kSleepTimerMaxMinutes)
+      .toDouble();
+  return math.log(clamped / kSleepTimerMinMinutes) /
+      math.log(kSleepTimerMaxMinutes / kSleepTimerMinMinutes) * 100;
+}
+
+/// 时长读数：不足 1 小时报「X 分钟」，否则「X 小时 Y 分钟」。
+String sleepTimerReadout(int minutes) {
+  if (minutes < 60) return '$minutes 分钟';
+  final rest = minutes % 60;
+  return rest == 0 ? '${minutes ~/ 60} 小时' : '${minutes ~/ 60} 小时 $rest 分钟';
+}
+
+/// 滑杆右端的上限读数（999 分钟 = 16 小时 39 分钟）。
+final String kSleepTimerMaxReadout = sleepTimerReadout(kSleepTimerMaxMinutes);
 
 /// 睡眠定时器按钮 + 弹出面板。
 class SleepTimerButton extends StatefulWidget {
@@ -37,7 +72,10 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
   final GlobalKey _anchorKey = GlobalKey();
   OverlayEntry? _entry;
 
-  /// 面板里即将设定的分钟数（预设与自定义输入共用这一个值）。
+  /// 已进 dispose：展开态要 setState，而 dispose 里也会走 `_removeOverlay`。
+  bool _disposed = false;
+
+  /// 面板里即将设定的分钟数（滑杆与自定义输入共用这一个值）。
   int _minutes = kSleepTimerDefaultMinutes;
 
   /// 自定义输入框里的原始文本（可能为空或越界，所以和 [_minutes] 分开存）。
@@ -56,7 +94,7 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
     if (box == null) return;
     final pos = box.localToGlobal(Offset.zero);
     // 落位交给 toolPanelPosition：控制条那排向上弹（偏左 40px），歌词页右上角
-    // 向下弹且**贴按钮右缘向左展开** —— 面板 224px 宽，居中会掉出屏幕右缘。
+    // 向下弹且**贴按钮右缘向左展开** —— 面板 244px 宽，居中会掉出屏幕右缘。
     final place = toolPanelPosition(
       anchor: pos,
       anchorWidth: box.size.width,
@@ -86,8 +124,14 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
               child: _SleepTimerPanel(
                 minutes: _minutes,
                 custom: _custom,
-                onMinutesChanged: (value) => setState(() => _minutes = value),
-                onCustomChanged: (text) => setState(() {
+                onSlide: (position) {
+                  final next = minutesForPosition(position);
+                  _updatePanel(() {
+                    _minutes = next;
+                    _custom = '$next';
+                  });
+                },
+                onCustomChanged: (text) => _updatePanel(() {
                   _custom = text;
                   final parsed = int.tryParse(text.trim());
                   if (parsed != null &&
@@ -111,15 +155,31 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
       ),
     );
     Overlay.of(context).insert(_entry!);
+    // 展开态要换描边与底色（CSS 的 `[aria-expanded="true"]`）。
+    setState(() {});
   }
 
   void _removeOverlay() {
+    final had = _entry != null;
     _entry?.remove();
     _entry = null;
+    if (had && !_disposed && mounted) setState(() {});
+  }
+
+  /// 改面板里的「即将设定的时长」，并让**已经挂出去的那份 Overlay** 重画。
+  ///
+  /// 面板挂在 OverlayEntry 上，是独立的一棵子树：`setState` 只重建按钮自己的
+  /// 子树，不会顺手把 Overlay 里的内容重建一遍（这正是 React 版用 createPortal
+  /// 挂 body 之后仍然能跟着 state 更新的差别所在）。不显式 markNeedsBuild 的话，
+  /// 拖滑杆时读数会一直停在旧值 —— 值其实是改了的，只是画面不动。
+  void _updatePanel(void Function() mutate) {
+    setState(mutate);
+    _entry?.markNeedsBuild();
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _removeOverlay();
     super.dispose();
   }
@@ -143,31 +203,27 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
         key: _anchorKey,
         behavior: HitTestBehavior.opaque,
         onTap: _toggle,
-        child: Container(
+        // 同一套 26×26 壳（圆角 8 / 1px 描边 / surface 底，展开与运行中换 accent，
+        // 最后一分钟换 danger）。运行中按 CSS 的 `width: auto; padding: 0 8px`
+        // 撑成药丸；居中由 ToolTriggerChrome 的 `alignment: center` 保证 ——
+        // 之前这里是 Row(mainAxisSize.min) 在**紧约束**里靠 start 排，图标
+        // 直接贴左边框，右边空一大块。
+        child: ToolTriggerChrome(
           key: const Key('sleep-timer-trigger'),
-          height: 26,
-          padding: running ? const EdgeInsets.symmetric(horizontal: 8) : EdgeInsets.zero,
-          width: running ? null : 26,
-          decoration: BoxDecoration(
-            color: running
-                ? (ending ? tokens.dangerSoft : tokens.accentSoft)
-                : tokens.surface,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: running
-                  ? (ending ? tokens.dangerLine : tokens.accentLine)
-                  : tokens.borderStrong,
-            ),
-          ),
+          active: running || _entry != null,
+          danger: running && ending,
+          width: running ? null : kToolTriggerSize,
+          padding: running
+              ? const EdgeInsets.symmetric(horizontal: 8)
+              : EdgeInsets.zero,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // 图标 14×14（`.sleep-timer__icon:2943-2949`），颜色 `--accent-light`。
               Icon(
                 Icons.alarm_outlined,
-                size: 15,
-                color: running
-                    ? (ending ? tokens.dangerInk : tokens.accentLight)
-                    : tokens.textDim,
+                size: 14,
+                color: ending ? tokens.dangerInk : tokens.accentLight,
               ),
               if (running) ...[
                 const SizedBox(width: 5),
@@ -188,12 +244,12 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
   }
 }
 
-/// 面板：预设 5 档 + 自定义分钟数 + 开始 / 取消。
+/// 面板：滑杆选时长（1~999 分钟）+ 自定义分钟数 + 开始 / 重新计时。
 class _SleepTimerPanel extends StatelessWidget {
   const _SleepTimerPanel({
     required this.minutes,
     required this.custom,
-    required this.onMinutesChanged,
+    required this.onSlide,
     required this.onCustomChanged,
     required this.onStart,
     required this.onCancel,
@@ -201,7 +257,9 @@ class _SleepTimerPanel extends StatelessWidget {
 
   final int minutes;
   final String custom;
-  final ValueChanged<int> onMinutesChanged;
+
+  /// 滑杆位置（0~100）变化。
+  final ValueChanged<double> onSlide;
   final ValueChanged<String> onCustomChanged;
   final VoidCallback onStart;
   final VoidCallback onCancel;
@@ -215,14 +273,17 @@ class _SleepTimerPanel extends StatelessWidget {
       onTap: () {},
       child: Container(
         width: kSleepTimerPanelWidth,
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
+        padding: const EdgeInsets.fromLTRB(13, 11, 13, 12),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(kRadiusLg),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: tokens.borderStrong),
+          // 底色先铺一层实色再叠渐变：面板底下可能正好压着歌词与卡片边框，
+          // 不能透出任何一条（CSS 那边同样先 background-color 再渐变）。
+          color: tokens.panelA,
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [tokens.sheetA, tokens.sheetB],
+            colors: [tokens.panelA, tokens.panelB],
           ),
           boxShadow: tokens.shadowCard,
         ),
@@ -236,7 +297,7 @@ class _SleepTimerPanel extends StatelessWidget {
                   Text(
                     '剩余 ${timer.remainingText}',
                     style: TextStyle(
-                      fontSize: 11.5,
+                      fontSize: 11,
                       color: tokens.textDim,
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
@@ -253,27 +314,71 @@ class _SleepTimerPanel extends StatelessWidget {
               ),
               const SizedBox(height: 10),
             ],
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
+            // 滑杆：上面一行读当前时长，下面一根滑轨（刻度只在读数里体现）。
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
               children: [
-                for (final preset in kSleepTimerPresets)
-                  _SmallButton(
-                    label: '$preset 分钟',
-                    foreground: minutes == preset ? tokens.accentLight : tokens.textDim,
-                    background: minutes == preset ? tokens.accentSoft : tokens.surface,
-                    border: minutes == preset ? tokens.accentLine : tokens.borderStrong,
-                    onPressed: () {
-                      onMinutesChanged(preset);
-                      onCustomChanged('$preset');
-                    },
+                Text(
+                  sleepTimerReadout(minutes),
+                  key: const Key('sleep-timer-readout'),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: tokens.text,
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
+                ),
+                const SizedBox(width: 8),
+                // 上限读数是右对齐的「次要信息」：面板窄（244）或系统字号调大时
+                // 先让它省略号收尾，绝不把读数挤出去（CSS 那边是 white-space: nowrap
+                // 让它顶出去，Flutter 的 Flex 溢出会直接报错）。
+                Expanded(
+                  child: Text(
+                    '$kSleepTimerMinMinutes 分钟 – $kSleepTimerMaxReadout',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 10, color: tokens.textFaint),
+                  ),
+                ),
               ],
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 18,
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 4,
+                  activeTrackColor: tokens.accent,
+                  inactiveTrackColor: tokens.progressTrack,
+                  thumbColor: tokens.sliderThumb,
+                  overlayShape: SliderComponentShape.noOverlay,
+                  thumbShape: const RoundSliderThumbShape(
+                    enabledThumbRadius: 6.5,
+                    disabledThumbRadius: 6.5,
+                  ),
+                  trackShape: const RectangularSliderTrackShape(),
+                  showValueIndicator: ShowValueIndicator.never,
+                ),
+                child: Slider(
+                  key: const Key('sleep-timer-slider'),
+                  value: positionForMinutes(minutes),
+                  min: 0,
+                  max: 100,
+                  divisions: 1000,
+                  label: sleepTimerReadout(minutes),
+                  onChanged: onSlide,
+                ),
+              ),
             ),
             const SizedBox(height: 10),
             Row(
               children: [
-                Text('自定义', style: TextStyle(fontSize: 11.5, color: tokens.textDim)),
+                Text(
+                  '自定义',
+                  style: TextStyle(fontSize: 11, color: tokens.textDim),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: _CustomMinutesField(
@@ -282,7 +387,10 @@ class _SleepTimerPanel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text('分钟', style: TextStyle(fontSize: 11.5, color: tokens.textDim)),
+                Text(
+                  '分钟',
+                  style: TextStyle(fontSize: 11, color: tokens.textDim),
+                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -303,7 +411,7 @@ class _SleepTimerPanel extends StatelessWidget {
 /// 自定义分钟数输入框。
 ///
 /// 自己持有 [TextEditingController]：控制器不能在 build 里现造（每次重建都会把
-/// 光标弹回末尾、还会漏掉 dispose）。外面改了值（点了预设档）时同步过来。
+/// 光标弹回末尾、还会漏掉 dispose）。外面改了值（拖了滑杆）时同步过来。
 class _CustomMinutesField extends StatefulWidget {
   const _CustomMinutesField({required this.value, required this.onChanged});
 
@@ -348,6 +456,8 @@ class _CustomMinutesFieldState extends State<_CustomMinutesField> {
         style: TextStyle(fontSize: 12, color: tokens.text),
         decoration: InputDecoration(
           isDense: true,
+          filled: true,
+          fillColor: tokens.surface,
           contentPadding: const EdgeInsets.symmetric(horizontal: 8),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
@@ -364,7 +474,7 @@ class _CustomMinutesFieldState extends State<_CustomMinutesField> {
   }
 }
 
-/// 面板里的小按钮（预设档 / 取消 / 开始）。
+/// 面板里的小按钮（取消 / 开始）。
 class _SmallButton extends StatelessWidget {
   const _SmallButton({
     required this.label,
@@ -388,6 +498,7 @@ class _SmallButton extends StatelessWidget {
         onTap: onPressed,
         borderRadius: BorderRadius.circular(8),
         child: Container(
+          alignment: Alignment.center,
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             color: background,

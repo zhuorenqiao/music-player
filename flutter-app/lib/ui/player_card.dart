@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 
 import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
+import 'fused_card.dart';
 import 'glass_frost.dart';
 
 /// 把「我在一张 .player 卡内部」传给子树。
@@ -46,22 +47,44 @@ class PlayerCardScope extends InheritedWidget {
 
 /// 一整张播放卡：卡面 chrome + 磨砂层 + 竖直堆叠的 [children]。
 ///
-/// [children] 由调用方按档位给：桌面是 `stage → transport`（右栏面板在这张卡
-/// 之外），窄屏同样是 `stage → transport`（列表面板收进底部弹层，不占常驻位）。
+/// [children] 由调用方按档位给：桌面是 `stage → transport`，窄屏同样是
+/// `stage → transport`（列表面板收进底部弹层，不占常驻位）。
+///
+/// 桌面双栏融合之后，这张卡住在 [FusedCard] 里，卡面 chrome 与磨砂层由外层
+/// 那张整卡承担 —— 检测到 [FusedCardScope] 时就只留内容，否则一张卡里会浮出
+/// 第二层边框（与 CSS 里 `.player` 剥掉边框/圆角/磨砂同一件事）。
 class PlayerCard extends StatelessWidget {
   const PlayerCard({
     required this.coverPath,
     required this.frostLevel,
+    this.glassLevel = 1,
     required this.children,
     super.key,
   });
 
   final String coverPath;
   final double frostLevel;
+
+  /// 卡面不透明度（ThemeState.glassLevel）：`.player` 的 `color-mix` 那一档。
+  final double glassLevel;
   final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
+    // 融合卡里：外层那张整卡已经有边框 / 圆角 / 玻璃底 / 磨砂，本卡只留内容。
+    // PlayerCardScope 照旧放出去 —— Stage / TransportBar 仍要据此剥掉自己那层
+    // 卡片外观，否则融合卡里会再冒出两道内框。
+    if (FusedCardScope.isFused(context)) {
+      return PlayerCardScope(
+        coverPath: coverPath,
+        frostLevel: frostLevel,
+        child: Column(
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      );
+    }
     // 容错：测试 harness / 旧调用点可能没装 AppTokensData（`context.tokens`
     // 会空指针）。缺 token 时用一套最简卡面（无色边框 + 圆角），
     // 保证骨架几何仍可被断言，不因缺主题而炸。
@@ -71,14 +94,6 @@ class PlayerCard extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(kRadiusXl),
         border: tokens == null ? null : Border.all(color: tokens.border),
-        gradient: tokens == null
-            ? null
-            : LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [tokens.cardA, tokens.cardB],
-              ),
-        boxShadow: tokens?.shadowCard,
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(kRadiusXl),
@@ -97,6 +112,13 @@ class PlayerCard extends StatelessWidget {
           : GlassFrostLayer(
               coverPath: coverPath,
               frostLevel: frostLevel,
+              glassLevel: glassLevel,
+              colorA: tokens.cardA,
+              colorB: tokens.cardB,
+              // `.player { background: linear-gradient(165deg, …) }`（app.css:444）
+              gradientDegrees: 165,
+              // 卡外投影归玻璃层（画在卡面之下）
+              shadow: tokens.shadowCard,
               child: card,
             ),
     );

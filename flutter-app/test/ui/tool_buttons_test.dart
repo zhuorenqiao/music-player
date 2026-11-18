@@ -31,7 +31,10 @@ import 'package:light_music/state/toast_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/theme/theme_state.dart';
+import 'package:light_music/ui/glass_control.dart';
 import 'package:light_music/ui/lyrics_page.dart';
+import 'package:light_music/ui/sleep_timer_button.dart';
+import 'package:light_music/ui/tool_panel.dart';
 import 'package:light_music/ui/transport.dart';
 import 'package:light_music/ui/wave_strip.dart';
 import 'package:provider/provider.dart';
@@ -209,6 +212,74 @@ void main() {
         expect(t.top, lessThan(80));
         expect(t.width, 26);
         expect(t.height, 26);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    });
+
+    testWidgets('三颗按钮是同一套壳：26×26、圆角 8、同色描边、图标居中', (tester) async {
+      final harness = _Harness();
+      addTearDown(harness.dispose);
+      final semantics = tester.ensureSemantics();
+      try {
+        await pumpLyricsPage(tester, harness);
+
+        final t = tester.getRect(find.bySemanticsLabel(kTLabel));
+        final glass = tester.getRect(find.bySemanticsLabel(kGlassLabel));
+        final sleep = tester.getRect(find.bySemanticsLabel(kSleepLabel));
+
+        // 三颗同尺寸、同一水平线（CSS 三处选择器逐字都是 26×26）。
+        for (final r in [t, glass, sleep]) {
+          expect(r.width, closeTo(26, 0.01), reason: '三颗都是 26 宽');
+          expect(r.height, closeTo(26, 0.01), reason: '三颗都是 26 高');
+          expect(r.top, closeTo(t.top, 0.01), reason: '三颗在页头同一条线上');
+        }
+
+        // 图标在这 26×26 的正中间 —— 闹钟那颗之前被 `Row(mainAxisSize: min)`
+        // 在紧约束里靠 start 排，图标直接贴在左边框上（用户截图圈的就是这里）。
+        void expectIconCentered(Rect trigger, Icon icon, String name) {
+          final rect = tester.getRect(find.byWidget(icon));
+          expect(rect.center.dx, closeTo(trigger.center.dx, 0.6), reason: '$name 水平居中');
+          expect(rect.center.dy, closeTo(trigger.center.dy, 0.6), reason: '$name 垂直居中');
+          expect(icon.size, 14, reason: '$name 图标 14×14（CSS `.glass-control__icon`）');
+        }
+
+        final glassIcon = tester.widget<Icon>(find.descendant(
+          of: find.byType(GlassControl),
+          matching: find.byType(Icon),
+        ));
+        expectIconCentered(glass, glassIcon, '水滴');
+        final sleepIcon = tester.widget<Icon>(find.descendant(
+          of: find.byType(SleepTimerButton),
+          matching: find.byType(Icon),
+        ));
+        expectIconCentered(sleep, sleepIcon, '闹钟');
+
+        // 三颗都用同一个外壳组件，未展开时的描边 / 底色 / 圆角必须一模一样。
+        final chromes = find.byType(ToolTriggerChrome);
+        expect(chromes, findsNWidgets(3));
+        final boxes = tester.widgetList<Container>(
+          find.descendant(of: chromes, matching: find.byType(Container)),
+        ).toList();
+        expect(boxes, hasLength(3));
+        final tokens = AppTokens.dark;
+        for (final box in boxes) {
+          final decoration = box.decoration! as BoxDecoration;
+          expect(decoration.color, tokens.surface, reason: '未展开时底色 --surface');
+          expect(decoration.borderRadius, BorderRadius.circular(8));
+          final border = decoration.border! as Border;
+          expect(border.top.color, tokens.borderStrong, reason: '1px --border-strong');
+          expect(border.top.width, closeTo(1, 0.001));
+          expect(box.constraints!.maxWidth, 26);
+          expect(box.constraints!.maxHeight, 26);
+        }
+
+        // 「T」这个字母是 13px/700、颜色 = 当前歌词高亮色（默认跟随 accent-light）。
+        final letter = tester.widget<Text>(find.text('T'));
+        expect(letter.style!.fontSize, 13);
+        expect(letter.style!.fontWeight, FontWeight.w700);
+        expect(letter.style!.color, tokens.accentLight);
         expect(tester.takeException(), isNull);
       } finally {
         semantics.dispose();

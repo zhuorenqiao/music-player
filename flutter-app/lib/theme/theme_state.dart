@@ -1,12 +1,14 @@
 // lib/theme/theme_state.dart
 //
-// 外观状态机（M3 T4）：七个维度一个 provider 管完，对译 React 的
+// 外观状态机（M3 T4）：九个维度一个 provider 管完，对译 React 的
 // theme.tsx（mode/color）+ glass.tsx（transparency/frost）+ wave-style.tsx
-// （style/colored/lyricColor）三个 provider —— Flutter 侧合并成一个
-// ChangeNotifier，消费方（换肤抽屉 / 玻璃滑块 / 波形 / 歌词行）各取所需。
+// （style/colored/lyricColor/lyricScale/lyricFont）三个 provider —— Flutter 侧
+// 合并成一个 ChangeNotifier，消费方（换肤抽屉 / 玻璃滑块 / 波形 / 歌词行）各取
+// 所需。
 //
 // 持久化键全部已留位（storage_keys.dart）：themeMode / themeColor /
-// cardTransparency / cardFrost / waveStyle / waveColored / lyricColor。
+// cardTransparency / cardFrost / waveStyle / waveColored / lyricColor /
+// lyricScale / lyricFont。
 //
 // 三条移植要点（每条都有用例钉）：
 //   * legacy 迁移（theme.tsx:72-95 逐字）：老 `theme` 键为 system/light/dark
@@ -20,6 +22,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/app_prefs.dart';
 import '../core/storage_keys.dart';
+import 'lyric_fonts.dart';
 
 /// 明暗模式（theme.tsx:18）。
 enum ThemeModeSetting { system, light, dark }
@@ -58,6 +61,8 @@ class ThemeState extends ChangeNotifier {
   String _waveStyleId = 'spectrum';
   bool _colored = true;
   String _lyricColor = '';
+  int _lyricScale = kLyricScaleDefault;
+  String _lyricFontId = 'default';
 
   /// `system | light | dark`（theme.tsx:18）。
   ThemeModeSetting get mode => _mode;
@@ -79,6 +84,18 @@ class ThemeState extends ChangeNotifier {
 
   /// 歌词高亮色 `#rrggbb`；空串 = 跟随主题默认（accentLight）。
   String get lyricColor => _lyricColor;
+
+  /// 歌词字号缩放百分比（[kLyricScaleMin] ~ [kLyricScaleMax]，100 = 设计稿原值）。
+  int get lyricScale => _lyricScale;
+
+  /// 缩放系数（1.0 = 原值），歌词行直接乘在字号上。
+  double get lyricScaleFactor => _lyricScale / 100;
+
+  /// 歌词字体 id（见 [kLyricFonts]；'default' = 跟随界面字体）。
+  String get lyricFontId => _lyricFontId;
+
+  /// 歌词字体本体：存下来的 id 可能已经不在清单里，[findLyricFont] 会兜回默认。
+  LyricFontOption get lyricFont => findLyricFont(_lyricFontId);
 
   /// system 解析后的实际明暗（theme.tsx:113）。
   String get resolvedMode => switch (_mode) {
@@ -116,6 +133,16 @@ class ThemeState extends ChangeNotifier {
     // wave-style.tsx:37：`Storage.read(key, true) !== false` —— 只有显式 false 才关。
     _colored = (await _prefs.readString(StorageKeys.waveColored)) != '0';
     _lyricColor = (await _prefs.readString(StorageKeys.lyricColor)) ?? '';
+    // 字号：存下来的值可能是旧版写坏的（不是数字 / 越界）—— readNumber 清脏数据，
+    // min/max 夹回合法区间（wave-style.tsx:55-62 同语义）。
+    final storedScale = await _prefs.readNumber(
+      StorageKeys.lyricScale,
+      min: kLyricScaleMin,
+      max: kLyricScaleMax,
+    );
+    _lyricScale = storedScale?.round() ?? kLyricScaleDefault;
+    // 字体清单可能增删过，存下来的 id 未必还在：findLyricFont 会兜回默认那条。
+    _lyricFontId = findLyricFont(await _prefs.readString(StorageKeys.lyricFont)).id;
   }
 
   Future<int> _readNumber(String key, {required int fallback}) async {
@@ -226,6 +253,24 @@ class ThemeState extends ChangeNotifier {
     if (_lyricColor == hex) return;
     _lyricColor = hex;
     unawaited(_prefs.writeString(StorageKeys.lyricColor, hex));
+    notifyListeners();
+  }
+
+  /// 字号滑杆：落在 [kLyricScaleMin] ~ [kLyricScaleMax]，取整（wave-style.tsx:84-88）。
+  void setLyricScale(int value) {
+    final v = value.clamp(kLyricScaleMin, kLyricScaleMax);
+    if (_lyricScale == v) return;
+    _lyricScale = v;
+    unawaited(_prefs.writeNumber(StorageKeys.lyricScale, v));
+    notifyListeners();
+  }
+
+  /// 字体那一排：不认识的 id 一律折回默认（不写脏值进去）。
+  void setLyricFont(String id) {
+    final safe = findLyricFont(id).id;
+    if (_lyricFontId == safe) return;
+    _lyricFontId = safe;
+    unawaited(_prefs.writeString(StorageKeys.lyricFont, safe));
     notifyListeners();
   }
 }

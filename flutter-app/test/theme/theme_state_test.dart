@@ -4,6 +4,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/core/storage_keys.dart';
+import 'package:light_music/theme/lyric_fonts.dart';
 import 'package:light_music/theme/theme_state.dart';
 
 void main() {
@@ -156,6 +157,78 @@ void main() {
       expect((await ThemeState.load(off)).colored, isFalse);
       final on = AppPrefs.inMemory()..debugSeed(StorageKeys.waveColored, '1');
       expect((await ThemeState.load(on)).colored, isTrue);
+    });
+  });
+
+  // 同步 React「T」面板（wave-style.tsx:55-62 / :84-99）
+  group('歌词字号与字体', () {
+    test('缺省：100% + 跟随界面字体', () async {
+      final state = await ThemeState.load(AppPrefs.inMemory());
+      expect(state.lyricScale, kLyricScaleDefault);
+      expect(state.lyricScaleFactor, 1.0);
+      expect(state.lyricFontId, 'default');
+      expect(state.lyricFont.isDefault, isTrue);
+      expect(state.lyricFont.name, '默认');
+    });
+
+    test('setLyricScale 写 prefs、夹在 70~150，并通知', () async {
+      final prefs = AppPrefs.inMemory();
+      final state = await ThemeState.load(prefs);
+      var notified = 0;
+      state.addListener(() => notified++);
+
+      state.setLyricScale(120);
+      expect(state.lyricScale, 120);
+      expect(state.lyricScaleFactor, closeTo(1.2, 0.001));
+      expect(await prefs.readString(StorageKeys.lyricScale), '120');
+      expect(notified, 1);
+
+      // 同值不再通知
+      state.setLyricScale(120);
+      expect(notified, 1);
+
+      state.setLyricScale(10);
+      expect(state.lyricScale, kLyricScaleMin);
+      state.setLyricScale(999);
+      expect(state.lyricScale, kLyricScaleMax);
+    });
+
+    test('setLyricFont 写 prefs；不认识的 id 折回默认、不落脏值', () async {
+      final prefs = AppPrefs.inMemory();
+      final state = await ThemeState.load(prefs);
+
+      state.setLyricFont('smiley');
+      expect(state.lyricFontId, 'smiley');
+      expect(state.lyricFont.family, 'LyricSmiley');
+      expect(await prefs.readString(StorageKeys.lyricFont), 'smiley');
+
+      state.setLyricFont('no-such-font');
+      expect(state.lyricFontId, 'default');
+      expect(await prefs.readString(StorageKeys.lyricFont), 'default');
+    });
+
+    test('重启读回：字号与字体都还在；脏值回默认', () async {
+      final seeded = AppPrefs.inMemory()
+        ..debugSeed(StorageKeys.lyricScale, '130')
+        ..debugSeed(StorageKeys.lyricFont, 'wenkai');
+      final state = await ThemeState.load(seeded);
+      expect(state.lyricScale, 130);
+      expect(state.lyricFontId, 'wenkai');
+      expect(state.lyricFont.family, 'LyricWenKai');
+
+      // 越界 → 夹回区间；非数字 → 回默认，并清掉脏键（readNumber 的脏数据清理）
+      final outOfRange = AppPrefs.inMemory()
+        ..debugSeed(StorageKeys.lyricScale, '999');
+      expect((await ThemeState.load(outOfRange)).lyricScale, kLyricScaleMax);
+
+      final garbage = AppPrefs.inMemory()
+        ..debugSeed(StorageKeys.lyricScale, 'abc');
+      expect((await ThemeState.load(garbage)).lyricScale, kLyricScaleDefault);
+      expect(garbage.containsKey(StorageKeys.lyricScale), isFalse);
+
+      // 清单里已经没有的字体 id → 回默认
+      final gone = AppPrefs.inMemory()..debugSeed(StorageKeys.lyricFont, 'xx');
+      expect((await ThemeState.load(gone)).lyricFontId, 'default');
     });
   });
 }

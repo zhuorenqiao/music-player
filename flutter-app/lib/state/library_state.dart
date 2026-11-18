@@ -13,6 +13,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import '../core/app_prefs.dart';
+import '../core/saf_bridge.dart';
 import '../core/storage_keys.dart';
 import '../library/import_service.dart';
 import '../library/library_repository.dart';
@@ -353,6 +354,17 @@ class LibraryState extends ChangeNotifier {
     }
     _flushAfterEnrichment(result.enrichment);
     return result.added;
+  }
+
+  /// 导入一棵安卓 SAF 目录树：先由原生桥接把音频复制到应用专属目录，再按本地
+  /// 路径走既有 [importPaths] 链路。复制不出任何文件时给一句提示并交回 0。
+  Future<int> importSafTree(String treeUri) async {
+    final copied = await copyAudioTreeToLocal(treeUri);
+    if (copied.isEmpty) {
+      toasts.info('这个目录里没有可播放的音频文件');
+      return 0;
+    }
+    return importPaths(copied);
   }
 
   /// 挂一批用户手动挑的 `.lrc`，返回配上几首（T12）。

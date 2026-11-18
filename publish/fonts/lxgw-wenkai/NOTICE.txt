@@ -1,0 +1,15 @@
+霞鹜文楷 / LXGW WenKai
+======================
+
+字体文件（files/*.woff2）取自 npm 包 lxgw-wenkai-webfont@1.7.0（由 Chawye Hsu 打包；
+该包的打包代码是 MIT，见同目录 LICENSE.txt）。
+
+字体本身由 LXGW 基于 Fontworks 的 Klee One 改造，依 IPA Font License v1.0 分发，
+许可证全文见 https://moji.or.jp/ipafont/license/ 。再分发时请保留本说明与许可证。
+
+本目录只做了两处与分发相关的处理，未改动任何字形：
+
+1. @font-face 的家族名由 'LXGW WenKai' 改为 'Lyric WenKai'。
+   这只是一行 CSS 声明（为避免系统里已装的同名家族抢占渲染），不是修改字体文件本身。
+2. 只保留了 Regular 字重的 @font-face，删掉原包的 Light / Bold 与等宽（Mono）版本，
+   因为本项目只需要一档常规字重；被删掉的只是 CSS 规则，字体文件也只下载了 Regular 的分片。

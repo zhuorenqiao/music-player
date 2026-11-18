@@ -26,7 +26,6 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:audio_decoder/audio_decoder.dart';
-import 'package:fft/fft.dart' as fftlib;
 import 'package:flutter/foundation.dart';
 
 /// FFT 帧长（spec §10.1）。
@@ -48,7 +47,15 @@ const int kFrameMs = 50;
 /// 缓存魔数。
 const String kBinMagic = 'LSPC';
 /// 缓存格式版本。
-const int kBinVersion = 1;
+///
+/// 2：把 [computeSpectrumSync] 的幅度谱改成**归一化**语义（除以
+/// `kFrameSize / 4`，即 Hann 相干增益 0.5 × 单边谱 2/N）。版本 1 的缓存是
+/// 未归一化的原始 |X[k]|，dB 整体高出约 +54dB，所有频段一起被打到饱和
+///（实测旧缓存的 64 段均值全在 0.64~0.69、段间形状差 < 0.08），画出来就是
+/// 一条「不动的一整面格子」——用户看到的「假频谱」正是这批缓存。
+/// 旧文件仍会被当成未命中（[SpectrumFrameTable.fromBin] 按版本拒收），
+/// 下次播放同一首时按同指纹路径重算覆盖。
+const int kBinVersion = 2;
 
 /// 缓存帧表：解析结果，读取端按 positionSeconds 插值取帧。
 class SpectrumFrameTable {
@@ -235,9 +242,11 @@ SpectrumFrameTable computeSpectrumSync(
   final bands = Uint8List(slotCount * kBandCount);
   final wave = Int8List(slotCount * kWavCount);
 
-  final fftBuf = Float64List(kFrameSize);
-  final magBuf = Float64List(binCount);
+  // 就地 FFT 的两块缓冲（长度 kFrameSize，一次分配、逐帧复用）。
+  final fftRe = Float64List(kFrameSize);
+  final fftIm = Float64List(kFrameSize);
   final byteBuf = Uint8List(binCount); // dbToByte 后的「buf」——readBands 语义
+  final smoothBuf = Float64List(binCount); // 跨帧一阶平滑（见 smoothSpectrum）
 
   // readBands 折叠的预计算（与帧无关）：bin 索引 + tilt。
   final binWidth = sampleRate / kFrameSize;
@@ -254,25 +263,54 @@ SpectrumFrameTable computeSpectrumSync(
 
   var energy = 0.0; // 当前候选帧的窗内能量（越大者入库）
 
-  void processFrame(int start) {
-    // 加窗 + 逐帧能量。PCM 归一化到 [-1,1]（AnalyserNode 的字节语义是
-    // float 域 dB 映射——直接喂 int16 会整体抬高 ~90dB 令全段饱和）。
+  /// 加窗 + 窗内能量。**不做 FFT**：候选帧比较只需要能量，先筛出来再算谱。
+  ///
+  /// PCM 归一化到 [-1,1]（AnalyserNode 的字节语义是 float 域 dB 映射——直接
+  /// 喂 int16 会整体抬高 ~90dB 令全段饱和）。
+  void windowFrame(int start) {
     energy = 0;
     for (var n = 0; n < kFrameSize; n++) {
       final idx = start + n;
       final s = idx < pcm.length ? pcm[idx] : 0;
       final w = window[n] * (s / 32768.0);
-      fftBuf[n] = w;
+      fftRe[n] = w;
+      fftIm[n] = 0;
       energy += w * w;
     }
-    // FFT → 幅度谱（只取前半；FFT 输入是 real 信号）。
-    final spec = fftlib.FFT.Transform(fftBuf);
+  }
+
+  /// 对当前窗做 FFT，把幅度谱按 AnalyserNode 的 0..255 语义填进 [byteBuf]。
+  ///
+  /// **必须先归一化**：Hann 相干增益 0.5 × 单边谱系数 2/N → 满幅正弦的峰
+  /// 幅度等于 `kFrameSize / 4`，除以它才是「满幅 ≈ 0dB」的同量纲数值
+  ///（AnalyserNode.getFloatFrequencyData 就是这个量纲）。直接拿未归一化的
+  /// |X[k]| 取 dB，相当于把整条 dB 轴抬高 20log10(N/4) ≈ +54dB：-90..-15
+  /// 的映射窗里所有真实分量（连旁瓣和噪声底）都被顶到 255 饱和，折完的
+  /// 64 段一起贴在 0.6~1.0，频谱的形状与起伏全被压平。
+  void analyzeFrame(int start) {
+    windowFrame(start);
+    fftInPlace(fftRe, fftIm);
+    const double norm = kFrameSize / 4;
     for (var k = 0; k < binCount; k++) {
-      magBuf[k] = spec[k].abs();
+      final re = fftRe[k];
+      final im = fftIm[k];
+      final mag = math.sqrt(re * re + im * im);
+      byteBuf[k] = dbToByte(20 * math.log(mag / norm + 1e-9) / math.ln10);
     }
-    // 幅度谱 → 0..255 字节语义（AnalyserNode 等价映射）。
+  }
+
+  /// 跨帧一阶时间平滑，等价 AnalyserNode 的 `smoothingTimeConstant = 0.78`。
+  ///
+  /// 分析器每 16.7ms 回调一次、系数 0.78，时间常数 τ ≈ 75ms；我们入库帧是
+  /// 50ms 一帧，等 τ 的系数 = exp(-50/75) ≈ 0.47。没有这层平滑时，20fps 的
+  /// 真实频段会一跳一跳（比 React 的 60fps 采样粗得多）。
+  ///
+  /// **只在「获胜帧」上平滑**：候选帧扫描只走 [windowFrame]（不要谱数据），
+  /// 不会推进平滑状态，实际入库的数据不会被污染。
+  void smoothSpectrum() {
+    const double keep = 0.47;
     for (var k = 0; k < binCount; k++) {
-      byteBuf[k] = dbToByte(20 * math.log(magBuf[k] + 1e-9) / math.ln10);
+      smoothBuf[k] = smoothBuf[k] * keep + byteBuf[k] * (1 - keep);
     }
   }
 
@@ -284,7 +322,8 @@ SpectrumFrameTable computeSpectrumSync(
     for (var i = 0; i < kBandCount; i++) {
       final bin = bandBins[i];
       final hi = bin + 1 > maxBin ? maxBin : bin + 1;
-      final value = math.max(byteBuf[bin].toDouble(), byteBuf[hi].toDouble());
+      final value =
+          math.max(smoothBuf[bin], smoothBuf[hi]);
       final tilt = bandTilts[i];
       final out =
           clampd(math.pow(value / 255, 1.35) * tilt * 1.05, 0.02, 1.0);
@@ -320,19 +359,22 @@ SpectrumFrameTable computeSpectrumSync(
     for (final off in candidateStarts) {
       final start = slotStart + off;
       if (start >= pcm.length) break;
-      processFrame(start);
+      windowFrame(start);
       if (bestStart < 0 || energy > bestEnergy) {
         bestEnergy = energy;
         bestStart = start;
       }
     }
     if (bestStart < 0) {
-      // 尾巴槽视口完全溢出——用补零窗口（processFrame 对越界补 0）再算。
-      processFrame(slotStart);
+      // 尾巴槽视口完全溢出——用补零窗口（windowFrame 对越界补 0）当获胜帧。
       bestStart = slotStart;
     }
-    // byteBuf 此时装的是最后一个候选帧（或补零帧）的数据——获胜帧需重算。
-    processFrame(bestStart);
+    // 只给获胜帧算一遍谱：候选帧扫描不做 FFT（原来每槽两次 FFT，
+    // 加上 `package:fft` 每次都要建 2048 个 Complex 对象，4 分钟一首要
+    // 60s+；换成就地基数-2 + 单次谱，实测降到秒级）。
+    analyzeFrame(bestStart);
+    // 时间平滑只在这里推进（候选帧扫描不能改平滑状态）。
+    smoothSpectrum();
     foldBands();
     foldWave(bestStart);
     bands.setRange(slot * kBandCount, (slot + 1) * kBandCount, slotBands);
@@ -396,6 +438,63 @@ Int16List _parseWavPcm(Uint8List bytes, {required int sampleRate}) {
 int clampi(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
 double clampd(double v, double lo, double hi) =>
     v < lo ? lo : (v > hi ? hi : v);
+
+/// 就地基数-2 FFT（原地、零分配）。
+///
+/// 为什么不继续用 `package:fft`：它的 `FFT.Transform` 每帧都要把 2048 个
+/// double 逐个包成 `Complex` 对象、再递归拆成子列表，一首 4 分钟的曲目
+///（每 50ms 一帧 → 4000+ 帧，且原实现每槽算两次）实测要 60s 以上。频谱要
+/// 「跟着音乐动」，就得在用户打开歌词页后的几秒内算完 —— 这条路线走不通。
+/// 就地实现只借用两块 Float64List，一帧 2048 点约 0.1ms。
+///
+/// [re]/[im] 长度必须相等且为 2 的幂；返回时两块缓冲里就是变换结果。
+void fftInPlace(Float64List re, Float64List im) {
+  final n = re.length;
+  // 位反转置换。
+  var j = 0;
+  for (var i = 1; i < n; i++) {
+    var bit = n >> 1;
+    while ((j & bit) != 0) {
+      j ^= bit;
+      bit >>= 1;
+    }
+    j |= bit;
+    if (i < j) {
+      final tr = re[i];
+      re[i] = re[j];
+      re[j] = tr;
+      final ti = im[i];
+      im[i] = im[j];
+      im[j] = ti;
+    }
+  }
+  // 蝶形：len 从 2 涨到 n。
+  for (var len = 2; len <= n; len <<= 1) {
+    final half = len >> 1;
+    final angle = -2 * math.pi / len;
+    final wRe = math.cos(angle);
+    final wIm = math.sin(angle);
+    for (var base = 0; base < n; base += len) {
+      var curRe = 1.0;
+      var curIm = 0.0;
+      for (var k = 0; k < half; k++) {
+        final aRe = re[base + k];
+        final aIm = im[base + k];
+        final bRe = re[base + k + half];
+        final bIm = im[base + k + half];
+        final tRe = bRe * curRe - bIm * curIm;
+        final tIm = bRe * curIm + bIm * curRe;
+        re[base + k] = aRe + tRe;
+        im[base + k] = aIm + tIm;
+        re[base + k + half] = aRe - tRe;
+        im[base + k + half] = aIm - tIm;
+        final nextRe = curRe * wRe - curIm * wIm;
+        curIm = curRe * wIm + curIm * wRe;
+        curRe = nextRe;
+      }
+    }
+  }
+}
 
 /// [SpectrumPipeline] 的可替换边界。
 ///

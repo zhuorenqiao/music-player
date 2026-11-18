@@ -172,5 +172,45 @@ void main() {
       expect(f.bands.length, 128);
       expect(f.bands.last, closeTo(0.2, 0.02), reason: '越界钳到末段');
     });
+
+    test('64 段铺满整宽：中段按段号插值，不再复制末段', () {
+      // 段值 = 段号（0..63），这样每一列的来源段都能从数值反推。
+      final bands = Uint8List(64);
+      for (var i = 0; i < 64; i++) {
+        bands[i] = i;
+      }
+      final t = SpectrumFrameTable(
+        sampleRate: 44100,
+        frameMs: 50,
+        frameCount: 1,
+        bands: bands,
+        wave: Int8List(128),
+      );
+      final src = WaveSource()..attach(t, 't1');
+      final f = src.read(
+        playing: true,
+        positionSeconds: 0,
+        phase: 0,
+        dt: 1 / 60,
+        track: track('t1'),
+        bandCount: 300,
+        waveCount: 128,
+        width: 1200,
+        height: 48,
+      );
+      expect(f.bands.length, 300);
+      expect(f.bands.first, closeTo(0, 0.01));
+      expect(f.bands.last, closeTo(63 / 255, 0.01));
+      // 第 150 列对应段 31.5 左右；旧实现（b>=64 一律取段 63）这里是 63/255。
+      expect(f.bands[150], closeTo(31.5 / 255, 0.01),
+          reason: '1200px 宽约 300 列时，中段应约为段 31.5 而不是末段 63');
+      // 段号单调 → 整条应单调不减（复制末段会让后半段完全持平）。
+      // 步长 = (63/255)/299 ≈ 0.0008，所以阈值取 0.0005。
+      var rising = 0;
+      for (var i = 1; i < f.bands.length; i++) {
+        if (f.bands[i] > f.bands[i - 1] + 0.0005) rising++;
+      }
+      expect(rising, greaterThan(200), reason: '整宽都应随段号走，不是一条平线');
+    });
   });
 }

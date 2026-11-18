@@ -384,15 +384,29 @@ Future<AppBootstrap> buildBootstrap({
   // `NO_ACTIVITY`）、也可能卡在系统权限对话框上不返回，无限等下去 `runApp`
   // 就永远不跑。超时 / 异常一律当成「媒体会话不可用」—— 少一组系统控件，
   // 播放与界面照常；只记一次日志，不弹错误（用户没有可操作的东西）。
+  // 通知封面与界面走同一套四级兜底：内嵌路径优先，其次在线匹配专辑图、
+  // 歌手写真。从前这里只拿 `track.cover`（内嵌封面），在线图 / 写真存在
+  // CoverState 内存表、不写回曲目，于是无内嵌封面的歌在通知栏只剩占位圆。
   final coordinator = MediaSessionCoordinator(
     bridge: bridge,
     transport: transport,
+    artUriFor: (track) => cover.coverForDisplay(
+      cover: track.cover,
+      artist: track.artist,
+      title: track.title,
+      trackId: track.id,
+    ),
   );
   try {
     await coordinator.attach().timeout(mediaSessionAttachTimeout);
   } catch (error) {
     debugPrint('media session unavailable: $error');
   }
+
+  // 在线封面是异步命中的：表到货时 transport view 不会再发事件，通知栏
+  // 不会自己刷新。封面显示层一通知就补推一次（coordinator 内部按指纹去重）。
+  void syncMediaSessionCover() => coordinator.refresh();
+  cover.addListener(syncMediaSessionCover);
 
   // 通知权限只查询、不申请（申请归 `activate()` 管，见文件头）：弹窗在 attach
   // 里发生，所以这里读到的是用户刚做出的选择。查询同样设上限、绝不抛。
@@ -418,6 +432,7 @@ Future<AppBootstrap> buildBootstrap({
     lyricsPage: lyricsPage,
     cover: cover,
     onCoverViewChanged: syncCoverTrack,
+    onCoverStateChanged: syncMediaSessionCover,
     theme: theme,
     spectrum: spectrum,
     onSpectrumViewChanged: syncSpectrumTrack,

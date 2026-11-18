@@ -29,6 +29,9 @@
   --accent-light: #b9ffe9;
   /* 歌词当前行的高亮色：用户可在频谱左侧的「T」里改（空 = 跟随 --accent-light） */
   --lyric-hl: var(--accent-light);
+  /* 歌词字号缩放系数（1 = 设计稿原值）：「T」面板里的字号滑杆写进 <html>。
+     各处歌词字号写成 calc(原 px * var(--lyric-scale))，一处改、两处歌词一起缩放 */
+  --lyric-scale: 1;
   --accent-ink: #04231b;
   --accent-soft: rgba(46, 230, 168, 0.14);
   --accent-line: rgba(46, 230, 168, 0.32);
@@ -1133,9 +1136,9 @@ h2 {
   backdrop-filter: blur(20px) saturate(140%);
 }
 
-/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器，
-   频谱只有歌词页（≤1024）才排进来，平时不占位；
-   沉浸模式这三颗按钮让位给歌词页右上角那一格（见 .lyric-tools） */
+/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器。
+   沉浸模式（完整歌词页）这三颗按钮让位给歌词页右上角那一格（见 .lyric-tools），
+   这一行改放「大屏下方」搬来的频谱条 —— 见下方 .is-lyrics-page 的规则。 */
 .transport__wave {
   display: flex;
   align-items: center;
@@ -1144,7 +1147,40 @@ h2 {
   margin: 0 22px -4px;
 }
 
+/* 简约模式不渲染频谱（JSX 里没挂），这条留着防以后误加。 */
 .transport__wave .lyrics-page__wave {
+  display: none;
+}
+
+/* 沉浸模式：频谱条铺满这一行，与进度条之间只留 2px 的 padding 间距。
+   所有视口宽度都生效（宽屏也把右栏那条收起来，见下方媒体查询）。
+   这里显式把 .transport 的 12px 行间距收成 0，再用 padding-bottom 定 2px ——
+   不靠负 margin 抵 gap，改动 transport 的 gap 也不会把这 2px 带跑。 */
+body.is-lyrics-page .transport {
+  row-gap: 0;
+}
+
+body.is-lyrics-page .transport__wave {
+  /* 让出左右时间标签（36px）+ 间距（8px）= 44px，与 .progress__slider 等长 */
+  margin: 0 44px;
+  /* 2px：频谱底边到进度条顶边的距离 */
+  padding-bottom: 2px;
+}
+
+/* 进度→控制行之间仍是原来的 12px（上面把整条 gap 归零了，这里补回来） */
+body.is-lyrics-page .transport .progress {
+  margin-bottom: 12px;
+}
+
+body.is-lyrics-page .transport__wave .lyrics-page__wave {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+/* 频谱搬到进度条上方后，右栏那条始终收起来，免得出现两条波形 */
+body.is-lyrics-page .lyrics-page__art .lyrics-page__wave {
   display: none;
 }
 
@@ -1866,6 +1902,9 @@ body.is-sheet-open {
   overflow-y: auto;
   overscroll-behavior: contain;
   list-style: none;
+  /* 歌词字体：「T」面板选中的字体通过 --lyric-font 下发到这里，
+     紧凑预览与歌词页两处歌词一起换；没选时仍用界面字体 */
+  font-family: var(--lyric-font, var(--font));
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
   /* 上下边缘淡出，滚动时不会硬切 */
@@ -1959,7 +1998,8 @@ body.is-sheet-open {
 
 .lyrics__line {
   padding: 8px 10px;
-  font-size: 14px;
+  /* 乘上 --lyric-scale：「T」面板里的字号滑杆统一缩放两处歌词 */
+  font-size: calc(14px * var(--lyric-scale, 1));
   line-height: 1.55;
   color: var(--text-faint);
   text-align: center;
@@ -2047,18 +2087,18 @@ body.is-sheet-open {
 .lyrics--compact .lyrics__line {
   padding: 6px 8px;
   /* 与完整歌词页同字号（详情页 17px），只把行内边距收小以多放几行 */
-  font-size: 17px;
+  font-size: calc(17px * var(--lyric-scale, 1));
 }
 
 /* 紧凑区留给歌词的高度有限，译文再小一档、贴紧原文 */
 .lyrics--compact .lyrics__trans {
   margin-top: 1px;
-  font-size: 13px;
+  font-size: calc(13px * var(--lyric-scale, 1));
 }
 
 .lyrics--full .lyrics__line {
   padding: 12px 14px;
-  font-size: 19px;
+  font-size: calc(19px * var(--lyric-scale, 1));
   line-height: 1.5;
 }
 
@@ -2083,6 +2123,19 @@ body.is-sheet-open {
   animation: page-in 0.22s var(--ease);
   /* 纵向手势照常滚歌词，横向手势留给「左右滑切歌」，双指仍可缩放 */
   touch-action: pan-y pinch-zoom;
+  /* 歌词正文周围的留白点了就翻封面（方图 ⇄ 唱片）—— 用光标把这一步提示出来；
+     下面几类元素各有自己的交互，把光标改回去，读起来才不会被误导 */
+  cursor: pointer;
+}
+
+/* 头部整行不参与翻转（歌名 / 工具按钮 / 波形下拉那一带，见 JSX 的排除名单），
+   光标也给回默认箭头 */
+.lyrics-page .lyrics-page__head,
+.lyrics-page .lyrics__line,
+.lyrics-page .lyrics-page__empty,
+.lyrics-page .lyrics-page__empty-title,
+.lyrics-page .lyrics-page__status {
+  cursor: default;
 }
 
 .lyrics-page__head {
@@ -2109,7 +2162,9 @@ body.is-sheet-open {
   color: var(--text-dim);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-pill);
-  background: var(--tint-1);
+  /* 白底（--surface）：与卡片里的 T / 水滴 / 闹钟三颗、顶栏圆钮同一档。
+     原值是 --tint-1（浅灰），展开前会和旁边几颗白钮差一层底色（Flutter 侧已同步）。 */
+  background: var(--surface);
   cursor: pointer;
   transition:
     color 0.18s var(--ease),
@@ -2118,7 +2173,7 @@ body.is-sheet-open {
 
 .wave-style__trigger:hover {
   color: var(--text);
-  background: var(--tint-3);
+  background: var(--surface-2);
 }
 
 .wave-style__trigger:focus-visible {
@@ -2338,7 +2393,7 @@ body.is-sheet-open {
 /* 头部这一组：面板改成向下弹（头部在上面，下面才是内容）。
    横向对齐各自的触发按钮，但用「居中」而不是「贴左边」——
    按钮在页头中间，贴左展开会顶出屏幕右边（窄屏尤其明显）。
-   睡眠定时器的面板 216px 宽，居中也会溢出，改成贴着按钮右缘向左展开。 */
+   睡眠定时器挂在 body 上、按按钮右缘向左展开（见 SleepTimerButton），不走这套。 */
 @keyframes wave-style-in-center {
   from {
     opacity: 0;
@@ -2366,12 +2421,9 @@ body.is-sheet-open {
   animation-name: wave-style-in-center;
 }
 
-.lyric-tools--head .sleep-timer__panel {
-  top: calc(100% + 8px);
-  bottom: auto;
-  right: 0;
-  left: auto;
-}
+/* 睡眠定时器的面板不再靠父级定位：它挂在 body 上、按触发按钮的实时位置落位
+   （控制条那排向上弹、歌词页页头向下弹，见 SleepTimerButton），
+   所以这里没有「头部的面板挪到哪」这条覆写 */
 
 /* 歌名 + 「双语」：标题占剩余宽度并省略，按钮不缩 */
 .lyrics-page__title-row {
@@ -2485,20 +2537,34 @@ body.is-sheet-open {
   outline-offset: 2px;
 }
 
-/* 色板向上弹（按钮在频谱左端，下方就是进度条，没地方放） */
+/* 面板向上弹（按钮在频谱左端，下方就是进度条，没地方放）。
+   两行：上一排色板，下面一条字号滑杆 */
 .lyric-color__panel {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
   z-index: 40;
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  padding: 8px;
+  padding: 8px 10px 9px;
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   background: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
   box-shadow: var(--shadow-pop);
   animation: wave-style-in 0.16s var(--ease) both;
+  /* 在面板里拖动时由滑杆自己处理手势：不滚页面、不选文字、不长按弹菜单。
+     注意不能在滑杆上 preventDefault（原生 range 会直接拖不动） */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* 色板那一排 */
+.lyric-color__swatches {
+  display: flex;
+  gap: 8px;
 }
 
 .lyric-color__swatch {
@@ -2520,6 +2586,179 @@ body.is-sheet-open {
 }
 
 .lyric-color__swatch:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+/* 字号滑杆那一行：小 A — 滑杆 — 大 A — 百分比 */
+.lyric-color__size {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+/* 两端的 A 大小不同，直观示意「往左缩小 / 往右放大」 */
+.lyric-color__size-icon {
+  flex: 0 0 auto;
+  font-family: var(--font);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-dim);
+}
+
+.lyric-color__size-icon:first-of-type {
+  font-size: 10px;
+}
+
+/* 第二个 A（放大端）比第一个大一号 */
+.lyric-color__size > .lyric-color__size-icon:nth-of-type(2) {
+  font-size: 14px;
+}
+
+/* 百分比读数本身就是「恢复默认」按钮：非默认时给一点强调色，提示可以点回去 */
+.lyric-color__size-value {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 2px 5px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  text-align: right;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  transition:
+    color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    background-color 0.16s var(--ease);
+}
+
+/* 非默认值：读数带强调色，暗示「点一下能回到 100%」 */
+.lyric-color__size-value:not([data-default]) {
+  color: var(--accent-light);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.lyric-color__size-value[data-default] {
+  cursor: default;
+}
+
+.lyric-color__size-value:hover:not([data-default]) {
+  filter: brightness(1.12);
+}
+
+.lyric-color__size-value:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 1px;
+}
+
+.lyric-color__size-slider {
+  --size-percent: 50%;
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 108px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.lyric-color__size-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background-image: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--size-percent),
+    var(--tint-3) var(--size-percent) 100%
+  );
+}
+
+.lyric-color__size-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+.lyric-color__size-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tint-3);
+}
+
+.lyric-color__size-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.lyric-color__size-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.lyric-color__size-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.35);
+}
+
+/* 字体那一排：3 列等宽网格（9 款正好三行，格子整齐不参差）。
+   与上面两排之间加一条极淡的分隔线，提示这是另一类设置 */
+.lyric-color__fonts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding-top: 8px;
+  border-top: 1px solid var(--tint-2);
+}
+
+.lyric-color__font {
+  min-width: 0;
+  padding: 3px 4px 4px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  border: 1px solid var(--tint-2);
+  border-radius: 7px;
+  background: var(--surface);
+  cursor: pointer;
+  transition:
+    color 0.16s var(--ease),
+    border-color 0.16s var(--ease),
+    background-color 0.16s var(--ease);
+}
+
+.lyric-color__font:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* 当前字体：强调色描边 + 淡底，和色板那颗选中态是同一套语言 */
+.lyric-color__font[data-active] {
+  color: var(--accent-light);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.lyric-color__font:focus-visible {
   outline: 2px solid var(--accent-light);
   outline-offset: 2px;
 }
@@ -2744,20 +2983,25 @@ body.is-sheet-open {
   outline-offset: 2px;
 }
 
-/* 面板与「T」的色板、毛玻璃那条同底，向上弹 */
+/* 面板与「T」的色板、毛玻璃那条同底。落位由组件按触发按钮的实时位置写进
+   style（面板挂在 body 上，不再受控制条/歌词页的层级影响），这里只管外观。 */
 .sleep-timer__panel {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  z-index: 40;
+  position: fixed;
+  z-index: 60;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: 216px;
-  padding: 10px 12px 11px;
+  gap: 10px;
+  /* 比原来的 216 略宽：滑杆 + 「X 小时 Y 分钟」读数需要横向空间 */
+  width: 244px;
+  padding: 11px 13px 12px;
   border: 1px solid var(--border-strong);
   border-radius: 12px;
-  background: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
+  /* 底色先铺一层不透明的主题面，再叠渐变：
+     面板底下可能正好压着歌词、卡片边框、分隔竖线，不能透出任何一条 */
+  background-color: var(--panel-a);
+  background-image: linear-gradient(180deg, var(--panel-a) 0%, var(--panel-b) 100%);
+  /* 自成层：面板内部的强调色阴影、圆角裁切都只在这个层里算 */
+  isolation: isolate;
   box-shadow: var(--shadow-pop);
   animation: wave-style-in 0.16s var(--ease) both;
   user-select: none;
@@ -2778,41 +3022,109 @@ body.is-sheet-open {
   font-variant-numeric: tabular-nums;
 }
 
-.sleep-timer__presets {
+/* 拖动滑杆选时长：上面一行读当前时长，下面一根滑轨（时长刻度只在读数里体现） */
+.sleep-timer__slide {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
 }
 
-.sleep-timer__preset {
-  padding: 5px 9px;
-  font-size: 11.5px;
-  color: var(--text-dim);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--surface);
-  cursor: pointer;
-  transition:
-    color 0.16s var(--ease),
-    border-color 0.16s var(--ease),
-    background-color 0.16s var(--ease);
+.sleep-timer__slide-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.sleep-timer__preset:hover {
+.sleep-timer__slide-value {
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
-  background: var(--surface-2);
 }
 
-.sleep-timer__preset[data-active] {
-  color: var(--accent-light);
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+.sleep-timer__slide-range {
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
 }
 
-.sleep-timer__preset:focus-visible {
-  outline: 2px solid var(--accent-light);
-  outline-offset: 2px;
+/* 滑轨容器：滑杆独占一行，不再在下面给刻度点留位置 */
+.sleep-timer__range-wrap {
+  position: relative;
 }
+
+.sleep-timer__range {
+  --sleep-percent: 50%;
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: grab;
+}
+
+.sleep-timer__range:active {
+  cursor: grabbing;
+}
+
+/* 已选段用强调色填满：--sleep-percent 由 JSX 按当前值算出来 */
+.sleep-timer__range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background-image: linear-gradient(
+    90deg,
+    var(--accent) 0 var(--sleep-percent),
+    var(--tint-3) var(--sleep-percent) 100%
+  );
+}
+
+.sleep-timer__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  transition: transform 0.12s var(--ease);
+}
+
+.sleep-timer__range:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.sleep-timer__range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tint-3);
+}
+
+.sleep-timer__range::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.sleep-timer__range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.sleep-timer__range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.35);
+}
+
+/* 滑轨上不再叠档位圆点（旧版本那排小圆点压在轨道上，既挡滑杆又看着多余）：
+   时长只由滑杆和下面的自定义输入决定 */
 
 .sleep-timer__custom {
   display: flex;
@@ -3296,6 +3608,11 @@ body.is-sheet-open {
   cursor: zoom-in;
 }
 
+/* 唱片态：按钮本身是圆的（唱盘外形），高度随宽度 1:1 */
+.lyrics-page__art.is-disc .lyrics-page__art-btn {
+  border-radius: 50%;
+}
+
 /* hover 提示用「亮一圈」而不是位移：位移会把 600px 源图按新的设备像素边界重栅格化，
    放大到 260px 显示时会出现一次抖动；阴影/描边不触发重排也不改栅格位置 */
 .lyrics-page__art-btn:hover .lyrics-page__cover {
@@ -3329,6 +3646,103 @@ body.is-sheet-open {
 }
 
 /* --------------------------------------------------------------------------
+   详情页右栏封面的「唱片外观」（点歌词空白处切换，再点切回方图）。
+   直接复用简约模式那套黑胶 + 唱臂：盘面纹路、固定反光、播放时落针，
+   连动画与相位都是同一套（`.stage__vinyl*` / `.stage__tonearm` 的规则）。
+   这里只负责把它塞进右栏尺寸，并补上「方形 → 圆形」的过渡。
+   -------------------------------------------------------------------------- */
+.lyrics-page__disc {
+  /* 中央标签位的直径（占盘面百分比）：与首页 .stage__cover-wrap 一致用 62%。
+     这是「能看清封面」和「还看得出是黑胶」的平衡点 —— 再小封面就只剩一块色斑了。 */
+  --vinyl-label: 62%;
+  position: relative;
+  display: block;
+  /* 盘面是正圆：宽度吃满右栏，高度用 aspect-ratio 定 */
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 50%;
+}
+
+/* 盘面铺满这个正方形 */
+.lyrics-page__disc .stage__vinyl,
+.lyrics-page__disc .stage__vinyl-disc,
+.lyrics-page__disc .stage__tonearm {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+/* 转：与 Stage 同一条 cover-rotate、同一个时长 → 同一相位 */
+.lyrics-page__disc .stage__vinyl-disc.is-spinning {
+  animation-play-state: running;
+}
+
+/* 唱臂：与 Stage 完全同一条过渡曲线（播放落针 -17°，暂停摆到 -45°）。
+   支点必须在盘面的 97% 3% 处，所以显式写成和盘面同尺寸的绝对定位框，
+   不能再被 svg 的固有比例撑开。 */
+.lyrics-page__disc .stage__tonearm {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  z-index: 2;
+  overflow: visible;
+  border-radius: 0;
+  transform-origin: 97% 3%;
+  transform: rotate(-45deg);
+  transition:
+    transform 0.75s cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 0.65s var(--ease);
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.6));
+}
+
+/* 唱臂里的 svg 撑满这个框（viewBox 100×100 自带比例） */
+.lyrics-page__disc .stage__tonearm > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.lyrics-page__disc.is-playing .stage__tonearm {
+  transform: rotate(-17deg);
+  filter:
+    drop-shadow(0 3px 5px rgba(0, 0, 0, 0.6))
+    drop-shadow(0 0 5px rgb(var(--accent-rgb) / 0.18));
+}
+
+/* 中央标签位：封面缩成圆形（黑胶中间那块纸标签），跟着盘面一起转。
+   用 flex 居中而不是 top/left + translate(-50%,-50%)：
+   translate 会和旋转动画的 transform 打架（动画覆盖掉位移，标签就跑到角上）。 */
+.lyrics-page__disc-label {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: var(--vinyl-label);
+  height: var(--vinyl-label);
+  max-width: none;
+  max-height: none;
+  border-radius: 50%;
+  object-fit: cover;
+  /* 与盘面同一条动画 → 同一相位，标签不会相对唱片打滑 */
+  animation: cover-rotate var(--cover-spin-duration) linear infinite;
+  animation-play-state: paused;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.13);
+}
+
+.lyrics-page__disc.is-playing .lyrics-page__disc-label {
+  animation-play-state: running;
+}
+
+/* --------------------------------------------------------------------------
    详情页歌词的排印：按「读」而不是「预览」来调
    - 字号 17px、行高 1.75：中文歌词在 14px/1.55 下偏挤，长句会连成一团
    - 阅读宽度收到 560px：650px 宽的行末目光回扫距离太长
@@ -3345,7 +3759,7 @@ body.is-sheet-open {
 
 .lyrics-page .lyrics--full .lyrics__line {
   padding: 7px 12px;
-  font-size: 17px;
+  font-size: calc(17px * var(--lyric-scale, 1));
   line-height: 1.75;
   letter-spacing: 0.01em;
 }
@@ -3357,7 +3771,7 @@ body.is-sheet-open {
 
 .lyrics-page .lyrics--full .lyrics__trans {
   margin-top: 3px;
-  font-size: 14px;
+  font-size: calc(14px * var(--lyric-scale, 1));
 }
 
 /* 数字等宽：时间 / 时长变化时不会左右抽动 */
@@ -4209,37 +4623,8 @@ body.is-lightbox-open {
    11. 响应式
    -------------------------------------------------------------------------- */
 
-/* 中小屏歌词页：右栏频谱挪到进度条上方，长度与进度滑杆一致 */
-@media (max-width: 1024px) {
-  body.is-lyrics-page .transport__wave {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    /* 让出左右时间标签（36px）+ 间距（8px）= 44px，与 .progress__slider 等长；
-       负外边距抵消 transport 的 12px 行间距，让频谱与进度条贴合 */
-    margin: 0 44px -19px;
-  }
-
-  /* 三颗小按钮搬去页头了，这行只剩频谱 —— 它按整行宽度铺满 */
-  body.is-lyrics-page .transport__wave .lyrics-page__wave {
-    display: block;
-    flex: 1 1 auto;
-    min-width: 0;
-    width: auto;
-  }
-
-  /* 频谱挪到进度条上方后，右栏那条收起来，免得出现两条波形 */
-  body.is-lyrics-page .lyrics-page__art .lyrics-page__wave {
-    display: none;
-  }
-}
-
-/* 宽屏歌词页：频谱在右栏，控制条上那行已经空了（三颗按钮在页头）—— 整行收掉 */
-@media (min-width: 1025px) {
-  body.is-lyrics-page .transport__wave {
-    display: none;
-  }
-}
+/* 频谱在进度条上方、右栏那条隐藏的规则写在上面的 `body.is-lyrics-page` 一族里，
+   对所有视口宽度生效（宽屏也搬），这里不再按 1024px 分档。 */
 
 /* 竖屏窄屏：压缩封面卡，给封面下方的歌词留出空间 */
 @media (max-width: 899px) {
@@ -4319,7 +4704,16 @@ body.is-lightbox-open {
 
   .lyrics--full .lyrics__line {
     padding: 10px 8px;
-    font-size: 17px;
+    font-size: calc(17px * var(--lyric-scale, 1));
+  }
+
+  /* 窄屏头部只剩图标位：样式名让给歌名，下拉面板里的选项名照旧显示 */
+  .wave-style__name {
+    display: none;
+  }
+
+  .wave-style__trigger {
+    padding: 0 8px;
   }
 }
 
@@ -4331,15 +4725,6 @@ body.is-lightbox-open {
 
   .btn__text {
     display: none;
-  }
-
-  /* 窄屏头部只剩图标位：样式名让给歌名，下拉里的名字照旧显示 */
-  .wave-style__name {
-    display: none;
-  }
-
-  .wave-style__trigger {
-    padding: 0 8px;
   }
 
   /* 只留图标时收成 36px 方块，跟下面那排胶囊同高（不要 44px，否则又比别处粗一圈） */
@@ -4408,16 +4793,110 @@ body.is-lightbox-open {
     }
   }
 
+  /* 双栏融合成一张卡：外观（边框 / 圆角 / 玻璃底 / 磨砂膜）搬到外层
+     .app__main 上，里层的列表面板与播放卡只留排版，中间用一条竖线分隔。
+     （≥1280 的歌词页复用同一套外观，只把列宽换成 clamp） */
   .app__main {
+    position: relative;
+    isolation: isolate;
     display: grid;
-    /* 左列是一整块播放卡（曲目区 + 控制区），右列是列表 */
-    grid-template-areas: "player panel";
-    grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+    /* 左列是播放列表，右列是一整块播放卡（曲目区 + 控制区）。
+       列表宽度固定 400px，不随视口缩放；余下宽度全给播放卡。
+       抽成变量：播放卡的玻璃色雾要按「整卡 - 左列」铺开，得复用同一个值 */
+    --panel-width: 400px;
+    grid-template-areas: "panel player";
+    grid-template-columns: var(--panel-width) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     align-items: stretch;
-    gap: 18px;
+    /* 两列之间不留卡间距：融合后靠竖线与内边距分隔 */
+    gap: 0;
     /* 允许被压缩到视口高度内，列表改为内部滚动，避免整页滚动 */
     min-height: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: linear-gradient(165deg, var(--card-a), var(--card-b));
+    background: linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--card-a) calc(var(--glass-level) * 100%), transparent),
+      color-mix(in srgb, var(--card-b) calc(var(--glass-level) * 100%), transparent)
+    );
+    box-shadow:
+      var(--shadow-card),
+      inset 0 1px 0 rgb(255 255 255 / calc(var(--frost-level) * 0.22));
+    -webkit-backdrop-filter:
+      blur(calc(16px + var(--frost-level) * 26px))
+      saturate(calc(100% + var(--frost-level) * 65%));
+    backdrop-filter:
+      blur(calc(16px + var(--frost-level) * 26px))
+      saturate(calc(100% + var(--frost-level) * 65%));
+  }
+
+  /* 磨砂膜：与 .player / .panel 共用同一套配方（见文件上方 .player::before） */
+  .app__main::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: var(--frost-level);
+    background-image:
+      linear-gradient(150deg, var(--frost-sheen-a), var(--frost-sheen-b) 58%, transparent),
+      var(--frost-veil),
+      radial-gradient(120% 90% at 16% 0%, var(--frost-bloom), transparent 62%),
+      radial-gradient(90% 80% at 100% 100%, var(--frost-tint), transparent 64%),
+      var(--frost-noise);
+    background-size: auto, auto, auto, auto, 160px 160px;
+  }
+
+  /* 两张子卡只留排版：边框 / 圆角 / 背景 / 阴影 / 磨砂全部剥掉，
+     否则融合后会在整卡里浮出两道内框 */
+  .player,
+  .panel:not(.panel--sheet) {
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* 子卡自带的磨砂白膜不再需要（已经搬到外层那张整卡上）；但**模糊封面色雾
+     要留一条**——磨砂的观感来自「模糊封面透上来 + 上面罩一层白膜」。
+     播放卡那层 `.glass-frost` 保留，并改成按整卡四边铺满（见下） */
+  .player::before,
+  .panel:not(.panel--sheet)::before,
+  .panel:not(.panel--sheet) > .glass-frost {
+    display: none;
+  }
+
+  /* 播放卡的玻璃底铺满整张融合卡：用负偏移把糊图撑到「列表 + 播放卡」的范围，
+     .player 自身没有 overflow: hidden，这块能正常溢出去铺到左栏底下 */
+  body:not(.is-lyrics-page) .player > .glass-frost {
+    inset: 0;
+    left: calc(-1 * var(--panel-width));
+    width: auto;
+    height: auto;
+    border-radius: var(--radius-xl);
+    /* 圆角内裁：糊图放大 124% 后四个角会露出直角 */
+    overflow: hidden;
+    display: block;
+  }
+
+  /* 中间那条竖线：挂在列表面板自己的右缘上（写死 left 会在列宽变化时落错位置），
+     上下各留一截，不顶满整卡高度。
+     用 --border-strong 而不是 --border：融合后两侧是同一块底色，
+     7% 白的分隔线会几乎看不见 */
+  .panel:not(.panel--sheet)::after {
+    content: "";
+    position: absolute;
+    z-index: 2;
+    top: 18px;
+    bottom: 18px;
+    right: 0;
+    width: 1px;
+    background: var(--border-strong);
+    pointer-events: none;
   }
 
   .player {
@@ -4503,6 +4982,127 @@ body.is-lightbox-open {
 @media (min-width: 1180px) {
   :root {
     --cover-size: 248px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+    大屏适配：把整页上限从 1180 放宽，避免宽屏两侧留下两三百像素空场。
+    分两档：1280 起放宽，1680 起铺满 1920 级显示器。
+    只放大骨架与阅读列，不动图标 / 控件尺寸，小屏观感完全不受影响。
+   -------------------------------------------------------------------------- */
+
+/* 大屏歌词页：左侧保留播放列表，右侧是播放卡（歌词 + 封面）。
+   窄屏 / 中等屏维持原样 —— 歌词页独占整宽，列表靠控制条的按钮唤出弹层。
+   1920 这类宽屏上歌词页原本两侧空出几百像素，把列表放回左侧正好补上。
+
+   两张卡**融合成一张**：外观（边框 / 圆角 / 玻璃底 / 磨砂膜）搬到外层
+   .app__main 上，里层的列表面板与播放卡只留排版，中间用一条竖线分隔。 */
+@media (min-width: 1280px) {
+  .app {
+    max-width: 1360px;
+  }
+
+  /* 只有「桌面双栏」这一档歌词页才把列表放回来；弹层那一版本来就不受影响 */
+  body.is-lyrics-page .panel:not(.panel--sheet) {
+    display: flex;
+    grid-area: panel;
+  }
+
+  /* 外层整卡的玻璃外观、磨砂膜、两张子卡的「去卡面」处理与中间竖线，
+     都已经在桌面档（`min-width: 900px`）里统一定义好了 —— 歌词页这里只把
+     左列宽度换成随视口伸缩的 clamp，并把列表放回左列。
+     （简约模式那张卡是固定 400px，见上面 `--panel-width`） */
+  body.is-lyrics-page .app__main {
+    /* 列表随视口变宽、最多 400px（够放「歌手 · 专辑」不被截断）；
+       剩余宽度全给播放卡 —— 歌词页的主角仍是歌词与封面 */
+    --panel-width: clamp(300px, 26vw, 400px);
+    grid-template-areas: "panel player";
+    grid-template-columns: var(--panel-width) minmax(0, 1fr);
+  }
+
+  /* 播放卡的玻璃底铺满整张融合卡：歌词页这一档左列宽度是变量，负偏移复用同一个值，
+     才能正好铺到「整卡 - 左列」的范围（`.player` 没有 overflow: hidden，能溢出去） */
+  body.is-lyrics-page .player > .glass-frost {
+    inset: 0;
+    left: calc(-1 * var(--panel-width));
+    width: auto;
+    height: auto;
+    border-radius: var(--radius-xl);
+    /* 圆角内裁：糊图放大 124% 后四个角会露出直角 */
+    overflow: hidden;
+    display: block;
+  }
+
+  /* 左栏常驻列表时，控制条那颗「播放列表」入口是多余的 */
+  body.is-lyrics-page .controls__queue {
+    display: none;
+  }
+
+  .lyrics-page__body {
+    /* 左歌词列放宽到 640，右封面栏跟着涨；两栏作为一个整体在剩余宽度里居中 */
+    grid-template-columns: minmax(0, 640px) clamp(280px, 24vw, 400px);
+    gap: 40px;
+  }
+
+  /* 阅读宽度上限同步放开 —— 否则列变宽了，歌词仍被 560 卡住、右侧留空 */
+  .lyrics-page .lyrics--full {
+    max-width: 640px;
+  }
+
+  .stage__lyrics {
+    max-width: 520px;
+  }
+
+  :root {
+    --cover-size: 268px;
+  }
+}
+
+@media (min-width: 1680px) {
+  .app {
+    max-width: 1680px;
+    padding: 28px 32px 32px;
+  }
+
+  /* 双栏已经融合成一张卡，这里不再留列间距（间距由中间那条竖线代替） */
+  .app__main {
+    gap: 0;
+  }
+
+  .lyrics-page__body {
+    /* 1920 满宽：歌词列 800、封面栏最大 480，两栏间距拉到 56 */
+    grid-template-columns: minmax(0, 800px) clamp(360px, 25vw, 480px);
+    gap: 56px;
+  }
+
+  .lyrics-page .lyrics--full {
+    max-width: 800px;
+  }
+
+  .lyrics-page__art {
+    gap: 14px;
+  }
+
+  /* 正文排版在大屏上放开一档，读起来不至于挤成一条细线 */
+  .lyrics-page .lyrics--full .lyrics__line {
+    font-size: calc(19px * var(--lyric-scale, 1));
+    padding: 9px 14px;
+  }
+
+  .lyrics-page .lyrics--full .lyrics__trans {
+    font-size: calc(15px * var(--lyric-scale, 1));
+  }
+
+  .stage__lyrics {
+    max-width: 620px;
+  }
+
+  .lyrics-page__wave {
+    height: 56px;
+  }
+
+  :root {
+    --cover-size: 288px;
   }
 }
 

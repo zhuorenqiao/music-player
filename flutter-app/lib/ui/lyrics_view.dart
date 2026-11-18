@@ -87,6 +87,7 @@ import '../state/lyrics_state.dart';
 import '../state/player_state.dart';
 import '../theme/app_tokens.dart';
 import '../theme/color_utils.dart';
+import '../theme/lyric_fonts.dart';
 import '../theme/theme_state.dart';
 
 /// 两档规格：播放卡内（compact）与歌词页（full）。
@@ -372,15 +373,16 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
     // 于是 Flutter 侧永远是薄荷白 —— 这是肉眼最明显的配色差异。
     final theme = context.watch<ThemeState?>();
     final picked = theme?.lyricColor ?? '';
-    final Color highlight = picked.isEmpty
-        ? tokens.accentLight
-        : (() {
-            final parsed = parseHexColor(picked);
-            if (parsed == null) return tokens.accentLight;
-            return tokens.brightness == Brightness.light
-                ? highlightOnLight(parsed)
-                : parsed;
-          })();
+    // 「T」面板另外两维：字号缩放（70%~150%）与字体。两处歌词（首页紧凑 +
+    // 完整歌词页）都从这一份状态里取，改一处两处一起变（React 版走
+    // --lyric-scale / --lyric-font 两个 CSS 变量，语义相同）。
+    final scale = theme?.lyricScaleFactor ?? 1.0;
+    final font = theme?.lyricFont ?? kDefaultLyricFont;
+    final Color highlight = lyricHighlightColor(
+      picked: picked,
+      accentLight: tokens.accentLight,
+      brightness: tokens.brightness,
+    );
     final Color color;
     final double opacity;
     if (isActive) {
@@ -398,11 +400,15 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
     }
 
     // 当前行只换色 + 加粗；译文行保持 400（:1980-1983）。
-    final textStyle = TextStyle(
-      fontSize: metrics.fontSize,
-      height: metrics.lineHeight,
-      color: color,
-      fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+    // 字号乘上缩放系数（CSS 那边是 calc(原 px * var(--lyric-scale))）。
+    final textStyle = applyLyricFont(
+      TextStyle(
+        fontSize: metrics.fontSize * scale,
+        height: metrics.lineHeight,
+        color: color,
+        fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+      ),
+      font,
     );
 
     final Widget mainText = canSeek
@@ -430,13 +436,16 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
               child: Text(
                 trans,
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: metrics.transFontSize,
-                  height: 1.45,
-                  fontWeight: FontWeight.w400,
-                  // 不透明度 .85（:1977）；M2a 只有深色一套，浅色那档
-                  // (:1986-1988) 等 M3 加主题时再说。
-                  color: tokens.textDim.withValues(alpha: 0.85),
+                style: applyLyricFont(
+                  TextStyle(
+                    fontSize: metrics.transFontSize * scale,
+                    height: 1.45,
+                    fontWeight: FontWeight.w400,
+                    // 不透明度 .85（:1977）；M2a 只有深色一套，浅色那档
+                    // (:1986-1988) 等 M3 加主题时再说。
+                    color: tokens.textDim.withValues(alpha: 0.85),
+                  ),
+                  font,
                 ),
               ),
             ),

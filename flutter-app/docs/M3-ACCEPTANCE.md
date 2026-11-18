@@ -67,10 +67,11 @@ T 高亮色、黑胶旋转与唱臂、光晕呼吸、auto-hide 滚动条、reduc
    「真机上对真实 FLAC 的目视比对」未跑；状态机与装配接线均有单测覆盖。
 4. ~~**WaveStylePicker 下拉**~~ **已补完（2026-11-12）**：新增
    `lib/ui/wave_style_picker.dart`，挂到 `lyrics_page.dart` 右上角。触发按钮
-   显示当前样式名；Overlay 面板含固定「彩色」开关 + 17 项可滚动列表（每项
+   桌面（≥900）显示当前样式名，窄屏（<900）只留图标（读屏名仍带样式名）；
+   Overlay 面板含固定「彩色」开关 + 17 项可滚动列表（每项
    76×28 静态缩略图走 `renderWaveThumb`，与 WaveStrip 同一套渲染器）；
    ↑↓/Home/End 移动高亮、Enter/空格选中、Esc 退回按钮，按键在本层消费
-   以免顺手改音量 / 关掉歌词页。用例 `test/ui/wave_style_picker_test.dart`（5 条）。
+   以免顺手改音量 / 关掉歌词页。用例 `test/ui/wave_style_picker_test.dart`（7 条）。
    **真机视觉比对未做**（缩略图观感、面板定位）。
 5. **lightMint 的 accentInk**：CSS 无覆写行，逐字沿用深色 #04231b（浅底上
    实际不可读——T6 的 swatch 只用作选中描边色，文字色走 accentLight；真机验）。
@@ -84,6 +85,46 @@ T 高亮色、黑胶旋转与唱臂、光晕呼吸、auto-hide 滚动条、reduc
    `0x10` 改为 `0x0F`（0.06×255=15.3 四舍五入），深色三档 `0x24080A0F`
    保持不动。用例见 `test/ui/wave_style_picker_test.dart` 的 D.7 断言。
 
+## F. 与 React 版并排比对后的对齐（2026-11-12）
+
+用户给出左右并排截图（左 Flutter / 右 React），逐项对齐了 5 处可确认的差异：
+
+1. **右上角「更多」按钮**：原 Flutter 是「≡ 菜单」（汉堡线 + 文案「菜单」），
+   React 是「⋮ 更多」（三点竖排 + 文案「更多」，`LibraryMenu.tsx:12-18/:65`）。
+   `header.dart` 改为 CustomPaint 画的三点竖排图标 + 「更多」文案；模式切换
+   按钮也从 Material 实心图标换成 React 的描边 `DiscIcon` / `LyricsIcon`。
+   `test/ui/header_test.dart` 的旧断言（固化了「菜单」这个偏差）同步修正。
+2. **歌词页右栏封面**：原 Flutter 复用 `CoverDisc`（正圆黑胶碟面），React 的
+   `.lyrics-page__cover` 是 **24px 圆角方图 + 1px 描边 + 落影**
+   （app.css:3318-3327）。`lyrics_page.dart` 改为自绘方图，不再挂黑胶外圈。
+3. **桌面控制条的列表入口**：React `body.is-lyrics-page .controls__queue`
+   （app.css:4377-4379）在歌词页占掉右栏时补一颗「播放列表」按钮；Flutter
+   桌面档此前完全没这颗。`transport.dart` 加 `showQueue`，只在歌词页开着
+   时出现（窄屏常驻不变）。
+4. **音量 / 进度滑轨**：Material `Slider` 的粗轨道 + 纯色圆点与 React 的
+   `input[type=range]` 规格对不上。`volume_slider.dart` 改为自绘
+   （4px 双色轨道、13px 白底 + 2px accent 描边圆点、24px 可点高度、绝对定位
+   拖拽用 Listener 处理以兼容单步位移），`progress_slider.dart` 的填充段
+   补上 accent→白渐变与光晕（app.css:1194-1197）。
+5. **彩虹频谱糊成一条色带**：`_drawSpectrum` 把 `MaskFilter.blur(normal, 3)`
+   挂在填充柱子的 paint 上，等于把柱体边缘抹掉；135 根柱子的模糊晕互相
+   叠加成一整条彩虹带。改为「锐利渐变柱 + 柱顶 2px 白色高光线」，
+   柱间 1px 间隙恢复透明。像素级回归用例见 `test/wave/wave_styles_test.dart`
+   的「spectrum 柱体清晰度」组（已验证该用例在旧实现下会失败）。
+
+并排回归用例：`test/ui/parity_regression_test.dart`（3 条）。
+
+**有意保留的差异**（改了会破坏 M2a 既有 300+ 用例，非疏漏）：
+- 歌词页左上角有「返回」按钮，React 没有（原版靠点空白 / Esc 退出）。
+  这是 M2a 为触屏 / 读屏用户加的明确出口，`lyrics_page.dart:19-21` 已记录。
+- 歌词页卡片下边缘在歌词行下方可见（圆角卡片底边），React 的歌词页是
+  `flex:1 1 auto` 撑满 `.app`、transport 在卡片内 —— 属 M2a 定的骨架结构
+  差异（`shell.dart` 把 transport 放在 overlay 之外）。
+
+**真机验证**：Release 重建后首页截图确认「⋮ 更多」、双色音量条、
+渐变进度条三项生效；歌词页的真机截图受本机窗口遮挡 / D3D 渲染影响
+（PrintWindow 抓不到 Flutter 内容），改由 widget 测试钉住结构。
+
 ## E. 对比度实测（T15，Dart 现算非截图）
 
 浅色主题（lightMint）歌词三档对白底：
@@ -96,3 +137,33 @@ T 高亮色、黑胶旋转与唱臂、光晕呼吸、auto-hide 滚动条、reduc
 
 highlightOnLight 产物 7/7 全部 ≥4.5（最低 6.30，金 #ffe066 → #857435）。
 Flutter 侧数值整体优于 React（accentLight 更深），方向安全。
+
+## G. 弹层遮罩对齐（2026-11-18）
+
+**现象**：手机端（浅色粉主题）点「更多」弹出抽屉后，背景整页被「漂白」——
+文字发灰、封面发糊，与 React 版「背景压暗、内容推远」的观感正相反。
+
+**根因**：`drawer_menu.dart` 的 `scrimColor()` 写的是
+`tokens.bg.withValues(alpha: 0.66)`（底色派生），而 React
+`.drawer__scrim { background: var(--scrim) }`（app.css:3207，浅色即
+`rgba(28,42,56,0.3)`，app.css:190）。深色主题的 `--bg` 本来就近黑，派生值
+碰巧接近 `--scrim`，所以只有浅色露馅；浅色主题 `--bg` 是 `#DFE8F2` 一类
+近白色，66% 的白纱等于把整页提亮。
+
+**改法**：`scrimColor()` 直接返回 `tokens.scrim`（六套主题各自逐字对表），
+抽屉 / 换肤抽屉 / 窄屏播放列表弹层三处共同受益。
+
+浅色粉主题实测（同一点位像素亮度）：
+
+| | 改前（底色派生） | 改后（--scrim） |
+| --- | --- | --- |
+| 页头文字最深像素 | 161 | ≈ 35（理论合成值） |
+| 页面底色 | 232 | ≈ 190（理论合成值） |
+
+**回归用例**：`test/ui/parity_regression_test.dart` 新增两条 ——
+六套主题 `scrimColor == token.scrim` 且浅色遮罩亮度 <0.2；浅色主题下打开
+抽屉，路由里 ModalBarrier 的 color 必须等于 `--scrim`。
+
+**仍未对齐的一处**：React 窄屏 `.sheet__scrim` 带 `backdrop-filter: blur(3px)`
+（app.css:1820-1826），Flutter `showModalBottomSheet` 的 barrier 只能上色、
+不能模糊，加模糊要换掉整条弹层路由（会丢 `enableDrag` 收回），暂留作已知差异。

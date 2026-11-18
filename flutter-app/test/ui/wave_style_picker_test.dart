@@ -25,6 +25,20 @@ Widget wrap(Widget child, ThemeState theme) => MultiProvider(
       ),
     );
 
+/// 桌面视口（≥900）：触发按钮显示「图标 + 样式名 + 箭头」。
+void _desktopView(WidgetTester tester) {
+  addTearDown(tester.view.reset);
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(1280, 900);
+}
+
+/// 窄屏视口（<900）：触发按钮只留图标，样式名隐藏。
+void _compactView(WidgetTester tester) {
+  addTearDown(tester.view.reset);
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = const Size(700, 900);
+}
+
 void main() {
   late ThemeState theme;
 
@@ -34,6 +48,7 @@ void main() {
   tearDown(() => theme.dispose());
 
   testWidgets('触发按钮显示当前样式名，点开列出 17 项', (tester) async {
+    _desktopView(tester);
     await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
     await tester.pump();
 
@@ -51,7 +66,23 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('触发按钮是白底（--surface），不再用 --tint-1 的浅灰', (tester) async {
+    _desktopView(tester);
+    await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
+    await tester.pump();
+
+    // 键直接挂在胶囊外壳那个 Container 上，读它自己即可。
+    final decoration = tester
+        .widget<Container>(find.byKey(const Key('wave-style-trigger')))
+        .decoration! as BoxDecoration;
+    expect(decoration.color, AppTokens.dark.surface,
+        reason: '白底与卡片里 T/水滴/闹钟同一档');
+    final border = decoration.border! as Border;
+    expect(border.top.color, AppTokens.dark.borderStrong);
+  });
+
   testWidgets('选中某项会写 ThemeState.waveStyleId 并收起面板', (tester) async {
+    _desktopView(tester);
     await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
     await tester.pump();
     await tester.tap(find.byKey(const Key('wave-style-trigger')));
@@ -73,7 +104,37 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('打开面板时把当前选中项滚到看得见的位置', (tester) async {
+    // 最后一项（层叠山峰）在 17 项列表的最底部：360px 高、行高 40px 的列表
+    // 只装得下 8 行，不主动滚下去的话它根本不会被构建 —— 用户看到的是顶部
+    // 那几项，和当前样式毫无关系（真机反馈）。
+    theme.setWaveStyle(kWaveStyles.last.id);
+    _desktopView(tester);
+    await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
+    await tester.pump();
+
+    expect(
+      find.text(kWaveStyles.last.name),
+      findsOneWidget,
+      reason: '未展开时只有触发按钮上那一个名字',
+    );
+
+    await tester.tap(find.byKey(const Key('wave-style-trigger')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.text(kWaveStyles.last.name),
+      findsNWidgets(2),
+      reason: '展开后当前选中项必须在可视区内（列表里也有一份）',
+    );
+    final controller = tester.widget<ListView>(find.byType(ListView)).controller!;
+    expect(controller.offset, greaterThan(0), reason: '列表应已滚离顶部');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('彩色开关写 ThemeState.colored', (tester) async {
+    _desktopView(tester);
     await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
     await tester.pump();
     await tester.tap(find.byKey(const Key('wave-style-trigger')));
@@ -88,6 +149,7 @@ void main() {
   });
 
   testWidgets('点面板以外收起', (tester) async {
+    _desktopView(tester);
     await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
     await tester.pump();
     await tester.tap(find.byKey(const Key('wave-style-trigger')));
@@ -99,6 +161,23 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('wave-color-switch')), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏触发按钮只留图标，读屏名仍带样式名', (tester) async {
+    _compactView(tester);
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(wrap(const WaveStylePicker(), theme));
+    await tester.pump();
+
+    // 可见文本里不再出现当前样式名（面板未展开，列表也没有它）。
+    expect(find.text(kWaveStyles.first.name), findsNothing);
+    // 读屏标签照旧带样式名，不影响无障碍。
+    final data = tester
+        .getSemantics(find.byKey(const Key('wave-style-trigger')))
+        .getSemanticsData();
+    expect(data.label, contains(kWaveStyles.first.name));
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
   });
 
   test('D.7：浅色 frostVeilB 四舍五入为 0x0F', () {

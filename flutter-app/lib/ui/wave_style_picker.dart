@@ -36,6 +36,13 @@ const double kWaveStylePanelWidth = 219;
 /// 面板最大高度（`max-height: min(360px, 58vh)`，app.css:2162）。
 const double kWaveStylePanelMaxHeight = 360;
 
+/// 选项行高：缩略图 28 + 上下 padding 5+5 + 行间距 2（React 侧
+/// `.wave-style__option` 的 padding 与 gap 之和）。
+const double _kRowExtent = _kThumbH + 10 + 2;
+
+/// 列表顶部内边距（`_StyleList` 的 padding.top，居中算法要算进去）。
+const double _kListTopPad = 4;
+
 /// 缩略图尺寸（`wave-thumb.ts:16-17`，与 `kThumbWidth/Height` 同源）。
 const double _kThumbW = kThumbWidth;
 const double _kThumbH = kThumbHeight;
@@ -147,6 +154,9 @@ class _WaveStylePickerState extends State<WaveStylePicker> {
     final theme = context.watch<ThemeState?>();
     if (theme == null) return const SizedBox.shrink();
     final current = findWaveStyle(theme.waveStyleId);
+    // 与 React 侧 `@media (max-width: 899px)` 对齐：窄屏头部只剩图标位，
+    // 样式名让给歌名；桌面（≥900）仍显示「图标 + 样式名 + 箭头」。
+    final desktop = isDesktop(MediaQuery.sizeOf(context).width);
     return Semantics(
       button: true,
       label: '波形样式：${current.name}',
@@ -157,9 +167,13 @@ class _WaveStylePickerState extends State<WaveStylePicker> {
         child: Container(
           key: const Key('wave-style-trigger'),
           height: 36,
-          padding: const EdgeInsets.only(left: 8, right: 10),
+          padding: desktop
+              ? const EdgeInsets.only(left: 8, right: 10)
+              : const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
-            color: tokens.tint1,
+            // 白底（--surface）：与卡片里的 T/水滴/闹钟三颗、顶栏圆钮同一档。
+            // CSS 原值是 `--tint-1`（浅灰），展开前会和旁边几颗白钮差一层底色。
+            color: tokens.surface,
             borderRadius: BorderRadius.circular(999),
             border: Border.all(color: tokens.borderStrong),
           ),
@@ -167,16 +181,18 @@ class _WaveStylePickerState extends State<WaveStylePicker> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.graphic_eq, size: 16, color: tokens.textDim),
-              const SizedBox(width: 4),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 8 * 12.5),
-                child: Text(
-                  current.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12.5, color: tokens.textDim),
+              if (desktop) ...[
+                const SizedBox(width: 4),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 8 * 12.5),
+                  child: Text(
+                    current.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12.5, color: tokens.textDim),
+                  ),
                 ),
-              ),
+              ],
               const SizedBox(width: 4),
               Icon(
                 _open ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
@@ -371,10 +387,44 @@ class _StyleListState extends State<_StyleList> {
   @override
   void initState() {
     super.initState();
-    // 面板打开后把焦点挪到列表（React 的 rAF → listRef.focus() 对译）。
+    // 面板打开后把焦点挪到列表（React 的 rAF → listRef.focus() 对译），
+    // 顺手把当前选中项滚到列表中间（React `centerOption`，tsx:60-70）：
+    // 360px 高的列表只装得下 8 行，选中项常常在下面看不见 —— 不对齐的话
+    // 打开面板看到的是顶部那几项，跟当前样式毫无关系。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _focus.requestFocus();
+      if (!mounted) return;
+      _focus.requestFocus();
+      _centerOn(widget.currentIndex);
     });
+  }
+
+  /// 把第 [index] 项滚到列表可视区正中（React `centerOption` 的等价：
+  /// 改 scrollTop 的差值，不连带滚外层，也不动画）。
+  void _centerOn(int index) {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final itemCenter = _kListTopPad + index * _kRowExtent + _kRowExtent / 2;
+    final target = itemCenter - pos.viewportDimension / 2;
+    _scroll.jumpTo(
+      target.clamp(pos.minScrollExtent, pos.maxScrollExtent),
+    );
+  }
+
+  /// 键盘 / 悬停移动高亮时只做「最小滚动」（React `scrollIntoView({block:'nearest'})`）。
+  void _ensureVisible(int index) {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final top = _kListTopPad + index * _kRowExtent;
+    final bottom = top + _kRowExtent;
+    final visibleTop = pos.pixels;
+    final visibleBottom = pos.pixels + pos.viewportDimension;
+    if (top < visibleTop) {
+      _scroll.jumpTo(math.max(pos.minScrollExtent, top));
+    } else if (bottom > visibleBottom) {
+      _scroll.jumpTo(
+        math.min(pos.maxScrollExtent, bottom - pos.viewportDimension),
+      );
+    }
   }
 
   @override
@@ -387,12 +437,7 @@ class _StyleListState extends State<_StyleList> {
   void _moveActive(int next) {
     final clamped = next.clamp(0, kWaveStyles.length - 1);
     widget.onActiveChanged(clamped);
-    // 滚动到可见区（React itemRefs[clamped].scrollIntoView 的等价）。
-    final itemH = _kThumbH + 10; // 行内 padding 5+5
-    final offset = clamped * (itemH + 2) - 2;
-    if (_scroll.hasClients) {
-      _scroll.jumpTo(offset.clamp(0.0, _scroll.position.maxScrollExtent));
-    }
+    _ensureVisible(clamped);
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -441,9 +486,9 @@ class _StyleListState extends State<_StyleList> {
       onKeyEvent: _onKey,
       child: ListView.builder(
         controller: _scroll,
-        padding: const EdgeInsets.fromLTRB(5, 4, 5, 6),
+        padding: const EdgeInsets.fromLTRB(5, _kListTopPad, 5, 6),
         itemCount: kWaveStyles.length,
-        itemExtent: _kThumbH + 10 + 2, // padding(5+5) + gap 2
+        itemExtent: _kRowExtent,
         itemBuilder: (context, i) {
           final style = kWaveStyles[i];
           final selected = i == widget.currentIndex;

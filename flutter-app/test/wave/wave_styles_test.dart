@@ -364,6 +364,58 @@ void main() {
     });
   });
 
+  group('spectrum 柱体清晰度（Windows 真机「糊成一条彩虹带」回归）', () {
+    test('相邻柱子间保留透明间隙，柱体不被 MaskFilter 抹开', () async {
+      // 16 根柱子、宽 240 → step=15、barWidth=14，间隙 1px。
+      // 若填充 paint 挂了 MaskFilter.blur(sigma=3)，这 1px 间隙会被
+      // 相邻柱子的模糊晕染成实色，边界消失（真机截图里就是一整条色带）。
+      const width = 240.0;
+      const height = 48.0;
+      const count = 16;
+      final bands = Float32List(count);
+      for (var i = 0; i < count; i++) {
+        bands[i] = i.isEven ? 0.9 : 0.15; // 高低交替，形状最明显
+      }
+      final frame = WaveFrame(
+        bands: bands,
+        wave: Float32List(64),
+        level: 0.5,
+        phase: 0,
+        dt: 1 / 60,
+        width: width,
+        height: height,
+        live: false,
+        seed: 't',
+      );
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      spectrumStyle.draw(canvas, frame, _palette(ramp: WaveRamp.neon), Float32List(count));
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(width.toInt(), height.toInt());
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
+      expect(data, isNotNull);
+      final bytes = data!.buffer.asUint8List();
+
+      // 取第 0 根与第 1 根柱子之间的间隙列（x = 14，step=15）。
+      // 在 y=20（矮柱区：第 1 根只有 0.15 高，柱顶约在 baseline-5≈35，
+      // 所以 y=20 处第 1 根不该有颜色）检查 alpha：锐利绘制时这里应为 0，
+      // 模糊绘制时会被第 0 根高柱的晕染成非零。
+      const gapX = 14;
+      int opaqueInGap = 0;
+      for (var y = 0; y < 30; y++) {
+        final a = bytes[(y * width.toInt() + gapX) * 4 + 3];
+        if (a > 40) opaqueInGap++;
+      }
+      // 允许柱顶高光线等少量像素，但整列不该被填满。
+      expect(
+        opaqueInGap,
+        lessThan(6),
+        reason: '柱间 1px 间隙被模糊晕染填满 = 又糊成一条色带',
+      );
+      image.dispose();
+    });
+  });
+
   group('usesPeaks 样式写峰', () {
     test('spectrum：peaks 只增不减', () {
       final peaks = Float32List(16);

@@ -19,10 +19,7 @@ import { STORAGE_KEYS } from './constants';
 import { usePlayer } from './player';
 import { useToast } from './toast';
 
-/** 预设档位（分钟）。10 分钟是默认档。 */
-export const SLEEP_TIMER_PRESETS = [10, 15, 20, 30, 60] as const;
-
-/** 缺省时长（分钟）：面板打开时这一档默认选中，自定义输入也预填它。 */
+/** 缺省时长（分钟）：面板打开时滑杆停在这一档，自定义输入也预填它。 */
 export const SLEEP_TIMER_DEFAULT_MINUTES = 10;
 
 /** 自定义输入的范围（分钟）。 */

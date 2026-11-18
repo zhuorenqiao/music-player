@@ -1,7 +1,8 @@
 // test/ui/header_test.dart
 //
-// 顶栏与一级抽屉（T25）：品牌区、右侧唯一的「更多」按钮（视觉文案「菜单」，
-// 读屏名固定「更多」）、抽屉里的三条一级入口、清空前的二次确认、抽屉宽度。
+// 顶栏与一级抽屉（T25）：品牌区、右侧唯一的「更多」按钮（视觉文案与读屏名
+// 都是「更多」，对译 React `LibraryMenu.tsx` 的 `btn__text`）、抽屉里的三条
+// 一级入口、清空前的二次确认、抽屉宽度。
 //
 // 三个回调全部由测试注入 —— 测试绝不碰 file_picker（真实选择器在
 // `core/file_picking.dart` 里，由 `HomePage` 接线）。
@@ -74,9 +75,10 @@ void main() {
     expect(find.text('流光音乐'), findsOneWidget);
     expect(find.text('LIGHT MUSIC PLAYER'), findsOneWidget);
     expect(find.bySemanticsLabel('更多'), findsOneWidget);
-    // 按钮的视觉文字是「菜单」，读屏名却是「更多」：语义里只能有一套名字，
-    // 否则 `菜单` 会作为第二个按钮名冒出来。
-    expect(find.text('菜单'), findsOneWidget);
+    // 视觉文字与读屏名都是「更多」（React `LibraryMenu.tsx:65` 的
+    // `<span className="btn__text">更多</span>`）：语义里只能有一套名字，
+    // 否则「更多」会作为第二个按钮名冒出来。
+    expect(find.text('更多'), findsOneWidget);
     expect(find.bySemanticsLabel('菜单'), findsNothing);
   });
 
@@ -85,8 +87,23 @@ void main() {
 
     expect(find.text('流光音乐'), findsOneWidget);
     expect(find.text('LIGHT MUSIC PLAYER'), findsNothing);
-    expect(find.text('菜单'), findsNothing);
+    expect(find.text('更多'), findsNothing);
     expect(tester.getSize(find.bySemanticsLabel('更多')), const Size(36, 36));
+  });
+
+  headerTest('「更多」是白底（--surface），不是透明底', (tester) async {
+    await pumpHeader(tester, 1200);
+
+    final finder = find.descendant(
+      of: find.byKey(const Key('menu-button')),
+      matching: find.byType(Container),
+    );
+    expect(finder, findsOneWidget, reason: '胶囊外壳就一个 Container');
+    final decoration = tester.widget<Container>(finder).decoration! as BoxDecoration;
+    expect(decoration.color, AppTokens.dark.surface,
+        reason: '白底与旁边排序圆钮、卡片里 T/水滴/闹钟同一档');
+    final border = decoration.border! as Border;
+    expect(border.top.color, AppTokens.dark.border, reason: '1px --border 不清掉');
   });
 
   headerTest('菜单里只有一级入口，且不出现说明文字', (tester) async {

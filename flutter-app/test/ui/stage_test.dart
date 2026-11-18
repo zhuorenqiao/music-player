@@ -195,8 +195,8 @@ void main() {
     }
   });
 
-  testWidgets('封面尺寸跟随三档断点', (tester) async {
-    for (final width in [360.0, 1000.0, 1300.0]) {
+  testWidgets('封面尺寸跟随四档断点', (tester) async {
+    for (final width in [360.0, 1000.0, 1200.0, 1400.0, 1800.0]) {
       await pumpAt(
         tester,
         width,
@@ -216,6 +216,69 @@ void main() {
       expect(disc.width, closeTo(expected, 1.0), reason: 'width=$width');
       expect(disc.height, closeTo(expected, 1.0), reason: 'width=$width');
     }
+  });
+
+  test('歌词块宽度上限三档（宽 <900 没有上限）', () {
+    expect(stageLyricsMaxWidth(360), isNull);
+    expect(stageLyricsMaxWidth(899), isNull);
+    // ≥900：`.stage__lyrics { max-width: 460px }`
+    expect(stageLyricsMaxWidth(900), 460);
+    expect(stageLyricsMaxWidth(1279), 460);
+    // ≥1280：520（app.css:5050-5052）
+    expect(stageLyricsMaxWidth(1280), 520);
+    expect(stageLyricsMaxWidth(1679), 520);
+    // ≥1680：620（app.css:5084-5086）
+    expect(stageLyricsMaxWidth(1680), 620);
+    expect(stageLyricsMaxWidth(1920), 620);
+  });
+
+  testWidgets('桌面歌词块不跟着卡片摊宽：停在 620 且水平居中', (tester) async {
+    await pumpAt(
+      tester,
+      1920,
+      900,
+      const StagePreview(
+        title: 'A',
+        artist: '',
+        album: '',
+        elapsed: '',
+        total: '',
+        coverPath: '',
+        lyrics: SizedBox(
+          key: Key('lyrics-block'),
+          width: double.infinity,
+          height: 60,
+        ),
+      ),
+    );
+    final block = tester.getRect(find.byKey(const Key('lyrics-block')));
+    expect(block.width, closeTo(620, 1));
+    // 卡片左右留白对称：块的中线与视口中线重合
+    expect(block.center.dx, closeTo(960, 1.5));
+
+    // 1280～1679 这一档收成 520
+    await pumpAt(
+      tester,
+      1400,
+      900,
+      const StagePreview(
+        title: 'A',
+        artist: '',
+        album: '',
+        elapsed: '',
+        total: '',
+        coverPath: '',
+        lyrics: SizedBox(
+          key: Key('lyrics-block'),
+          width: double.infinity,
+          height: 60,
+        ),
+      ),
+    );
+    expect(
+      tester.getRect(find.byKey(const Key('lyrics-block'))).width,
+      closeTo(520, 1),
+    );
   });
 
   testWidgets('时间行跟着 position 走，卡片其余部分不参与', (tester) async {

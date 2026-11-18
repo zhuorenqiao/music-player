@@ -254,4 +254,84 @@ void main() {
     );
     expect(clear.onPressed, isNotNull);
   });
+
+  // ---- 打开播放列表时把当前行滚到中间（原版 src/App.tsx:671-689） ----
+
+  List<String> manyTitles(int count) => [
+    for (var i = 0; i < count; i++) '歌$i',
+  ];
+
+  testWidgets('打开播放列表时当前行落在列表垂直中间', (tester) async {
+    final harness = PanelHarness(titles: manyTitles(30));
+    addTearDown(harness.dispose);
+    harness.playlist.setCurrentById('15');
+    await pump(tester, harness);
+    // 定位发生在挂载后的首帧回调里：再走一帧让 jumpTo 生效
+    await tester.pump();
+
+    final list = tester.getRect(find.byKey(const Key('playlist-list')));
+    final row = tester.getRect(find.byKey(const ValueKey('15')));
+    expect(
+      (row.center.dy - list.center.dy).abs(),
+      lessThan(2),
+      reason: '当前行应停在列表视口的正中，而不是从第 1 首开始列',
+    );
+    // 顶部那几首确实被滚出去了（否则「居中」只是一句空话）
+    expect(find.byKey(const ValueKey('0')), findsNothing);
+  });
+
+  testWidgets('当前曲目变化时列表不跟着拽走（只在打开 / 切 tab 时定位）', (tester) async {
+    final harness = PanelHarness(titles: manyTitles(30));
+    addTearDown(harness.dispose);
+    harness.playlist.setCurrentById('15');
+    await pump(tester, harness);
+    await tester.pump();
+    final before = tester.getRect(find.byKey(const ValueKey('15')));
+
+    // 播放中自动切到别的首：用户正在翻看的列表不该被拽走
+    harness.playlist.setCurrentById('0');
+    await tester.pump();
+    harness.playlist.setCurrentById('28');
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('15')), findsOneWidget);
+    expect(tester.getRect(find.byKey(const ValueKey('15'))).top, before.top);
+  });
+
+  testWidgets('切回「播放列表」标签时重新定位当前行', (tester) async {
+    final harness = PanelHarness(titles: manyTitles(30));
+    addTearDown(harness.dispose);
+    harness.playlist.setCurrentById('15');
+    await pump(tester, harness);
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('panel-tab-recent')));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const Key('playlist-list')), findsNothing);
+    await tester.tap(find.byKey(const Key('panel-tab-playlist')));
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byKey(const Key('playlist-list')), findsOneWidget);
+    // 定位在挂载后的首帧回调里生效，jumpTo 的布局落下一帧（同首屏用例）
+    await tester.pump();
+
+    final list = tester.getRect(find.byKey(const Key('playlist-list')));
+    final row = tester.getRect(find.byKey(const ValueKey('15')));
+    expect((row.center.dy - list.center.dy).abs(), lessThan(2));
+  });
+
+  testWidgets('当前那首被搜索滤掉时不乱滚', (tester) async {
+    final harness = PanelHarness(titles: manyTitles(30));
+    addTearDown(harness.dispose);
+    harness.playlist.setCurrentById('15');
+    await pump(tester, harness);
+    await tester.pump();
+
+    await tester.enterText(searchField(), '歌3');
+    await tester.pump(const Duration(milliseconds: 300));
+    // 只剩「歌3 / 歌30…歌39」，当前那首（歌15）被滤掉：目标行没了也不能
+    // 抛异常、不能把列表滚到奇怪的位置
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('playlist-list')), findsOneWidget);
+    expect(tester.getRect(find.byKey(const ValueKey('3'))).top, lessThan(700));
+  });
 }
