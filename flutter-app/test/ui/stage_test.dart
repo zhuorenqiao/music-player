@@ -12,8 +12,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/core/breakpoints.dart';
+import 'package:light_music/cover/generated_cover.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
+import 'package:light_music/state/lightbox_controller.dart';
 import 'package:light_music/state/lyrics_page_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/theme/app_theme.dart';
@@ -132,6 +134,39 @@ void main() {
       ),
     );
     expect(find.byKey(const Key('cover-placeholder')), findsOneWidget);
+  });
+
+  testWidgets('曲目在但标签没歌手：碟面也画生成卡，且与灯箱同一张', (tester) async {
+    // 现场问题：碟面停在音符占位，点封面放大却有生成卡。根因是碟面把空歌手
+    // 换成展示文案「未知歌手」当种子后判为「无生成卡信息」；灯箱 CoverImage
+    // 拿 `track.artist` 原文（空串）现算 —— 两边入参不一致。
+    // 现在碟面的种子走 coverArtist 原文，与灯箱是同一次 generatedCoverSpec。
+    const title = '理查德 克莱德曼 钢琴轻音乐曲选 专辑 flac';
+    await pumpAt(
+      tester,
+      800,
+      700,
+      const StagePreview(
+        title: title,
+        // 展示文案：空歌手由 Stage 替换成「未知歌手」。
+        artist: kUnknownStageArtist,
+        // 曲目原文：确实没有歌手。
+        coverArtist: '',
+        album: '',
+        elapsed: '--:--',
+        total: '--:--',
+      ),
+    );
+
+    expect(find.byKey(const Key('cover-placeholder')), findsNothing);
+    final disc = tester.widget<GeneratedCoverView>(
+      find.byType(GeneratedCoverView),
+    );
+    // 灯箱的入参就是 `(artist: '', title: track.title)`。
+    expect(disc.spec, generatedCoverSpec('', title));
+    expect(disc.spec.key, 'unknown');
+    expect(disc.spec.label, '未知歌手');
+    expect(disc.spec.initials, '♪');
   });
 
   testWidgets('损坏态显示状态而不是清空标题', (tester) async {
@@ -459,6 +494,41 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('stage-hit-area')));
     expect(opened, 1);
+  });
+
+  testWidgets('点封面四周的留白也进歌词页（不限于歌名那一片）', (tester) async {
+    var opened = 0;
+    // 注册灯箱控制器：否则封面的 onTap 是 null，内层识别器不进场，
+    // 点封面会落到整块曲目区的热区上（那就测不出「封面仍是灯箱」了）。
+    final lightbox = LightboxController();
+    addTearDown(lightbox.dispose);
+    await pumpAt(
+      tester,
+      430,
+      900,
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<LightboxController>.value(value: lightbox),
+        ],
+        child: StagePreview(
+          title: 'A',
+          artist: 'B',
+          album: '',
+          total: '3:00',
+          onOpenLyrics: () => opened++,
+        ),
+      ),
+    );
+    // 整块曲目区都是热区：从前的 hot zone 只有 info（歌名 + 歌词），
+    // 封面旁边那一圈留白点了没反应。
+    final zone = tester.getRect(find.byKey(const Key('stage-tap-to-lyrics')));
+    await tester.tapAt(Offset(zone.left + 4, zone.top + 4));
+    expect(opened, 1);
+
+    // 封面本身仍是灯箱：点它不进歌词页（里层识别器先入先赢）
+    await tester.tap(find.byKey(const Key('cover-disc')));
+    expect(lightbox.isOpen, isTrue, reason: '点封面应开灯箱');
+    expect(opened, 1, reason: '点封面不该进歌词页');
   });
 
   testWidgets('没给 onOpenLyrics 时点热区不抛（保持 M1 的空实现语义）', (tester) async {

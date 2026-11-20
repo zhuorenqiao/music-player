@@ -8,6 +8,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:provider/provider.dart';
 
 import 'core/app_prefs.dart';
@@ -20,7 +21,9 @@ import 'library/library_repository.dart';
 import 'library/recent_store.dart';
 import 'playback/media_session_bridge.dart' show MediaSessionCoordinator;
 import 'playback/playlist.dart';
+import 'playback/screen_awake_keeper.dart';
 import 'playback/transport_controller.dart';
+import 'radio/radio_state.dart';
 import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
 import 'state/cover_state.dart';
@@ -40,6 +43,7 @@ import 'theme/app_tokens.dart';
 import 'theme/theme_state.dart';
 import 'ui/autoplay_gate.dart';
 import 'ui/home_page.dart';
+import 'ui/splash_gate.dart';
 import 'ui/toasts.dart';
 
 /// 组合根的构造结果。界面层从这里取对象，不自己 new 业务单例。
@@ -68,6 +72,7 @@ class AppBootstrap {
     VoidCallback? onSpectrumViewChanged,
     VoidCallback? onSpectrumVisibilityChanged,
     SleepTimerState? sleepTimer,
+    this.screenAwake,
   }) : // 全屏歌词页的开合开关（T18 建、T19 接页面本体）。
        // 可空入参 + 在这里兜底建：`buildBootstrap` 传它（Stage 与 T19 的页面 /
        // 快捷键要共用同一份），测试里直接 new `AppBootstrap` 的路径也不必改。
@@ -94,10 +99,10 @@ class AppBootstrap {
        theme = theme ?? ThemeState.unloaded(),
        // D.3：实时频谱调度层。测试直接 new AppBootstrap 时给一个「源永远
        // 返回 null」的离线实例，不发请求就不碰平台通道，也不解码。
-       spectrum = spectrum ?? SpectrumState(source: const _NullSpectrumSource()),
+       spectrum =
+           spectrum ?? SpectrumState(source: const _NullSpectrumSource()),
        onSpectrumViewChanged = onSpectrumViewChanged ?? (() {}),
-       onSpectrumVisibilityChanged =
-           onSpectrumVisibilityChanged ?? (() {}),
+       onSpectrumVisibilityChanged = onSpectrumVisibilityChanged ?? (() {}),
        // 睡眠定时器：可空入参 + 兜底建（同 lyricsPage 的模式）。测试直接 new
        // AppBootstrap 时不必管它；生产由 buildBootstrap 传真的那份，并在
        // runApp 之前 restore —— 把上次留下的截止时刻接回来。
@@ -194,6 +199,10 @@ class AppBootstrap {
   /// 睡眠定时器：到点暂停播放。控制条上的闹钟按钮与这一份读同一处状态。
   final SleepTimerState sleepTimer;
 
+  /// 播放期间保持屏幕常亮的绑定（`buildBootstrap` 建；测试直接 new
+  /// `AppBootstrap` 时为 null）。[dispose] 负责摘监听并把窗口 flag 复位。
+  final ScreenAwakeKeeper? screenAwake;
+
   /// 下面几个是状态层内部持有的原对象：界面层要用时不必知道它们被包在哪一层。
   Playlist get playlist => library.playlist;
   TransportController get transport => player.transport;
@@ -219,6 +228,8 @@ class AppBootstrap {
       _spectrumDisposed = true;
       spectrum.dispose();
     }
+    // 屏幕常亮：摘掉监听；还在播就主动复位窗口 flag（见 keeper.dispose）。
+    screenAwake?.dispose();
     await durationProbe?.close();
   }
 
@@ -240,8 +251,7 @@ class _NullSpectrumSource implements SpectrumSource {
     String trackKey,
     String audioPath, {
     bool prioritize = false,
-  }) async =>
-      null;
+  }) async => null;
 }
 
 /// 应用根：注册状态层给 provider，再挂主题、提示条与首页。
@@ -251,21 +261,51 @@ class _NullSpectrumSource implements SpectrumSource {
 /// 只在「直接 new AppBootstrap 的测试路径没传 cover」时用到 —— 不发请求
 /// 就一个 socket 都不开。
 final HttpJsonClient _defaultCoverJson = HttpJsonClientImpl();
+
 /// `.value` 不接管 dispose —— 这些状态在应用生命周期内常驻。
 /// 之所以是 `StatefulWidget`：组合根自己持有的原生资源（时长探测的独立
 /// `Player`，终审 A2）需要一个明确的释放点，而应用根的卸载就是它。
 class LightMusicApp extends StatefulWidget {
-  const LightMusicApp({required this.bootstrap, super.key});
+  const LightMusicApp({
+    required this.bootstrap,
+    this.showSplash = false,
+    super.key,
+  });
 
   final AppBootstrap bootstrap;
+
+  /// 是否在首页前播放 2 秒开屏。默认关闭：既有 widget / integration 测试
+  /// 直接进 [HomePage]，不会被计时器拖慢；生产入口 `main()` 显式置 true。
+  final bool showSplash;
 
   @override
   State<LightMusicApp> createState() => _LightMusicAppState();
 }
 
-class _LightMusicAppState extends State<LightMusicApp> {
+class _LightMusicAppState extends State<LightMusicApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
+    // 回到前台：电台的长连接可能已经被系统掐掉、mpv 被冻住，而 Flutter 侧
+    // 等不到任何「断流」事件。这里主动看一眼 —— 没在响就立刻重接一次
+    // （`recover()` 自己幂等：正在响 / 用户自己暂停 / 正在重连都不会动手）。
+    try {
+      context.read<RadioState>().recover();
+    } catch (_) {
+      // 启动瞬间的 resumed 事件：provider 还没建，没有电台可救，直接跳过。
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // 不 await：`State.dispose` 是同步契约，而 [AppBootstrap.dispose] 只是把
     // 关闭排在探测队列的尾部（它自己绝不抛）。真等到原生 Player 释放完再返回
     // 反而会把卸载卡在平台通道上。
@@ -280,11 +320,36 @@ class _LightMusicAppState extends State<LightMusicApp> {
       providers: [
         ChangeNotifierProvider<LibraryState>.value(value: bootstrap.library),
         ChangeNotifierProvider<PlayerState>.value(value: bootstrap.player),
+        // T31：电台链路。**由 provider 建、也由 provider 关**（它的内核是
+        // media_kit 的第二台 Player，懒建到第一次 open，测试里没播过就不会
+        // 碰原生库）。`onTuned` 是两条音频链路的互斥钩子：电台开播 / 续播前先把音乐
+        // 暂停 —— 不做这一步就是两路声音叠在一起。
+        ChangeNotifierProvider<RadioState>(
+          create: (context) {
+            final player = context.read<PlayerState>();
+            final radio = RadioState(
+              // 电台开播 / 续播 → 音乐让位（钩子被 await，暂停落定后电台才出声）
+              onTuned: (_) => player.pause(),
+              // 音乐开声 → 电台让位（当前台保留，迷你条显示「已暂停」）。
+              // 反方向那条线不能只靠「用户会去点电台」：列表里双击一首歌同样
+              // 会让两路声音叠在一起。
+              musicPlaying: player,
+              isMusicPlaying: () => player.playing,
+            );
+            // 电台在响时，系统侧（通知栏 / 蓝牙耳机 / 锁屏）按「播放」落到的
+            // 是音乐那份已暂停的快照 —— 不拦的话用户听到的就是「电台播着播着
+            // 突然开始放歌」。见 `MediaSessionCoordinator.suppressTransportCommands`。
+            bootstrap.mediaSession.suppressTransportCommands = () => radio.playing;
+            return radio;
+          },
+        ),
         ChangeNotifierProvider<RecentState>.value(value: bootstrap.recent),
         ChangeNotifierProvider<ToastState>.value(value: bootstrap.toasts),
         // T15：歌词与双语状态。`.value` 由组合根持有，应用生命周期内常驻。
         ChangeNotifierProvider<LyricsState>.value(value: bootstrap.lyrics),
-        ChangeNotifierProvider<BilingualState>.value(value: bootstrap.bilingual),
+        ChangeNotifierProvider<BilingualState>.value(
+          value: bootstrap.bilingual,
+        ),
         // 封面显示层（M2b T8）：Stage / Panel / 灯箱的 resolver 共读这一份。
         ChangeNotifierProvider<CoverState>.value(value: bootstrap.cover),
         // 全屏歌词页的开合开关（T18）：播放卡的点击与 T19 的页面本体 / overlay
@@ -299,82 +364,99 @@ class _LightMusicAppState extends State<LightMusicApp> {
         ),
         // 面板的选中 tab 是纯界面态：不属于组合根，界面装配时建即可。
         // 放在路由之上，T29 的弹层复用同一份。
-        ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
+        ChangeNotifierProvider<PanelController>(
+          create: (_) => PanelController(),
+        ),
         // 外观状态机（M3 T5）：换肤 / 玻璃 / 波形 / 歌词色七维共读这一份。
         ChangeNotifierProvider<ThemeState>.value(value: bootstrap.theme),
         // D.3：实时频谱帧表调度。歌词页的 WaveStrip 从这里取表；
         // ChangeNotifier 只在「表到货 / 被清掉」时通知，不随进度 tick 重建。
         ChangeNotifierProvider<SpectrumState>.value(value: bootstrap.spectrum),
         // 睡眠定时器：控制条上的闹钟按钮读这一份；到点由它暂停播放。
-        ChangeNotifierProvider<SleepTimerState>.value(value: bootstrap.sleepTimer),
+        ChangeNotifierProvider<SleepTimerState>.value(
+          value: bootstrap.sleepTimer,
+        ),
         Provider<AppPrefs>.value(value: bootstrap.prefs),
       ],
       child: Consumer<ThemeState>(
         builder: (context, themeState, _) => MaterialApp(
-        title: '流光音乐',
-        debugShowCheckedModeBanner: false,
-        // M3 T5：主题随 ThemeState 切换（main() 先 await 读完 prefs 再
-        // runApp —— 等价 React useLayoutEffect 的「首帧前挂属性」，
-        // 浅色用户不会先闪一帧深色）。system 模式按平台亮度解析。
-        // Consumer 包住：watch 发生在 MultiProvider 之下，浅色首帧就位。
-        theme: buildTheme(
-          tokens: AppTokens.resolve(
-            themeState.resolvedMode,
-            themeState.color.name,
+          title: '流光音乐',
+          debugShowCheckedModeBanner: false,
+          // M3 T5：主题随 ThemeState 切换（main() 先 await 读完 prefs 再
+          // runApp —— 等价 React useLayoutEffect 的「首帧前挂属性」，
+          // 浅色用户不会先闪一帧深色）。system 模式按平台亮度解析。
+          // Consumer 包住：watch 发生在 MultiProvider 之下，浅色首帧就位。
+          theme: buildTheme(
+            tokens: AppTokens.resolve(
+              themeState.resolvedMode,
+              themeState.color.name,
+            ),
           ),
-        ),
-        // 提示条压在路由之上：任何页面 / 弹层看到的都是同一条，且不随页面重建
-        // 丢失计时。`home` 只放骨架页，提示条不该由它自己挂。
-        // 网关（终审 I5，覆盖面按 R7 补齐）再压一层：原版的 pointerdown /
-        // keydown 监听挂在 document 的**捕获阶段**，所以弹层、抽屉、提示条里的
-        // 一次交互、以及**被快捷键层或输入框消费掉的一次按键**都算数。
-        // 指针走这里的 `Listener`（路由与提示条都在它下面），按键走
-        // `HardwareKeyboard` 的全局回调 —— 位置等价，顺序细节见
-        // `lib/ui/autoplay_gate.dart` 文件头。
-        builder: (context, child) => AutoplayGestureGate(
-          child: Stack(
-            children: [?child, const ToastsHost()],
+          // 提示条压在路由之上：任何页面 / 弹层看到的都是同一条，且不随页面重建
+          // 丢失计时。`home` 只放骨架页，提示条不该由它自己挂。
+          // 网关（终审 I5，覆盖面按 R7 补齐）再压一层：原版的 pointerdown /
+          // keydown 监听挂在 document 的**捕获阶段**，所以弹层、抽屉、提示条里的
+          // 一次交互、以及**被快捷键层或输入框消费掉的一次按键**都算数。
+          // 指针走这里的 `Listener`（路由与提示条都在它下面），按键走
+          // `HardwareKeyboard` 的全局回调 —— 位置等价，顺序细节见
+          // `lib/ui/autoplay_gate.dart` 文件头。
+          builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+            // 沉浸式系统栏：透明底 + 随明暗取反的图标（见
+            // [systemOverlayStyleFor]）。用 AnnotatedRegion 而不是
+            // `SystemChrome.setSystemUIOverlayStyle`：换肤 / 切明暗时它随重建自动
+            // 重算，不用再手动往平台通道上补一次。
+            value: systemOverlayStyleFor(
+              themeState.resolvedMode == 'light'
+                  ? Brightness.light
+                  : Brightness.dark,
+            ),
+            child: AutoplayGestureGate(
+              child: Stack(children: [?child, const ToastsHost()]),
+            ),
           ),
-        ),
-        // 桌面快捷键（T30）：包在 HomePage 外面、路由里面 —— 弹层与对话框自带
-        // 焦点域，按键不会从它们背后漏到播放器上（与原版「弹层开着时只认 Esc」
-        // 同一效果）。提示条宿主在 Stack 的另一支上，语义 liveRegion 不受影响。
-        home: withAppShortcuts(
-          playerCallback: (name, [arg]) {
-            final player = bootstrap.player;
-            switch (name) {
-              case 'togglePlay':
-                unawaited(player.togglePlay());
-              case 'seekBy':
-                unawaited(player.seekBy(arg! as double));
-              case 'volumeBy':
-                // 与原版同一句：Math.min/max 夹在 0~1，步长由快捷键层给
-                unawaited(
-                  player.setVolume((player.volume + (arg! as double)).clamp(0.0, 1.0)),
-                );
-              case 'toggleMute':
-                unawaited(player.toggleMute());
-              // 终审 I5：N / P 是原版键盘表里漏移植的两张牌（上下曲）
-              case 'playNext':
-                unawaited(player.next());
-              case 'playPrev':
-                unawaited(player.previous());
-              // T19：L 开 / 关全屏歌词页；Esc 只在开着时才关（原版
-              // `src/App.tsx:1595` 的 Escape 分支同样是「有层才关」）。
-              case 'toggleLyricsPage':
-                bootstrap.lyricsPage.toggle();
-              case 'closeOverlay':
-                // 放大层叠在歌词页之上：Esc 只认顶层（App.tsx:1581-1591，
-                // 灯箱开着时其它快捷键全部让位、歌词页保持其下渲染）。
-                if (bootstrap.lightbox.isOpen) {
-                  bootstrap.lightbox.close();
-                } else if (bootstrap.lyricsPage.isOpen) {
-                  bootstrap.lyricsPage.close();
-                }
-            }
-          },
-          child: const HomePage(),
-        ),
+          // 桌面快捷键（T30）：包在 HomePage 外面、路由里面 —— 弹层与对话框自带
+          // 焦点域，按键不会从它们背后漏到播放器上（与原版「弹层开着时只认 Esc」
+          // 同一效果）。提示条宿主在 Stack 的另一支上，语义 liveRegion 不受影响。
+          home: withAppShortcuts(
+            playerCallback: (name, [arg]) {
+              final player = bootstrap.player;
+              switch (name) {
+                case 'togglePlay':
+                  unawaited(player.togglePlay());
+                case 'seekBy':
+                  unawaited(player.seekBy(arg! as double));
+                case 'volumeBy':
+                  // 与原版同一句：Math.min/max 夹在 0~1，步长由快捷键层给
+                  unawaited(
+                    player.setVolume(
+                      (player.volume + (arg! as double)).clamp(0.0, 1.0),
+                    ),
+                  );
+                case 'toggleMute':
+                  unawaited(player.toggleMute());
+                // 终审 I5：N / P 是原版键盘表里漏移植的两张牌（上下曲）
+                case 'playNext':
+                  unawaited(player.next());
+                case 'playPrev':
+                  unawaited(player.previous());
+                // T19：L 开 / 关全屏歌词页；Esc 只在开着时才关（原版
+                // `src/App.tsx:1595` 的 Escape 分支同样是「有层才关」）。
+                case 'toggleLyricsPage':
+                  bootstrap.lyricsPage.toggle();
+                case 'closeOverlay':
+                  // 放大层叠在歌词页之上：Esc 只认顶层（App.tsx:1581-1591，
+                  // 灯箱开着时其它快捷键全部让位、歌词页保持其下渲染）。
+                  if (bootstrap.lightbox.isOpen) {
+                    bootstrap.lightbox.close();
+                  } else if (bootstrap.lyricsPage.isOpen) {
+                    bootstrap.lyricsPage.close();
+                  }
+              }
+            },
+            child: widget.showSplash
+                ? const SplashGate(child: HomePage())
+                : const HomePage(),
+          ),
         ),
       ),
     );

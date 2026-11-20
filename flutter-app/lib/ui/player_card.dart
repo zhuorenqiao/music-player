@@ -58,6 +58,8 @@ class PlayerCard extends StatelessWidget {
     required this.coverPath,
     required this.frostLevel,
     this.glassLevel = 1,
+    this.radius = kRadiusXl,
+    this.contentInsets = EdgeInsets.zero,
     required this.children,
     super.key,
   });
@@ -67,10 +69,35 @@ class PlayerCard extends StatelessWidget {
 
   /// 卡面不透明度（ThemeState.glassLevel）：`.player` 的 `color-mix` 那一档。
   final double glassLevel;
+
+  /// 卡面圆角；`0` = 铺满档（窄屏）。
+  ///
+  /// 铺满时边框与卡外投影一并去掉 —— React 小屏那一档是
+  /// `@media (max-width: 899px) { .player { border: none; border-radius: 0 } }`，
+  /// 直角一直铺到视口边缘，形状由外层窗口 / 屏幕的圆角决定。
+  final double radius;
+
+  /// 卡内内容的安全区内缩（窄屏铺满档用；桌面档恒为 [EdgeInsets.zero]）。
+  ///
+  /// 卡面（玻璃底 / 渐变）**自己**铺满整屏，只有卡里的内容按系统栏内缩。
+  /// 这个差别是必须的：把 `SafeArea` 加在卡外，卡就铺不到屏幕顶边，状态栏
+  /// 底下会留一条没被背景盖住的系统栏底色 —— 也就是那条黑边。
+  final EdgeInsets contentInsets;
+
   final List<Widget> children;
+
+  /// 卡内的竖直堆叠（[children]）。卡面 chrome 由外层画，安全区内缩由调用处
+  /// 包的那层 [Padding] 给，这里只管排版。
+  Widget _content() => Column(
+    mainAxisSize: MainAxisSize.max,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: children,
+  );
 
   @override
   Widget build(BuildContext context) {
+    // 铺满档：直角、无描边、无卡外投影，只留玻璃底与内容。
+    final fullBleed = radius <= 0;
     // 融合卡里：外层那张整卡已经有边框 / 圆角 / 玻璃底 / 磨砂，本卡只留内容。
     // PlayerCardScope 照旧放出去 —— Stage / TransportBar 仍要据此剥掉自己那层
     // 卡片外观，否则融合卡里会再冒出两道内框。
@@ -78,11 +105,7 @@ class PlayerCard extends StatelessWidget {
       return PlayerCardScope(
         coverPath: coverPath,
         frostLevel: frostLevel,
-        child: Column(
-          mainAxisSize: MainAxisSize.max,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children,
-        ),
+        child: Padding(padding: contentInsets, child: _content()),
       );
     }
     // 容错：测试 harness / 旧调用点可能没装 AppTokensData（`context.tokens`
@@ -90,18 +113,17 @@ class PlayerCard extends StatelessWidget {
     // 保证骨架几何仍可被断言，不因缺主题而炸。
     final data = Theme.of(context).extension<AppTokensData>();
     final tokens = data?.tokens;
+    final cardRadius = BorderRadius.circular(radius);
     final card = DecoratedBox(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(kRadiusXl),
-        border: tokens == null ? null : Border.all(color: tokens.border),
+        borderRadius: cardRadius,
+        border: (tokens == null || fullBleed)
+            ? null
+            : Border.all(color: tokens.border),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(kRadiusXl),
-        child: Column(
-          mainAxisSize: MainAxisSize.max,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children,
-        ),
+        borderRadius: cardRadius,
+        child: Padding(padding: contentInsets, child: _content()),
       ),
     );
     return PlayerCardScope(
@@ -113,12 +135,13 @@ class PlayerCard extends StatelessWidget {
               coverPath: coverPath,
               frostLevel: frostLevel,
               glassLevel: glassLevel,
+              radius: radius,
               colorA: tokens.cardA,
               colorB: tokens.cardB,
               // `.player { background: linear-gradient(165deg, …) }`（app.css:444）
               gradientDegrees: 165,
-              // 卡外投影归玻璃层（画在卡面之下）
-              shadow: tokens.shadowCard,
+              // 卡外投影归玻璃层（画在卡面之下）；铺满档贴到视口边缘，投影无处可落
+              shadow: fullBleed ? null : tokens.shadowCard,
               child: card,
             ),
     );

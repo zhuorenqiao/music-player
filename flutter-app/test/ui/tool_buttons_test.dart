@@ -218,7 +218,7 @@ void main() {
       }
     });
 
-    testWidgets('三颗按钮是同一套壳：26×26、圆角 8、同色描边、图标居中', (tester) async {
+    testWidgets('三颗按钮只留图标：26×26 命中区、无描边 / 无底色 / 无圆角', (tester) async {
       final harness = _Harness();
       addTearDown(harness.dispose);
       final semantics = tester.ensureSemantics();
@@ -242,7 +242,7 @@ void main() {
           final rect = tester.getRect(find.byWidget(icon));
           expect(rect.center.dx, closeTo(trigger.center.dx, 0.6), reason: '$name 水平居中');
           expect(rect.center.dy, closeTo(trigger.center.dy, 0.6), reason: '$name 垂直居中');
-          expect(icon.size, 14, reason: '$name 图标 14×14（CSS `.glass-control__icon`）');
+          expect(icon.size, 17, reason: '$name 图标 17×17（CSS `.glass-control__icon`）');
         }
 
         final glassIcon = tester.widget<Icon>(find.descendant(
@@ -256,30 +256,24 @@ void main() {
         ));
         expectIconCentered(sleep, sleepIcon, '闹钟');
 
-        // 三颗都用同一个外壳组件，未展开时的描边 / 底色 / 圆角必须一模一样。
+        // 三颗都用同一个命中区组件，且**都没有按钮壳**：无描边、无底色、无圆角。
         final chromes = find.byType(ToolTriggerChrome);
         expect(chromes, findsNWidgets(3));
         final boxes = tester.widgetList<Container>(
           find.descendant(of: chromes, matching: find.byType(Container)),
         ).toList();
         expect(boxes, hasLength(3));
-        final tokens = AppTokens.dark;
         for (final box in boxes) {
-          final decoration = box.decoration! as BoxDecoration;
-          expect(decoration.color, tokens.surface, reason: '未展开时底色 --surface');
-          expect(decoration.borderRadius, BorderRadius.circular(8));
-          final border = decoration.border! as Border;
-          expect(border.top.color, tokens.borderStrong, reason: '1px --border-strong');
-          expect(border.top.width, closeTo(1, 0.001));
+          expect(box.decoration, isNull, reason: '只留图标：没有描边 / 底色 / 圆角');
           expect(box.constraints!.maxWidth, 26);
           expect(box.constraints!.maxHeight, 26);
         }
 
-        // 「T」这个字母是 13px/700、颜色 = 当前歌词高亮色（默认跟随 accent-light）。
+        // 「T」这个字母是 15px/700、颜色 = 当前歌词高亮色（默认跟随 accent-light）。
         final letter = tester.widget<Text>(find.text('T'));
-        expect(letter.style!.fontSize, 13);
+        expect(letter.style!.fontSize, 15);
         expect(letter.style!.fontWeight, FontWeight.w700);
-        expect(letter.style!.color, tokens.accentLight);
+        expect(letter.style!.color, AppTokens.dark.accentLight);
         expect(tester.takeException(), isNull);
       } finally {
         semantics.dispose();

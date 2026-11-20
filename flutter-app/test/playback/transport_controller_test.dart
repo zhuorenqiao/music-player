@@ -125,7 +125,7 @@ void main() {
       await c.playTrack('1');
       await settle();
 
-      expect(driver.calls, ['open:/1.flac', 'volume:0.70', 'play']);
+      expect(driver.calls, ['open:/1.flac', 'volume:1.00', 'play']);
       expect(c.current!.id, '1');
       expect(c.view.value.current!.id, '1');
       expect(c.playing, isTrue);
@@ -311,6 +311,44 @@ void main() {
       expect(c.view.value.current!.id, '2');
       // 第二首正常可播：canplay 是唯一的清零时机
       expect(c.consecutiveFailures, 0);
+    });
+
+    test('canplay 摘掉非致命错误误打的角标（歌能播就不是坏档）', () async {
+      final clock = FakeClock();
+      final driver = FakeAudioDriver();
+      final c = buildWithClock(
+        playlist: Playlist.fromTracks([t('1'), t('2')]),
+        driver: driver,
+        clock: clock,
+      );
+      final published = <TransportView>[];
+      c.view.addListener(() => published.add(c.view.value));
+
+      await c.playTrack('1');
+      await settle();
+      final track = c.playlist.byId('1')!;
+      expect(track.broken, isFalse);
+
+      // 外挂 .lrc 一类的非致命错误先被当成失败：角标打上、排了自动跳
+      driver.emitError(
+        const DriverError(PlayErrorKind.unknown, 'Can not open external file'),
+      );
+      await settle();
+      expect(track.broken, isTrue);
+      expect(clock.pendingCount, 1);
+
+      // 界面确实拿到过带角标的那一帧
+      c.syncView();
+      expect(c.view.value.current!.broken, isTrue);
+
+      // 同一首照样 canplay：角标必须摘掉，待跳也要撤销
+      driver.emitCanplay();
+      await settle();
+      expect(track.broken, isFalse);
+      expect(c.view.value.current!.broken, isFalse);
+      expect(clock.pendingCount, 0);
+      expect(c.consecutiveFailures, 0);
+      expect(published.last.current!.broken, isFalse);
     });
 
     test('连续出错只留一个待跳定时器（后一次取消前一次）', () async {

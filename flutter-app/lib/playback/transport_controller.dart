@@ -501,6 +501,11 @@ class TransportController {
         // 熔断永远不会触发（原版靠这条保证「坏列表只走一圈」）。
         _consecutiveFailures = 0;
         _cancelPendingSkip();
+        // 同一次「真能播」也要摘掉本轮失败打上的角标：mpv 的非致命日志
+        // （外挂 .lrc 读取失败之类）会先把曲目标「损坏」，紧接着同一首照样
+        // canplay、歌一直在响 —— 角标留在标题旁就是假故障（用户真机复现）。
+        // 真坏文件走不到这里：open 失败不会发 canplay。
+        playlist.current?.broken = false;
         if (_circuitOpen) {
           _circuitOpen = false;
           toasts.info('播放已恢复');

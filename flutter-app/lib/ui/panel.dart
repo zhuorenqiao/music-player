@@ -86,7 +86,7 @@ class Panel extends StatelessWidget {
 
   /// 「舒适高度」下限。低于它就切到 [Panel] 的兜底布局（整块可滚）。
   ///
-  /// 固定行本身就要 120 上下：表头 30 + 10 + 搜索 36 + 8 + 统计 ~20，
+  /// 固定行本身就要 130 上下：表头 38 + 10 + 搜索 36 + 8 + 统计 ~20，
   /// 还要放得下一行列表。比这更矮的窗口里硬摆 Column 只会把内容裁掉
   /// （800×600 的窗口就是这么挤出来的），所以改由外层滚动兜住。
   static const double minComfortableHeight = 240;
@@ -134,6 +134,8 @@ class Panel extends StatelessWidget {
       _Header(
         tab: tab,
         onTab: (next) => controller.tab = next,
+        playlistCount: library.tracks.length,
+        recentCount: recent.entries.length,
         onClose: onClose,
       ),
       const SizedBox(height: 10),
@@ -207,14 +209,25 @@ class Panel extends StatelessWidget {
   }
 }
 
-/// 表头：两个 tab（选中项铺 `accentSoft` 底、字 `accentLight`）+ 可选的收起按钮。
+/// 表头：两颗 tab 共用一颗药丸容器（`.panel__tabs`）+ 可选的收起按钮。
 ///
-/// 高度固定 30：过滤 / 切 tab 都不许改变这一行的高度（列表才是收缩的那一块）。
+/// 高度 38（30 的 tab + 上下 3 内边距 + 1 描边）：过滤 / 切 tab 都不许改变
+/// 这一行的高度（列表才是收缩的那一块）。
 class _Header extends StatelessWidget {
-  const _Header({required this.tab, required this.onTab, this.onClose});
+  const _Header({
+    required this.tab,
+    required this.onTab,
+    required this.playlistCount,
+    required this.recentCount,
+    this.onClose,
+  });
 
   final PanelTab tab;
   final ValueChanged<PanelTab> onTab;
+
+  /// 两颗 tab 上的计数（`.panel__tab-count`）：播放列表首数 / 最近记录条数。
+  final int playlistCount;
+  final int recentCount;
   final VoidCallback? onClose;
 
   @override
@@ -223,16 +236,35 @@ class _Header extends StatelessWidget {
     return Row(
       key: const Key('panel-header'),
       children: [
-        for (final item in PanelTab.values) ...[
-          _TabButton(
-            key: Key('panel-tab-${item.name}'),
-            label: item == PanelTab.playlist ? '播放列表' : '最近',
-            selected: item == tab,
-            onTap: () => onTab(item),
-            tokens: tokens,
+        // `.panel__tabs`（app.css:1483-1491）：inline-flex + 3 padding + 1 描边，
+        // 底色 `--tint-1`，里面的两颗 tab 只隔 2px。
+        Container(
+          key: const Key('panel-tabs'),
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: tokens.border),
+            color: tokens.tint1,
           ),
-          const SizedBox(width: 6),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final item in PanelTab.values) ...[
+                if (item != PanelTab.values.first) const SizedBox(width: 2),
+                _TabButton(
+                  key: Key('panel-tab-${item.name}'),
+                  label: item == PanelTab.playlist ? '播放列表' : '最近',
+                  count: item == PanelTab.playlist
+                      ? playlistCount
+                      : recentCount,
+                  selected: item == tab,
+                  onTap: () => onTab(item),
+                  tokens: tokens,
+                ),
+              ],
+            ],
+          ),
+        ),
         const Spacer(),
         if (onClose != null) _CloseButton(onClose: onClose!, tokens: tokens),
       ],
@@ -240,9 +272,12 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _TabButton extends StatelessWidget {
+/// 一颗 tab：选中项铺强调色渐变、字 `--accent-ink`；未选中只有悬停才浮一层
+/// `--tint-2` 并把字抬到 `--text`（`.panel__tab` 一族，app.css:1493-1533）。
+class _TabButton extends StatefulWidget {
   const _TabButton({
     required this.label,
+    required this.count,
     required this.selected,
     required this.onTap,
     required this.tokens,
@@ -250,36 +285,126 @@ class _TabButton extends StatelessWidget {
   });
 
   final String label;
+  final int count;
   final bool selected;
   final VoidCallback onTap;
   final AppTokens tokens;
 
   @override
+  State<_TabButton> createState() => _TabButtonState();
+}
+
+class _TabButtonState extends State<_TabButton> {
+  bool _hovering = false;
+
+  /// `.panel__tab[aria-selected="true"]`（app.css:1518-1522）：
+  /// `linear-gradient(160deg, accent 40% 混白, accent 60%, accent 76% 混黑)`。
+  ///
+  /// 浅色模式覆写成 `--surface-2` 底 + 浅投影（app.css:3840-3845，与明暗
+  /// 三段选择 `.theme-seg__item[aria-pressed]` 是同一条规则）。
+  BoxDecoration _selectedDecoration(AppTokens tokens, bool light) {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(999),
+      gradient: light
+          ? null
+          : LinearGradient(
+              begin: cssGradientAxis(160).begin,
+              end: cssGradientAxis(160).end,
+              colors: [
+                Color.lerp(Colors.white, tokens.accent, 0.4)!,
+                tokens.accent,
+                Color.lerp(Colors.black, tokens.accent, 0.76)!,
+              ],
+              stops: const [0, 0.6, 1],
+            ),
+      color: light ? tokens.surface2 : null,
+      boxShadow: [
+        light
+            // 0 8px 18px -14px rgba(24, 42, 60, 0.45)
+            ? BoxShadow(
+                color: tokens.shadowPop.first.color.withValues(alpha: 0.45),
+                offset: const Offset(0, 8),
+                blurRadius: 18,
+                spreadRadius: -14,
+              )
+            // 0 8px 18px -12px rgb(var(--accent-rgb) / 0.9)
+            : BoxShadow(
+                color: tokens.accent.withValues(alpha: 0.9),
+                offset: const Offset(0, 8),
+                blurRadius: 18,
+                spreadRadius: -12,
+              ),
+      ],
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final tokens = widget.tokens;
+    final light = tokens.brightness == Brightness.light;
+    // 选中：`--accent-ink` 字（浅色换 `--accent-light`）；未选中：`--text-dim`。
+    final ink = widget.selected
+        ? (light ? tokens.accentLight : tokens.accentInk)
+        : (_hovering ? tokens.text : tokens.textDim);
+    final decoration = widget.selected
+        ? _selectedDecoration(tokens, light)
+        : BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: _hovering ? tokens.border : null,
+          );
+
     return Semantics(
       button: true,
-      selected: selected,
-      label: label,
+      selected: widget.selected,
+      label: widget.label,
+      // 计数只报数、不并进 label：label 是无障碍口径里的稳定文案
+      //（README 与 m1_smoke_test 逐字对齐）。React 那颗 button 的可访问名
+      // 是「播放列表18」，这里拆成 label + value 对读屏是同一句话。
+      value: '${widget.count}',
       excludeSemantics: true,
-      onTap: onTap,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        hoverColor: tokens.border,
-        child: Container(
-          height: 30,
-          padding: const EdgeInsets.symmetric(horizontal: 13),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            color: selected ? tokens.accentSoft : null,
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: selected ? tokens.accentLight : tokens.textDim,
+      onTap: widget.onTap,
+      // MouseRegion 必须在 Semantics **内层**：`_TabButton` 自己的 renderObject
+      // 得是这颗语义节点 —— 冒烟用例从 Key 往上取节点，中间隔一层代理就会
+      // 落到整张面板的合并节点上。
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: InkWell(
+          onTap: widget.onTap,
+          borderRadius: BorderRadius.circular(999),
+          // 悬停底色自己画在 decoration 上（选中项也要能改字色），
+          // 所以不让 InkWell 再叠一层 overlay。
+          hoverColor: Colors.transparent,
+          child: Container(
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 13),
+            alignment: Alignment.center,
+            decoration: decoration,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: ink,
+                  ),
+                ),
+                // `.panel__tab-count`：10.5 / 等宽数字 / 0.72 透明
+                const SizedBox(width: 6),
+                Text(
+                  '${widget.count}',
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: ink.withValues(alpha: 0.72),
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
             ),
           ),
         ),

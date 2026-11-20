@@ -26,9 +26,11 @@ import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/ui/panel.dart';
 import 'package:light_music/ui/progress_slider.dart';
+import 'package:light_music/ui/tool_buttons.dart';
 import 'package:light_music/ui/transport.dart';
 import 'package:light_music/ui/volume_slider.dart';
 import 'package:light_music/ui/wave_strip.dart';
+import 'package:light_music/ui/wave_style_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:provider/single_child_widget.dart';
 
@@ -462,5 +464,75 @@ void main() {
       providers: providers(),
     );
     expect(tester.getSize(find.byType(WaveStrip)).height, kWaveStripHeightUltra);
+  });
+
+  testWidgets('窄屏歌词页：那组控件下移到频谱条上方，左端与简约模式对齐', (tester) async {
+    final harness = PanelHarness(titles: <String>['十年']);
+    addTearDown(harness.dispose);
+    final lyricsPage = LyricsPageController();
+    addTearDown(lyricsPage.dispose);
+
+    List<SingleChildWidget> providers() => <SingleChildWidget>[
+      ChangeNotifierProvider<LibraryState>.value(value: harness.library),
+      ChangeNotifierProvider<PlayerState>.value(value: harness.player),
+      ChangeNotifierProvider<RecentState>.value(value: harness.recent),
+      ChangeNotifierProvider<CoverState>.value(value: harness.cover),
+      ChangeNotifierProvider<ThemeState>.value(value: harness.theme),
+      ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
+      ChangeNotifierProvider<LyricsPageController>.value(value: lyricsPage),
+    ];
+
+    // 简约模式：三颗按钮在进度条上方那行的左端，这一档没有波形下拉
+    await pump(
+      tester,
+      const TransportBar(),
+      width: 420,
+      height: 800,
+      providers: providers(),
+    );
+    final simpleLeft = tester.getRect(find.byType(ToolButtons)).left;
+    expect(find.byType(WaveStylePicker), findsNothing);
+
+    // 简约模式：三颗按钮右边的空白也是「点一下进沉浸模式」的热区
+    // 简约模式：三颗按钮右边的空白也是「点一下进沉浸模式」的热区
+    final simpleZone = tester.getRect(
+      find.byKey(const Key('transport-wave-tap-to-lyrics')),
+    );
+
+    // 简约模式：`.transport { gap: 12px }` 被 `.transport__wave { margin-bottom:
+    // -4px }` 抵掉 4px → 这行到进度条净剩 8px（app.css:1159-1163）。
+    expect(
+      tester.getRect(find.byKey(const Key('progress-slider'))).top -
+          tester.getRect(find.byType(ToolButtons)).bottom,
+      closeTo(8, 0.1),
+      reason: '图标行与进度条之间 8px',
+    );
+
+    // 歌词页（窄屏）：同一组挪到频谱条上方单独成行 —— 左端必须与简约模式
+    // 完全同一个 x（都是控制条自己的 14px 内边距起排），下拉跟到同一行右端。
+    // 从这里进沉浸模式：点那一行按钮右边的空白（不点按钮本身）
+    await tester.tapAt(Offset(simpleZone.right - 8, simpleZone.center.dy));
+    await tester.pump();
+    expect(lyricsPage.isOpen, isTrue, reason: '点工具行空白应进沉浸模式');
+
+    final tools = tester.getRect(find.byType(ToolButtons));
+    final wave = tester.getRect(find.byType(WaveStrip));
+    expect(tools.left, closeTo(simpleLeft, 0.5), reason: '左边距要和简约模式那三颗一致');
+    expect(tools.bottom, lessThan(wave.top), reason: '整组在频谱条上方');
+    final picker = tester.getRect(find.byType(WaveStylePicker));
+    expect(picker.center.dy, closeTo(tools.center.dy, 0.5), reason: '下拉与三颗按钮同一行');
+    expect(picker.right, greaterThan(tools.right), reason: '下拉贴右');
+
+    // 频谱条底边到进度条顶边：Web 是 2px（`row-gap: 0` +
+    // `.transport__wave { padding-bottom: 2px }`，app.css:1173-1188）。
+    final progress = tester.getRect(find.byKey(const Key('progress-slider')));
+    expect(progress.top - wave.bottom, closeTo(2, 0.1), reason: '频谱与进度条之间 2px');
+
+    // 这一行里控件之外的空白也是热区：点三颗按钮与下拉之间的空处应切回简约模式
+    final zone = tester.getRect(find.byKey(const Key('transport-tap-to-simple')));
+    await tester.tapAt(zone.center);
+    await tester.pump();
+    expect(lyricsPage.isOpen, isFalse, reason: '点工具行空白应切回简约模式');
+    expect(tester.takeException(), isNull);
   });
 }

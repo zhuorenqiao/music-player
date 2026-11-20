@@ -3,7 +3,7 @@
  *
  * 控制条上方那排里的闹钟小按钮（与「T」「水滴」同规格，26px）：
  * 未启用时是个图标；倒计时跑着时按钮自己撑成一枚药丸，直接显示剩余 mm:ss。
- * 点开是一块面板：**拖动滑杆**选时长（1 分钟 ~ 16 小时 39 分钟），
+ * 点开是一块面板：**拖动滑杆**选时长（1 分钟 ~ 4 小时），
  * 下面另留一根**自定义**输入框。
  *
  * 面板挂在 `document.body` 上（fixed 定位），不再跟着控制条/歌词页的层级走：
@@ -52,7 +52,7 @@ export function SleepTimerButton({ variant }: { variant?: 'head' }) {
     const t = position / 100;
     const min = SLEEP_TIMER_MIN_MINUTES;
     const max = SLEEP_TIMER_MAX_MINUTES;
-    // 指数映射：低端分辨率高（1、2、3…分明），高端自然变粗（180、240…）
+    // 指数映射：低端分辨率高（1、2、3…分明），高端自然变粗（240…）
     const value = min * Math.pow(max / min, t);
     return Math.round(value);
   };
@@ -164,7 +164,7 @@ export function SleepTimerButton({ variant }: { variant?: 'head' }) {
     ? `${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分钟` : ''}`
     : `${minutes} 分钟`;
 
-  /** 滑杆右端上限的同样格式（999 分钟 = 16 小时 39 分钟） */
+  /** 滑杆右端上限的同样格式（240 分钟 = 4 小时） */
   const maxReadout = SLEEP_TIMER_MAX_MINUTES >= 60
     ? `${Math.floor(SLEEP_TIMER_MAX_MINUTES / 60)} 小时${SLEEP_TIMER_MAX_MINUTES % 60 ? ` ${SLEEP_TIMER_MAX_MINUTES % 60} 分钟` : ''}`
     : `${SLEEP_TIMER_MAX_MINUTES} 分钟`;
@@ -219,7 +219,7 @@ export function SleepTimerButton({ variant }: { variant?: 'head' }) {
             </div>
           )}
 
-          {/* 拖动滑杆选时长（1 分钟 ~ 16 小时 39 分钟），精确数值走下面的自定义输入 */}
+          {/* 拖动滑杆选时长（1 分钟 ~ 4 小时），精确数值走下面的自定义输入 */}
           <div className="sleep-timer__slide">
             <div className="sleep-timer__slide-head">
               <span className="sleep-timer__slide-value">{readout}</span>

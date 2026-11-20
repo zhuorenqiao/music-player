@@ -3,6 +3,7 @@
  *
  * 抽屉里只放一级入口：添加音乐 / 清空播放列表 / 换肤。
  * 换肤再点一下才弹出二级抽屉（ThemeDrawer），主题选项不混在一级菜单里。
+ * 电台页用 `showLibraryActions={false}`：那页只留「换肤」，不出现曲库操作。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -38,11 +39,15 @@ const PaletteIcon = () => (
   </svg>
 );
 
-export function LibraryMenu({ onAdd, onClear }: {
-  /** 打开本地文件选择（音频 / .lrc） */
-  onAdd: () => void;
-  /** 清空播放列表（内部还有一次确认） */
-  onClear: () => void;
+export function LibraryMenu({ onAdd, onClear, showLibraryActions = true, className = '' }: {
+  /** 打开本地文件选择（音频 / .lrc）；只在 `showLibraryActions` 时用到 */
+  onAdd?: () => void;
+  /** 清空播放列表（内部还有一次确认）；只在 `showLibraryActions` 时用到 */
+  onClear?: () => void;
+  /** 是否展示添加音乐 / 清空播放列表两条曲库操作。电台页只留「换肤」 */
+  showLibraryActions?: boolean;
+  /** 额外的按钮类名：电台页的顶栏要比音乐页那排按钮再矮一档 */
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
@@ -53,7 +58,7 @@ export function LibraryMenu({ onAdd, onClear }: {
   return (
     <>
       <button
-        className="btn app__menu"
+        className={`btn app__menu${className ? ` ${className}` : ''}`}
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -67,29 +72,35 @@ export function LibraryMenu({ onAdd, onClear }: {
 
       <Drawer open={open} onClose={() => setOpen(false)} title="更多" width="narrow">
         <div className="menu-list">
-          <button
-            className="menu-row"
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onAdd();
-            }}
-          >
-            <span className="menu-row__icon" aria-hidden="true"><PlusIcon /></span>
-            <span className="menu-row__title">添加音乐</span>
-          </button>
+          {/* 曲库操作只在音乐页出现：电台页是另一条音频链路，
+              那页的「更多」只负责换肤，避免在收听中被「清空播放列表」误导。 */}
+          {showLibraryActions && (
+            <>
+              <button
+                className="menu-row"
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onAdd?.();
+                }}
+              >
+                <span className="menu-row__icon" aria-hidden="true"><PlusIcon /></span>
+                <span className="menu-row__title">添加音乐</span>
+              </button>
 
-          <button
-            className="menu-row menu-row--danger"
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onClear();
-            }}
-          >
-            <span className="menu-row__icon" aria-hidden="true"><TrashIcon /></span>
-            <span className="menu-row__title">清空播放列表</span>
-          </button>
+              <button
+                className="menu-row menu-row--danger"
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onClear?.();
+                }}
+              >
+                <span className="menu-row__icon" aria-hidden="true"><TrashIcon /></span>
+                <span className="menu-row__title">清空播放列表</span>
+              </button>
+            </>
+          )}
 
           {/* 二级入口：再点一下才弹换肤抽屉，一级菜单里不混主题选项。
               **先收一级、等它收完再弹二级**：两层抽屉叠着会让 Esc / 遮罩的语义

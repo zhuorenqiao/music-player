@@ -25,10 +25,9 @@ lark-cli apps +release-get --app-id app_17j7001a83g --release-id <上一步返�
 
 **1. 必须用 `--dir`，不要用 `--file-path`。**
 `--file-path` 只跟随页面里静态写死的引用（`<link>` / `<script src>` / `<img src>` / CSS `url()`），
-而三首 demo 的音频与封面路径是 JS 运行时拼的（`src/lib/demo-data.js` 里的 `assets/audio/track-0X.wav`，
-注释里那句「运行时拼路径」就是这个意思），内置字体样式表也是运行时挂进 `<head>`。
-用 `--file-path` 发布实测漏掉 3 个 wav 和 4 个封面（线上 404，播不出声、封面裂图）；
-`--dir` 原样打包整个目录，才齐全 —— 已用 `+export` 拉回发布包核对过（120 项，音频封面字体都在）。
+而部分静态资源路径是 JS 运行时拼的（例如兜底封面 `assets/covers/cover-default.svg` 由 `src/lib/demo-data.js` 导出、由状态层拼给 `<img>`），内置字体样式表也是运行时挂进 `<head>`。
+用 `--file-path` 发布实测漏过这类资源（线上 404，封面裂图、歌词字体不生效）；早先的 3 首 demo 音频正是这样漏掉的，那批示例曲目现已整体移除。
+`--dir` 原样打包整个目录，才齐全 —— 已用 `+export` 拉回发布包核对过（120 项，封面字体都在）。
 
 **2. 字体路径必须是相对当前页面的。**
 `src/lib/lyric-fonts.ts` 里两个 `webFont` 从 `'/fonts/...'` 改成了 `'fonts/...'`：

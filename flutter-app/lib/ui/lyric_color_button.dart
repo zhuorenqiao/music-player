@@ -129,7 +129,7 @@ class _LyricColorButtonState extends State<LyricColorButton> {
     final tokens = context.tokens;
     final theme = context.watch<ThemeState?>();
     // 「T」这个字母本身就是**当前高亮色**（React `.lyric-color__trigger:2510-2517`：
-    // `font-size: 13px; font-weight: 700; line-height: 1; color: var(--lyric-hl)`），
+    // `font-size: 15px; font-weight: 700; line-height: 1; color: var(--lyric-hl)`），
     // 与歌词当前行同一份算法 —— 改一次色，歌词与按钮一起变。
     final letter = lyricHighlightColor(
       picked: theme?.lyricColor ?? '',
@@ -143,13 +143,13 @@ class _LyricColorButtonState extends State<LyricColorButton> {
         key: _anchorKey,
         behavior: HitTestBehavior.opaque,
         onTap: _toggle,
-        // 26×26 / 圆角 8 / 1px border-strong / surface 底：与水滴、闹钟同一套壳。
+        // 26×26 的命中区、**不带按钮壳**（无描边 / 无底色 / 无圆角）：
+        // 与水滴、闹钟一致，画面里只看见「T」本身。
         child: ToolTriggerChrome(
-          active: _entry != null,
           child: Text(
             'T',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
               height: 1,
               color: letter,

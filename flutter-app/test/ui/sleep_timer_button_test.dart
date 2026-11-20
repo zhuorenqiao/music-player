@@ -1,7 +1,7 @@
 // test/ui/sleep_timer_button_test.dart
 //
 // 睡眠定时器：状态语义（deadline / 剩余时间 / 到点暂停 / 重启恢复）+ 按钮与面板。
-// 面板同步 React 新版（`SleepTimerButton.tsx` 工作区那版）：滑杆 1~999 分钟
+// 面板同步 React 新版（`SleepTimerButton.tsx` 工作区那版）：滑杆 1~240 分钟
 // （指数映射）+ 自定义输入 + 开始 / 重新计时，运行中多一行「剩余 + 取消定时」。
 //
 // 时钟是注入的（`now:` 接缝），倒计时的 tick 用真 Timer —— testWidgets 的
@@ -106,12 +106,12 @@ void main() {
     test('位置 ↔ 分钟数是一对反函数（指数映射，两端对齐）', () {
       expect(minutesForPosition(0), kSleepTimerMinMinutes);
       expect(minutesForPosition(100), kSleepTimerMaxMinutes);
-      // 中点：1 * 999^0.5 ≈ 31.6 → 32（低端行程更宽的那份手感）
-      expect(minutesForPosition(50), 32);
+      // 中点：1 * 240^0.5 ≈ 15.5 → 15（低端行程更宽的那份手感）
+      expect(minutesForPosition(50), 15);
       expect(positionForMinutes(kSleepTimerMinMinutes), 0);
       expect(positionForMinutes(kSleepTimerMaxMinutes), 100);
       // 来回一趟不掉档（滑杆位置是 double，读数要能回到同一个分钟数）
-      for (final minutes in <int>[2, 10, 45, 120, 300, 720]) {
+      for (final minutes in <int>[2, 10, 45, 120, 180, 240]) {
         expect(minutesForPosition(positionForMinutes(minutes)), minutes);
       }
     });
@@ -121,8 +121,8 @@ void main() {
       expect(sleepTimerReadout(59), '59 分钟');
       expect(sleepTimerReadout(60), '1 小时');
       expect(sleepTimerReadout(75), '1 小时 15 分钟');
-      expect(sleepTimerReadout(kSleepTimerMaxMinutes), '16 小时 39 分钟');
-      expect(kSleepTimerMaxReadout, '16 小时 39 分钟');
+      expect(sleepTimerReadout(kSleepTimerMaxMinutes), '4 小时');
+      expect(kSleepTimerMaxReadout, '4 小时');
     });
 
     test('缺省仍是 10 分钟（面板打开时滑杆停在这一档）', () {
@@ -237,7 +237,7 @@ void main() {
       expect(find.byKey(const Key('sleep-timer-custom')), findsOneWidget);
       expect(_readout(tester), '10 分钟');
       // 滑杆右端的上限读数
-      expect(find.text('1 分钟 – 16 小时 39 分钟'), findsOneWidget);
+      expect(find.text('1 分钟 – 4 小时'), findsOneWidget);
       expect(find.text('开始'), findsOneWidget);
       // 未运行：没有「取消定时」那一行
       expect(find.text('取消定时'), findsNothing);
@@ -281,23 +281,23 @@ void main() {
       await tester.tap(find.byKey(const Key('sleep-timer-trigger')));
       await tester.pump();
 
-      // 一路拖过右端：值被夹在 999 分钟（16 小时 39 分钟）上。
+      // 一路拖过右端：值被夹在 240 分钟（4 小时）上。
       await tester.drag(
         find.byKey(const Key('sleep-timer-slider')),
         const Offset(400, 0),
       );
       await tester.pump();
 
-      expect(_readout(tester), '16 小时 39 分钟');
+      expect(_readout(tester), '4 小时');
       // 自定义输入框里的原始文本 = 同一个分钟数
       final field = tester.widget<TextField>(
         find.byKey(const Key('sleep-timer-custom')),
       );
-      expect(field.controller!.text, '999');
+      expect(field.controller!.text, '240');
 
       await tester.tap(find.text('开始'));
       await tester.pump();
-      expect(harness.timer.remaining, const Duration(minutes: 999));
+      expect(harness.timer.remaining, const Duration(minutes: 240));
       await harness.cleanup();
     });
 
@@ -327,7 +327,7 @@ void main() {
       await harness.cleanup();
     });
 
-    testWidgets('超出范围的输入不生效（夹在 1~999 分钟）', (tester) async {
+    testWidgets('超出范围的输入不生效（合法区间 1~240 分钟）', (tester) async {
       final harness = _Harness();
       addTearDown(harness.dispose);
 

@@ -1,29 +1,37 @@
 // lib/ui/theme_drawer.dart
 //
-// 换肤二级抽屉（M3 T6）：对译 React `src/components/ThemeDrawer.tsx`。
+// 换肤二级抽屉（M3 T6）：逐条对译 Web 端 `src/components/ThemeDrawer.tsx`
+// + `app.css:3339-3498`（`.theme-group` / `.theme-seg` / `.theme-swatch`）。
 //
-//   ┌──────────────────────┐
-//   │ 换肤            [×]  │
-//   │ 明暗模式             │
-//   │ [系统][浅色][深色]   │  ← 三段选择（aria-pressed = 选中态描边）
-//   │ 当前跟随系统：深色   │  ← 仅 mode==system 时出现（role=status）
-//   │ 主题色               │
-//   │ [●薄荷][●粉色][●蓝色]│  ← 三 swatch，选中即时生效、抽屉不关可来回比对
-//   └──────────────────────┘
+//   ┌──────────────────────────┐
+//   │ ● 换肤             (×)   │  ← `.drawer__head`
+//   │   明暗和主题色分开设置…   │  ← `.drawer__hint`（一级菜单那档没有）
+//   │ 明暗模式                 │  ← `.theme-group__title`（11.5 / 600 / 0.08em）
+//   │ (系统)(浅色)(深色)       │  ← `.theme-seg`：一整颗药丸，选中项铺强调色渐变
+//   │ 当前跟随系统：深色        │  ← 仅 mode==system
+//   │ 主题色                   │
+//   │ ●薄荷   ●粉色   ●蓝色     │  ← `.theme-swatch`：竖排色卡，22px 双圈色点
+//   └──────────────────────────┘
+//
+// 之前 Flutter 端自己拼的版本与 Web 差在三处（一眼就能看出不是同一张卡）：
+//   1. 三段选择画成三个独立圆角方块（选中=淡底 + 描边），Web 是一颗药丸容器里
+//      浮着一颗**强调色渐变**的选中块、字用 `--accent-ink`（浅色模式换白底 + 亮字）；
+//   2. 色卡是横排（12px 圆点 + 右侧文字、40px 高），Web 是竖排（22px 双圈圆点在上、
+//      文字在下、padding 12/8/10）；
+//   3. 抬头没有说明行、标题是小号浅字（见 drawer_shell.dart 的注释）。
 //
 // 宿主复用 header.dart 的 showGeneralDialog（右缘滑入 + 遮罩 + Esc），由
-// DrawerMenu 的一级入口「换肤」打开（LibraryMenu.tsx:104 的二级入口对译）。
-import 'dart:math' as math;
-
+// DrawerMenu 的一级入口「换肤」打开。
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
 import '../theme/theme_state.dart';
-import 'drawer_menu.dart' show scrimColor;
+import 'drawer_menu.dart' show menuCardBorder, scrimColor;
+import 'drawer_shell.dart';
+import 'glass_frost.dart' show cssGradientAxis;
 
-/// 三颗色点的**固定原色**（app.css:3471-3491）：
+/// 三颗色点的**固定原色**（app.css:3464-3474）：
 ///
 ///   ```css
 ///   .theme-swatch--mint .theme-swatch__dot { background: #2ee6a8; }
@@ -39,83 +47,42 @@ const Color kSwatchDotMint = Color(0xFF2EE6A8);
 const Color kSwatchDotPink = Color(0xFFFF6AA8);
 const Color kSwatchDotBlue = Color(0xFF4D8DFF);
 
-/// 换肤抽屉本体。宽度取 `min(312, 可用宽)`（React 的 default 档 288 加一点
-/// 给三段按钮的呼吸感）。
+/// 换肤抽屉本体。宽度取 `min(340, 88vw)`（Web `.drawer__panel` 内容型那一档）。
 class ThemeDrawer extends StatelessWidget {
   const ThemeDrawer({super.key});
 
-  static const double width = 312;
+  static const double width = 340;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = context.tokens;
     final state = context.watch<ThemeState>();
-    final radius = BorderRadius.circular(kRadiusXl);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final panelWidth = constraints.hasBoundedWidth
-            ? math.min(width, constraints.maxWidth)
-            : width;
-        return SizedBox(
-          width: panelWidth,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: radius,
-              border: Border.all(color: tokens.borderStrong),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [tokens.sheetA, tokens.sheetB],
-              ),
-              boxShadow: tokens.shadowCard,
-            ),
-            child: ClipRRect(
-              borderRadius: radius,
-              child: Material(
-                type: MaterialType.transparency,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Head(onClose: () => Navigator.of(context).maybePop()),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const _GroupTitle('明暗模式'),
-                          const SizedBox(height: 8),
-                          _ModeSegment(state: state),
-                          if (state.mode == ThemeModeSetting.system) ...[
-                            const SizedBox(height: 8),
-                            // role=status 的提示行（ThemeDrawer.tsx:35 逐字）。
-                            Text(
-                              '当前跟随系统：${state.resolvedMode == 'dark' ? '深色' : '浅色'}',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                color: tokens.textFaint,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 18),
-                          const _GroupTitle('主题色'),
-                          const SizedBox(height: 8),
-                          const _ColorSwatches(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+    return DrawerPanel(
+      baseWidth: width,
+      title: '换肤',
+      hint: '明暗和主题色分开设置，选择会记住',
+      closeLabel: '关闭换肤',
+      onClose: () => Navigator.of(context).maybePop(),
+      children: [
+        const _GroupTitle('明暗模式'),
+        const SizedBox(height: 8),
+        _ModeSegment(state: state),
+        if (state.mode == ThemeModeSetting.system) ...[
+          // `.theme-group__hint { margin-top: -2px }` 抵消组内那 8px 的一半
+          const SizedBox(height: 6),
+          // role=status 的提示行（ThemeDrawer.tsx:35 逐字）。
+          _Hint('当前跟随系统：${state.resolvedMode == 'dark' ? '深色' : '浅色'}'),
+        ],
+        // `.theme-group + .theme-group { margin-top: 6px }` + body 的 8px
+        const SizedBox(height: 14),
+        const _GroupTitle('主题色'),
+        const SizedBox(height: 8),
+        const _ColorSwatches(),
+      ],
     );
   }
 }
 
-/// 段落标题（`.theme-group__title`）。
+/// `.theme-group__title`：11.5px / 600 / `letter-spacing: 0.08em` / `--text-faint`。
 class _GroupTitle extends StatelessWidget {
   const _GroupTitle(this.text);
 
@@ -126,12 +93,30 @@ class _GroupTitle extends StatelessWidget {
     final tokens = context.tokens;
     return Text(
       text,
-      style: TextStyle(fontSize: 12, color: tokens.textFaint),
+      style: TextStyle(
+        fontSize: 11.5,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.92, // 0.08em × 11.5px
+        color: tokens.textFaint,
+      ),
     );
   }
 }
 
-/// 明暗三段选择（`.theme-seg`）：系统 / 浅色 / 深色，选中即时生效。
+/// `.theme-group__hint`：11.5px `--text-faint`。
+class _Hint extends StatelessWidget {
+  const _Hint(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.tokens;
+    return Text(text, style: TextStyle(fontSize: 11.5, color: tokens.textFaint));
+  }
+}
+
+/// 明暗三段选择（`.theme-seg`）：一整颗药丸容器，里面浮着一颗选中块。
 class _ModeSegment extends StatelessWidget {
   const _ModeSegment({required this.state});
 
@@ -140,8 +125,51 @@ class _ModeSegment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
+    final light = tokens.brightness == Brightness.light;
+
     Widget item(ThemeModeSetting mode, String label, String hint) {
       final selected = state.mode == mode;
+      // `.theme-seg__item[aria-pressed="true"]`：强调色渐变 + `--accent-ink` 字。
+      // 浅色模式覆写成 `--surface-2` 底 + `--accent-light` 字（app.css:3830-3837）。
+      final decoration = selected
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: light
+                  ? null
+                  : LinearGradient(
+                      begin: cssGradientAxis(160).begin,
+                      end: cssGradientAxis(160).end,
+                      colors: [
+                        Color.lerp(Colors.white, tokens.accent, 0.4)!,
+                        tokens.accent,
+                        Color.lerp(Colors.black, tokens.accent, 0.76)!,
+                      ],
+                      stops: const [0, 0.6, 1],
+                    ),
+              color: light ? tokens.surface2 : null,
+              boxShadow: [
+                light
+                    // 0 8px 18px -14px rgba(24, 42, 60, 0.45)
+                    ? BoxShadow(
+                        color: tokens.shadowPop.first.color.withValues(alpha: 0.45),
+                        offset: const Offset(0, 8),
+                        blurRadius: 18,
+                        spreadRadius: -14,
+                      )
+                    // 0 8px 18px -12px rgb(var(--accent-rgb) / 0.9)
+                    : BoxShadow(
+                        color: tokens.accent.withValues(alpha: 0.9),
+                        offset: const Offset(0, 8),
+                        blurRadius: 18,
+                        spreadRadius: -12,
+                      ),
+              ],
+            )
+          : const BoxDecoration(borderRadius: BorderRadius.all(Radius.circular(999)));
+      final color = selected
+          ? (light ? tokens.accentLight : tokens.accentInk)
+          : tokens.textDim;
+
       return Expanded(
         child: Semantics(
           button: true,
@@ -149,23 +177,22 @@ class _ModeSegment extends StatelessWidget {
           label: '$label（$hint）',
           child: GestureDetector(
             onTap: () => state.setMode(mode),
+            behavior: HitTestBehavior.opaque,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 140),
-              height: 34,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              // `min-height: 32px; padding: 0 10px`
+              constraints: const BoxConstraints(minHeight: 32),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
               alignment: Alignment.center,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(kRadiusMd),
-                border: Border.all(
-                  color: selected ? tokens.accentLine : tokens.border,
-                ),
-                color: selected ? tokens.accentSoft : null,
-              ),
+              decoration: decoration,
               child: Text(
                 label,
+                maxLines: 1,
                 style: TextStyle(
                   fontSize: 12.5,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  color: selected ? tokens.accentLight : tokens.textDim,
+                  fontWeight: FontWeight.w600,
+                  color: color,
                 ),
               ),
             ),
@@ -174,19 +201,29 @@ class _ModeSegment extends StatelessWidget {
       );
     }
 
-    return Row(
-      children: [
-        item(ThemeModeSetting.system, '系统', '跟随系统的浅色 / 深色'),
-        const SizedBox(width: 6),
-        item(ThemeModeSetting.light, '浅色', '浅色纸面 + 柔和阴影分层'),
-        const SizedBox(width: 6),
-        item(ThemeModeSetting.dark, '深色', '深色底 + 高光'),
-      ],
+    return Container(
+      // `.theme-seg { gap: 2px; padding: 3px; border: 1px solid --border;
+      //             border-radius: --radius-pill; background: --tint-1 }`
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: tokens.tint1,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: menuCardBorder(tokens)),
+      ),
+      child: Row(
+        children: [
+          item(ThemeModeSetting.system, '系统', '跟随系统的浅色 / 深色'),
+          const SizedBox(width: 2),
+          item(ThemeModeSetting.light, '浅色', '浅色纸面 + 柔和阴影分层'),
+          const SizedBox(width: 2),
+          item(ThemeModeSetting.dark, '深色', '深色底 + 高光'),
+        ],
+      ),
     );
   }
 }
 
-/// 主题色三 swatch（`.theme-swatch`）：点一下即时生效，抽屉不关可来回比对。
+/// 主题色三 swatch（`.theme-swatch`）：竖排色卡，点一下即时生效，抽屉不关可来回比对。
 class _ColorSwatches extends StatelessWidget {
   const _ColorSwatches();
 
@@ -194,8 +231,19 @@ class _ColorSwatches extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     final state = context.watch<ThemeState>();
+    final light = tokens.brightness == Brightness.light;
+
     Widget swatch(ThemeColorSetting color, String label, Color dot) {
       final selected = state.color == color;
+      // `.theme-swatch[aria-pressed="true"] { color: --text; border-color:
+      // --accent-line; background: --accent-soft }`；浅色覆写成
+      // `--surface-2` 底 + `--accent-light` 字（app.css:3836-3842）。
+      final background = selected
+          ? (light ? tokens.surface2 : tokens.accentSoft)
+          : tokens.surface;
+      final textColor = selected
+          ? (light ? tokens.accentLight : tokens.text)
+          : tokens.textDim;
       return Expanded(
         child: Semantics(
           button: true,
@@ -203,44 +251,53 @@ class _ColorSwatches extends StatelessWidget {
           label: label,
           child: GestureDetector(
             onTap: () => state.setColor(color),
+            behavior: HitTestBehavior.opaque,
             child: AnimatedContainer(
-              duration: const Duration(milliseconds: 140),
-              height: 40,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              // `.theme-swatch { gap: 9px; padding: 12px 8px 10px; border-radius: 12px }`
+              padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(kRadiusMd),
+                color: background,
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: selected ? tokens.accentLine : tokens.border,
+                  color: selected ? tokens.accentLine : menuCardBorder(tokens),
                 ),
-                color: selected ? tokens.accentSoft : tokens.tint1,
               ),
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
                     key: Key('swatch-dot-${color.name}'),
-                    width: 12,
-                    height: 12,
+                    width: 22,
+                    height: 22,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: dot,
-                      // 选中态描边换成强调线（app.css:3493-3498 的双圈
-                      // accent-soft / accent-line，这里按 12px 的点收成一圈）。
-                      border: Border.all(
-                        color: selected ? tokens.accentLine : tokens.borderStrong,
-                      ),
+                      // `box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px var(--border)`：
+                      // 双圈描边，深浅底上都不糊；选中换 accent-soft / accent-line。
+                      boxShadow: [
+                        BoxShadow(
+                          color: selected ? tokens.accentSoft : tokens.surface,
+                          spreadRadius: 3,
+                        ),
+                        BoxShadow(
+                          color: selected ? tokens.accentLine : menuCardBorder(tokens),
+                          spreadRadius: 4,
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                        color: selected ? tokens.accentLight : tokens.textDim,
-                      ),
+                  const SizedBox(height: 9),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
                     ),
                   ),
                 ],
@@ -255,9 +312,9 @@ class _ColorSwatches extends StatelessWidget {
       children: [
         // 三颗点都是写死原色，不取 `tokens.accent`（那是「当前」主题色）。
         swatch(ThemeColorSetting.mint, '薄荷', kSwatchDotMint),
-        const SizedBox(width: 6),
+        const SizedBox(width: 8),
         swatch(ThemeColorSetting.pink, '粉色', kSwatchDotPink),
-        const SizedBox(width: 6),
+        const SizedBox(width: 8),
         swatch(ThemeColorSetting.blue, '蓝色', kSwatchDotBlue),
       ],
     );
@@ -274,8 +331,8 @@ void showThemeDrawer(BuildContext context) {
     barrierLabel: '关闭换肤',
     barrierColor: scrimColor(tokens),
     transitionDuration: const Duration(milliseconds: 240),
-    pageBuilder: (context, animation, secondaryAnimation) => SafeArea(
-      minimum: const EdgeInsets.all(12),
+    pageBuilder: (context, animation, secondaryAnimation) => const SafeArea(
+      minimum: EdgeInsets.all(kDrawerMargin),
       child: Align(
         alignment: Alignment.topRight,
         child: ThemeDrawer(),
@@ -296,42 +353,4 @@ void showThemeDrawer(BuildContext context) {
       );
     },
   );
-}
-
-/// 抽屉抬头：小标题 + 关闭按钮（drawer_menu 的 _Head 同构，标题换成「换肤」）。
-class _Head extends StatelessWidget {
-  const _Head({required this.onClose});
-
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '换肤',
-              style: TextStyle(fontSize: 13, color: tokens.textFaint),
-            ),
-          ),
-          Semantics(
-            button: true,
-            label: '关闭换肤',
-            excludeSemantics: true,
-            child: GestureDetector(
-              onTap: onClose,
-              child: SizedBox(
-                width: 36,
-                height: 36,
-                child: Icon(Icons.close, size: 16, color: tokens.textDim),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

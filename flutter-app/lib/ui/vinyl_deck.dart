@@ -44,7 +44,7 @@ class CoverDisc extends StatefulWidget {
     required this.size,
     required this.spinning,
     this.vinyl = true,
-    this.fallbackArtist = '',
+    this.fallbackArtist,
     this.fallbackTitle = '',
     super.key,
   });
@@ -61,9 +61,16 @@ class CoverDisc extends StatefulWidget {
   /// 是否画黑胶外圈（唱机形态）。歌词页那种「只有封面、没有外圈」的形态传 false。
   final bool vinyl;
 
-  /// 生成卡派生字段（M2b T10）：无封面文件时碟面画生成卡。空串 =
-  /// 不画生成卡，退 `_DiscPlaceholder`（空态无曲可显示）。
-  final String fallbackArtist;
+  /// 生成卡派生字段（M2b T10）：无封面文件时碟面画生成卡。
+  ///
+  /// **null = 不画生成卡**，退 `_DiscPlaceholder`（空态：没有曲目，也就没有
+  /// 可派生的歌手）。**空串是有意义的入参** —— 曲目在、只是标签里没有歌手：
+  /// 生成卡按 `'unknown'` 种子画（首字母 `♪`、底部「未知歌手」）。
+  /// 灯箱（cover_lightbox.dart → CoverImage）与歌词页（_ArtColumn）拿的都是
+  /// `track.artist` 原文，空串进 `generatedCoverSpec` 得到同一张图；碟面若把
+  /// 空歌手换成展示文案「未知歌手」当种子，同一首歌会出现两张不同的生成卡
+  /// （原版 React 也恒画生成卡：covers.tsx:52 `generatedCoverUrl`）。
+  final String? fallbackArtist;
   final String fallbackTitle;
 
   @override
@@ -136,7 +143,7 @@ class _CoverDiscState extends State<CoverDisc>
     final hasFile = widget.coverPath.isNotEmpty &&
         File(widget.coverPath).existsSync();
     final useGenerated =
-        !hasFile && widget.fallbackArtist.isNotEmpty;
+        !hasFile && widget.fallbackArtist != null;
     // 唱机形态：封面是唱片中间的标签位（62%）；非唱机形态：封面铺满整张碟。
     final labelSize =
         widget.vinyl ? widget.size * _kVinylLabelRatio : widget.size;
@@ -192,7 +199,7 @@ class _CoverDiscState extends State<CoverDisc>
                   : useGenerated
                       ? GeneratedCoverView(
                           spec: generatedCoverSpec(
-                            widget.fallbackArtist,
+                            widget.fallbackArtist!,
                             widget.fallbackTitle,
                           ),
                           size: labelSize,

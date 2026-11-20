@@ -27,21 +27,22 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/breakpoints.dart';
+import '../playback/audio_player.dart' show kDefaultVolume;
 import '../playback/play_mode.dart';
-import '../playback/track.dart';
 import '../playback/transport_controller.dart';
 import '../state/lyrics_page_controller.dart';
 import '../state/player_state.dart';
 import '../state/spectrum_state.dart';
 import 'wave_strip.dart';
-import '../wave/spectrum_pipeline.dart';
 import '../theme/app_tokens.dart';
 import 'autoplay_gate.dart';
 import 'library_sheet.dart';
 import 'player_card.dart';
 import 'progress_slider.dart';
 import 'tool_buttons.dart';
+import 'tool_panel.dart' show ToolPanelSide;
 import 'volume_slider.dart';
+import 'wave_style_picker.dart';
 
 /// 控制条按钮之间的间距：`.controls { gap: 12px }`（桌面 grid）。
 const double _controlsGap = 12;
@@ -66,7 +67,7 @@ class TransportBar extends StatelessWidget {
       positionSeconds = 0,
       totalSeconds = null,
       bufferedSeconds = null,
-      volume = 0.7,
+      volume = kDefaultVolume,
       muted = false,
       _preview = false;
 
@@ -78,7 +79,7 @@ class TransportBar extends StatelessWidget {
     this.totalSeconds,
     this.bufferedSeconds,
     this.loading = false,
-    this.volume = 0.7,
+    this.volume = kDefaultVolume,
     this.muted = false,
     super.key,
   }) : _preview = true;
@@ -108,11 +109,13 @@ class TransportBar extends StatelessWidget {
         tokens: tokens,
         desktop: desktop,
         showWaveStrip: false,
-        frameTable: null,
-        waveTrack: null,
-        wavePlaying: playing,
-        wavePosition: positionSeconds,
-        wavePositionListenable: null,
+        // 预览入口不挂状态层：给一条纯展示的条子（showWaveStrip=false 时反正不画）。
+        waveStrip: WaveStrip(
+          frameTable: null,
+          track: null,
+          playing: playing,
+          positionSeconds: positionSeconds,
+        ),
         progress: ProgressSlider(
           position: positionSeconds,
           buffered: bufferedSeconds,
@@ -137,24 +140,31 @@ class TransportBar extends StatelessWidget {
     final inLyricsPage = context.watch<LyricsPageController?>()?.isOpen ?? false;
     // D.3：帧表从组合根注入的 SpectrumState 取。provider 可空 watch ——
     // 与歌词/封面那几处同一容错模式（纯展示测试没注册时退回装饰回退）。
-    // frameTableFor(id) 保证换曲那一帧不会短暂画出上一首的频谱。
+    //
+    // **不要在 build 里现取 `player.view.value.playing` 往下传**：本控制条是
+    // `const`（home_page.dart），整条不订阅 PlayerState，这一次 build 读到的
+    // 只是当时那一瞬的快照。真机上换曲时控制条会被 SpectrumState 的通知重建
+    // 一次 —— 那一刻内核还在 open、playing 还是 false；等内核真的出声，
+    // 没有任何东西会再重建控制条，`playing` 就永远停在 false：
+    // ticker 不跑、`read(playing:false)` 冻在最后一帧，就是用户说的
+    // 「手动切歌后频谱不律动」「下一首要过一会儿才律动」。
+    // 频谱条自己订阅 `player.view`（见 [_LiveWaveStrip]），播放态 / 曲目 /
+    // 帧表都在它那一片叶子里现取。
     final spectrum = context.watch<SpectrumState?>();
-    final waveTrack = player.current;
-    final frameTable = waveTrack == null
-        ? null
-        : spectrum?.frameTableFor(waveTrack.id);
+    final waveStrip = _LiveWaveStrip(
+      player: player,
+      spectrum: spectrum,
+      positionListenable: inLyricsPage ? player.position : null,
+      height: isUltraWide(MediaQuery.sizeOf(context).width)
+          ? kWaveStripHeightUltra
+          : kWaveStripHeight,
+    );
     return _chrome(
       context: context,
       tokens: tokens,
       desktop: desktop,
       showWaveStrip: inLyricsPage,
-      frameTable: frameTable,
-      waveTrack: waveTrack,
-      wavePlaying: player.view.value.playing,
-      wavePosition: player.position.value,
-      // 真实帧表是按 positionSeconds 取帧的，所以频谱条必须订阅进度。
-      // 只把 notifier 传到 WaveStrip 那一片叶子，不整条控制条跟着 4Hz 重建。
-      wavePositionListenable: inLyricsPage ? player.position : null,
+      waveStrip: waveStrip,
       // 进度行只挂 position：缓冲值在重建时顺带读一次，不单独订阅。
       progress: ValueListenableBuilder<double>(
         valueListenable: player.position,
@@ -207,11 +217,7 @@ class TransportBar extends StatelessWidget {
     required AppTokens tokens,
     required bool desktop,
     required bool showWaveStrip,
-    required SpectrumFrameTable? frameTable,
-    required Track? waveTrack,
-    required bool wavePlaying,
-    required double wavePosition,
-    required ValueListenable<double>? wavePositionListenable,
+    required Widget waveStrip,
     required Widget progress,
     required Widget controls,
   }) {
@@ -222,11 +228,7 @@ class TransportBar extends StatelessWidget {
       return _body(
         desktop: desktop,
         showWaveStrip: showWaveStrip,
-        frameTable: frameTable,
-        waveTrack: waveTrack,
-        wavePlaying: wavePlaying,
-        wavePosition: wavePosition,
-        wavePositionListenable: wavePositionListenable,
+        waveStrip: waveStrip,
         progress: progress,
         controls: controls,
       );
@@ -252,11 +254,7 @@ class TransportBar extends StatelessWidget {
       child: _body(
         desktop: desktop,
         showWaveStrip: showWaveStrip,
-        frameTable: frameTable,
-        waveTrack: waveTrack,
-        wavePlaying: wavePlaying,
-        wavePosition: wavePosition,
-        wavePositionListenable: wavePositionListenable,
+        waveStrip: waveStrip,
         progress: progress,
         controls: controls,
       ),
@@ -267,24 +265,25 @@ class TransportBar extends StatelessWidget {
   Widget _body({
     required bool desktop,
     required bool showWaveStrip,
-    required SpectrumFrameTable? frameTable,
-    required Track? waveTrack,
-    required bool wavePlaying,
-    required double wavePosition,
-    required ValueListenable<double>? wavePositionListenable,
+    required Widget waveStrip,
     required Widget progress,
     required Widget controls,
   }) {
     return Material(
       type: MaterialType.transparency,
       child: Padding(
-        // `.transport { padding: 14px 16px calc(12px + safe-area) }`（:1092）；
-        // 窄屏左右 14（老实现沿用）。
+        // `.transport { padding: 14px 16px calc(12px + safe-area) }`（:1130）；
+        // 窄屏左右 14（老实现沿用）。窄屏底边从 12 加到 30：页面已经铺满
+        // （`.app { padding: 0 }`），原来那 12px 是贴着卡片内留白用的，
+        // 现在控制行直接落到屏幕底边，补一层留白才不会压住手势条
+        // （`@media (max-width: 899px) { .transport { padding-bottom:
+        // calc(30px + env(safe-area-inset-bottom)) } }`）。安全区在本层之外
+        // 由 [SafeArea] 让出，与 CSS 的 env() 同效。
         padding: EdgeInsets.fromLTRB(
           desktop ? 16 : 14,
           14,
           desktop ? 16 : 14,
-          12,
+          desktop ? 12 : 30,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -295,15 +294,16 @@ class TransportBar extends StatelessWidget {
             // T（歌词高亮色）、水滴（卡面透明/磨砂）与睡眠定时器，其后
             // WaveStrip；歌词页（沉浸模式）开着时那三颗按钮搬到歌词页页头，
             // 这行只剩频谱。
-            _WaveRow(
-              showWaveStrip: showWaveStrip,
-              frameTable: frameTable,
-              track: waveTrack,
-              playing: wavePlaying,
-              positionSeconds: wavePosition,
-              positionListenable: wavePositionListenable,
-            ),
-            const SizedBox(height: 6),
+            _WaveRow(showWaveStrip: showWaveStrip, strip: waveStrip),
+            // 这一行到进度条的间距按 Web 的两条规则分开给：
+            //  · 沉浸模式（歌词页，频谱条在场）：`.transport { row-gap: 0 }`
+            //    + `.transport__wave { padding-bottom: 2px }` → 频谱底边到进度条
+            //    顶边就 **2px**（app.css:1173-1188）。之前写死 6px，正是用户看到的
+            //    「Flutter 的音谱条离进度条比 Web 远一截」。
+            //  · 简约模式（这行只有 T / 水滴 / 闹钟）：`.transport { gap: 12px }`
+            //    被 `.transport__wave { margin-bottom: -4px }` 抵掉 4px → **8px**
+            //    （app.css:1159-1163）。
+            SizedBox(height: showWaveStrip ? 2 : 8),
             progress,
             const SizedBox(height: _barVerticalGap),
             controls,
@@ -322,52 +322,126 @@ class TransportBar extends StatelessWidget {
 /// 这行只剩频谱 —— 与 React 的 `{!immersive && <ToolButtons />}` 同构
 /// （src/App.tsx:1043-1046）。
 class _WaveRow extends StatelessWidget {
-  const _WaveRow({
-    required this.showWaveStrip,
-    required this.frameTable,
-    required this.track,
-    required this.playing,
-    required this.positionSeconds,
-    this.positionListenable,
-  });
+  const _WaveRow({required this.showWaveStrip, required this.strip});
 
   final bool showWaveStrip;
-  final SpectrumFrameTable? frameTable;
-  final Track? track;
-  final bool playing;
-  final double positionSeconds;
 
-  /// 进度 notifier：给了就让 WaveStrip 自己订阅（只有这一片叶子跟着 4Hz 重建）。
-  final ValueListenable<double>? positionListenable;
+  /// 频谱条本体（真入口是 [_LiveWaveStrip]，预览入口是静态 WaveStrip）。
+  final Widget strip;
 
   @override
   Widget build(BuildContext context) {
-    // 画布高度按视口分档：48，满宽档（≥1680）56（app.css:2488-2494 / :5098-5100）。
-    final ultra = isUltraWide(MediaQuery.sizeOf(context).width);
-    return Row(
+    final width = MediaQuery.sizeOf(context).width;
+    final row = Row(
       children: [
         if (!showWaveStrip) ...[
           const ToolButtons(),
           const SizedBox(width: 10),
         ],
-        if (showWaveStrip)
-          Expanded(
-            child: WaveStrip(
-              frameTable: frameTable,
-              track: track,
-              playing: playing,
-              positionSeconds: positionSeconds,
-              positionListenable: positionListenable,
-              height: ultra ? kWaveStripHeightUltra : kWaveStripHeight,
+        if (showWaveStrip) Expanded(child: strip),
+      ],
+    );
+    // 窄屏歌词页：页头那组（T / 毛玻璃 / 睡眠 + 波形样式下拉）挪到频谱条上方
+    // 单独成行 —— 手机上一只手够不到页头顶端（app.css 的 `.transport__lyric-row`）。
+    // 三颗按钮仍在同一个 Padding 里起排，左端与简约模式那行完全对齐。
+    //
+    // 这一行与上面的歌词页同属「点哪儿都切回简约模式」的热区：手机退出沉浸
+    // 只剩点空白，行里两颗控件之外的地方（按钮之间、贴右的留白）点下去也该退出。
+    // 里层按钮 / 下拉自己会先进竞技场，点它们仍弹各自的面板。
+    if (showWaveStrip && !isDesktop(width)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GestureDetector(
+            key: const Key('transport-tap-to-simple'),
+            // opaque：Spacer 那块没底的像素也要能点到
+            behavior: HitTestBehavior.opaque,
+            onTap: () => context.read<LyricsPageController?>()?.close(),
+            child: Row(
+              children: const [
+                ToolButtons(),
+                Spacer(),
+                // 面板向上弹：这行已经贴着屏幕底部（React 侧同一处 `bottom: 100%`）
+                WaveStylePicker(side: ToolPanelSide.above),
+              ],
             ),
           ),
-      ],
+          const SizedBox(height: 6),
+          row,
+        ],
+      );
+    }
+    // 窄屏简约模式：这一行里三颗按钮之外的空白（它们右边到行尾）也是
+    // 「进沉浸模式」的热区 —— 与曲目区整块 `stage-tap-to-lyrics` 同一套语义，
+    // 红框下沿那一条点了同样能切过去。按钮自己是内层识别器，照旧弹面板。
+    if (!showWaveStrip && !isDesktop(width)) {
+      return GestureDetector(
+        key: const Key('transport-wave-tap-to-lyrics'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => context.read<LyricsPageController?>()?.open(),
+        child: row,
+      );
+    }
+    return row;
+  }
+}
+
+/// 真入口的频谱条：**自己订阅播放态 / 曲目 / 帧表**。
+///
+/// 为什么不能像以前那样在 [TransportBar.build] 里现取 `player.view.value.playing`
+/// 往下传：控制条在首页是 `const`，它不订阅 `PlayerState`（订阅纪律见文件头），
+/// 于是那个 `playing` 只是「恰好重建的那一刻」的快照。换曲时控制条会被
+/// `SpectrumState` 的通知重建一次，而那一刻内核还在 open、`playing` 仍是 false；
+/// 等内核真的出声，没有东西会再重建控制条 —— `WaveStrip` 就永远停在
+/// `playing=false`：ticker 不跑、`read(playing:false)` 冻在最后一帧。
+/// 真机上正是「手动切歌后频谱不律动」与「自动续播要等一阵才律动」。
+///
+/// 这里把 `player.view` 挂到频谱条这一片叶子上：播放态一变就重建
+/// （语义变化只有每次切歌几个，不是进度那种 4Hz），而且：
+///   * 曲目取 `view.current` —— 换曲时同一次通知里就是新的一首；
+///   * 帧表用 `spectrum.frameTableFor(id)` **现取** —— 它读的是状态层的当前值，
+///     所以即使这次重建比「表到货」的通知早，也不会把上一首的表画到新歌上。
+class _LiveWaveStrip extends StatelessWidget {
+  const _LiveWaveStrip({
+    required this.player,
+    required this.spectrum,
+    required this.positionListenable,
+    required this.height,
+  });
+
+  final PlayerState player;
+
+  /// 组合根注入的频谱状态层；纯展示 / 未注册 provider 时为 null（装饰回退）。
+  final SpectrumState? spectrum;
+
+  /// 进度 notifier：给了就让 WaveStrip 自己订阅（只有这一片叶子跟着 4Hz 重建）。
+  final ValueListenable<double>? positionListenable;
+
+  /// 画布高度：48，满宽档（≥1680）56（app.css:2488-2494 / :5098-5100）。
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TransportView>(
+      valueListenable: player.view,
+      builder: (context, view, _) {
+        final track = view.current;
+        return WaveStrip(
+          frameTable: track == null ? null : spectrum?.frameTableFor(track.id),
+          track: track,
+          playing: view.playing,
+          positionSeconds: player.position.value,
+          positionListenable: positionListenable,
+          height: height,
+        );
+      },
     );
   }
 }
 
 /// 控制行：桌面四钮 + 音量，窄屏五钮等距。
-class _ControlsRow extends StatelessWidget {  const _ControlsRow({
+class _ControlsRow extends StatelessWidget {
+  const _ControlsRow({
     required this.desktop,
     required this.playing,
     required this.loading,

@@ -91,6 +91,51 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('radius: 0 = 窄屏铺满档：直角裁剪、无描边', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(450, 873);
+
+    // 对应 React `@media (max-width: 899px) { .player { border: none;
+    // border-radius: 0 } }`：直角铺到视口边缘，形状交给外层容器。
+    await tester.pumpWidget(
+      wrap(
+        PlayerCard(
+          coverPath: '',
+          frostLevel: 0,
+          radius: 0,
+          children: [
+            Expanded(child: StagePreview(title: 'A', artist: 'B', album: '', total: '--:--', coverPath: '')),
+            const SizedBox(height: 100),
+          ],
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // 树上两处裁剪：玻璃层自己一层（`GlassFrostLayer.radius`）+ 卡面一层
+    // （`PlayerCard.radius`）。铺满档两处都必须是 0，否则卡片会露出圆角缺口。
+    final clips = tester.widgetList<ClipRRect>(find.byType(ClipRRect));
+    expect(clips, isNotEmpty);
+    for (final clip in clips) {
+      expect(clip.borderRadius, BorderRadius.zero);
+    }
+    // 描边一并去掉：铺满档贴着视口边缘，画 1px 边会变成屏幕四周的一条线。
+    final cardBox = find.descendant(
+      of: find.byType(PlayerCard),
+      matching: find.byType(DecoratedBox),
+    );
+    // 卡面是唯一带圆角的 DecoratedBox（`ClipRRect` 的父节点）。
+    final decoration = tester
+        .widgetList<DecoratedBox>(cardBox)
+        .map((b) => b.decoration)
+        .whereType<BoxDecoration>()
+        .firstWhere((d) => d.borderRadius != null);
+    expect(decoration.border, isNull);
+    expect(decoration.borderRadius, BorderRadius.zero);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('无封面 / 空歌词也不崩（窄屏卡内）', (tester) async {
     addTearDown(tester.view.reset);
     tester.view.devicePixelRatio = 1;

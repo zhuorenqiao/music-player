@@ -13,6 +13,7 @@ import {
   createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode,
 } from 'react';
 import { Storage } from '../lib/storage.js';
+import { applyFavicon } from '../lib/favicon';
 import { STORAGE_KEYS } from './constants';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -124,6 +125,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
     if (bg) {
       document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', bg);
+    }
+    // 页签图标也跟着换色：图形固定是页头那个 logo，只把音柱 / 描边换成当前主题色
+    const accent = getComputedStyle(root).getPropertyValue('--accent').trim();
+    if (accent) {
+      applyFavicon(accent);
     }
   }, [resolvedMode, color]);
 

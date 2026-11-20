@@ -32,6 +32,12 @@ interface Translation {
   translatedLrc: string;
   originalLrc: string;
   source: string;
+  /**
+   * 静态部署拿不到人工译文时，用 MyMemory 机翻兜底：
+   * 已经与展示行一一对齐（第 i 项就是第 i 行的译文），不再走时间轴对齐。
+   */
+  translatedLines?: string[];
+  machine?: boolean;
 }
 
 /** 译文这一路的进度，界面只在 loading / none / error / unavailable 时给提示。 */
@@ -166,6 +172,10 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
     if (!bilingual || !translation || displayLines.length === 0) {
       return displayLines.map(() => '');
     }
+    if (translation.translatedLines) {
+      // 机翻是「一行对一行」回来的，不需要再算时间轴；行数对不上时缺的补空。
+      return displayLines.map((_, index) => translation.translatedLines?.[index] || '');
+    }
     return alignTranslation(displayLines, translation.translatedLrc, translation.originalLrc);
   }, [bilingual, displayLines, translation]);
 
@@ -230,18 +240,26 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
       setTransState('loading');
       setTransReason('');
     }
-    void fetchTranslation(track, { signal: controller.signal, useCache: !force }).then((result: {
-      status: string; reason?: string; message?: string; source?: string; translatedLyrics?: string; originalLyrics?: string;
+    void fetchTranslation(track, { signal: controller.signal, useCache: !force, lines: displayLines }).then((result: {
+      status: string; reason?: string; message?: string; source?: string; translatedLyrics?: string; translatedLines?: string[]; originalLyrics?: string; machine?: boolean;
     }) => {
       if (controller.signal.aborted) {
         return;
       }
-      if (result.status === 'ok' && result.translatedLyrics) {
-        const value: Translation = {
-          translatedLrc: result.translatedLyrics,
-          originalLrc: result.originalLyrics || '',
-          source: result.source || '网易云译文库',
-        };
+      if (result.status === 'ok' && (result.translatedLyrics || result.translatedLines?.length)) {
+        const value: Translation = result.translatedLines
+          ? {
+            translatedLrc: '',
+            originalLrc: '',
+            source: result.source || '机器翻译 · MyMemory',
+            translatedLines: result.translatedLines,
+            machine: result.machine === true,
+          }
+          : {
+            translatedLrc: result.translatedLyrics || '',
+            originalLrc: result.originalLyrics || '',
+            source: result.source || '网易云译文库',
+          };
         transCacheRef.current.set(cacheKey, { translation: value, state: 'ready', reason: '' });
         setTranslation(value);
         translationTrackRef.current = track.id;
@@ -281,6 +299,9 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
     if (transState === 'loading') {
       return '正在匹配中文译文…';
     }
+    if (transState === 'ready') {
+      return translation?.machine ? '网页版使用机器翻译（仅供参考）' : '';
+    }
     if (transState === 'none') {
       if (transReason === 'song-not-matched') {
         return '译文库没匹配到这首歌（曲名/歌手对不上）';
@@ -294,10 +315,13 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
       return '中文译文需要本地代理服务（npm run dev）';
     }
     if (transState === 'error') {
+      if (transReason === 'machine-quota') {
+        return '机器翻译额度已用完，稍后再试';
+      }
       return '中文译文获取失败，关掉再打开「双语」可重试';
     }
     return '';
-  }, [transReason, transState]);
+  }, [transReason, transState, translation]);
 
   const retry = useCallback(() => {
     if (track) {

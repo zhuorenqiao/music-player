@@ -79,10 +79,15 @@ class GlassFrostLayer extends StatelessWidget {
     this.colorB,
     this.gradientDegrees = 165,
     this.shadow,
+    this.radius = kRadiusXl,
     super.key,
   });
 
   final Widget child;
+
+  /// 卡面圆角（裁剪用）。`0` = 铺满档：窄屏的播放卡直角铺到视口边缘
+  /// （React `@media (max-width: 899px) { .player { border-radius: 0 } }`）。
+  final double radius;
 
   /// 玻璃后垫的封面路径（`coverForDisplay` 的当前那张）；空串不垫。
   final String coverPath;
@@ -207,7 +212,7 @@ class GlassFrostLayer extends StatelessWidget {
     );
 
     final surface = ClipRRect(
-      borderRadius: BorderRadius.circular(kRadiusXl),
+      borderRadius: BorderRadius.circular(radius),
       child: Stack(
         // 内容（最后一个非定位子节点）决定盒子大小；装饰层用 Positioned.fill
         // 铺满它 —— 这样窄屏「高度由内容决定」的卡片也不会拿到无界约束。
@@ -233,7 +238,7 @@ class GlassFrostLayer extends StatelessWidget {
       children: [
         Positioned.fill(
           child: RepaintBoundary(
-            child: CustomPaint(painter: _OutsideShadowPainter(shadows: shadow!)),
+            child: CustomPaint(painter: _OutsideShadowPainter(shadows: shadow!, radius: radius)),
           ),
         ),
         surface,
@@ -244,9 +249,12 @@ class GlassFrostLayer extends StatelessWidget {
 
 /// 把 `box-shadow` 画成盒子外面的环：盒子内部留空（挖掉圆角矩形）。
 class _OutsideShadowPainter extends CustomPainter {
-  const _OutsideShadowPainter({required this.shadows});
+  const _OutsideShadowPainter({required this.shadows, required this.radius});
 
   final List<BoxShadow> shadows;
+
+  /// 盒子圆角（与 [GlassFrostLayer.radius] 同源；0 表示直角铺满档）。
+  final double radius;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -255,14 +263,14 @@ class _OutsideShadowPainter extends CustomPainter {
     if (size.isEmpty) return;
     final box = RRect.fromRectAndRadius(
       Offset.zero & size,
-      Radius.circular(math.min(kRadiusXl, size.shortestSide / 2)),
+      Radius.circular(math.min(radius, size.shortestSide / 2)),
     );
     final hole = Path()..addRRect(box);
     for (final s in shadows) {
       final spread = s.spreadRadius;
       final rect = (Offset.zero & size).shift(s.offset).inflate(spread);
       if (rect.width <= 0 || rect.height <= 0) continue;
-      final radius = math.max(0.0, kRadiusXl + spread);
+      final radius = math.max(0.0, this.radius + spread);
       final shape = Path()
         ..addRRect(
           RRect.fromRectAndRadius(
@@ -281,7 +289,8 @@ class _OutsideShadowPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_OutsideShadowPainter old) => old.shadows != shadows;
+  bool shouldRepaint(_OutsideShadowPainter old) =>
+      old.shadows != shadows || old.radius != radius;
 }
 
 /// `.glass-frost img`：当前封面 → 一片色雾。

@@ -86,8 +86,14 @@ class _SheetCard extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: radius,
-        // 透明 Material：InkWell 要有画布，底色已经在外面画好了
-        child: Material(type: MaterialType.transparency, child: child),
+        // 透明 Material：InkWell 要有画布，底色已经在外面画好了。
+        //
+        // edge-to-edge 之后弹层会一直铺到屏幕底边（手势条底下），所以内容
+        // 自己让出底部安全区 —— 卡面照旧铺满，只是最后一行不会被手势条压住。
+        child: Material(
+          type: MaterialType.transparency,
+          child: SafeArea(top: false, child: child),
+        ),
       ),
     );
   }

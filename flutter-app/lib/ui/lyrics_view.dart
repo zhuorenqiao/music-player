@@ -37,11 +37,15 @@
 //   包 `Scrollbar`（material/app.dart:857-876 在 Windows 桌面确实会包），所以还要
 //   确认没别的地方塞 Scrollbar；本文件不出现任何 Scrollbar。
 //
-// * **当前行只换色 + 字重 650，无底色无辉光**（:1943-1946、:1963-1966 的注释
-//   「发光会在字周围糊出一团颜色，看着像背景高亮」）。CSS 的 650 在 Flutter 没有
-//   对应枚举：用 `FontWeight.w600`（Material 的 600），不用 `FontWeight.lerp` 造
-//   非标权重 —— 字重值可以构造成 650，但字体不一定有那一档，渲染结果不可控。
-//   译文行**保持 400**（:1980-1983「一行里也要分得出主次」）。
+// * **当前行只换色 + 字重 650 + 放大一档，无底色无辉光**（:1943-1946、:1963-1966
+//   的注释「发光会在字周围糊出一团颜色，看着像背景高亮」）。放大是 1.2 倍
+//   （`.lyrics__line.is-active .lyrics__text` 的 `font-size: 1.2em`），只作用于
+//   原文 —— 行高与居中按真实字号算，不是把整行 transform 缩放（那会让字压到
+//   上下相邻行）。放大与缩回是 0.28s 渐变（CSS `transition: font-size`），
+//   首帧不动画。CSS 的 650 在 Flutter 没有对应枚举：用 `FontWeight.w600`
+//   （Material 的 600），不用 `FontWeight.lerp` 造非标权重 —— 字重值可以构造成
+//   650，但字体不一定有那一档，渲染结果不可控。
+//   译文行**保持 400、原字号**（:1980-1983「一行里也要分得出主次」）。
 //
 // * **不透明度挂在整行上**（CSS 的 `li { opacity: var(--past-opacity) }`），不是
 //   乘进颜色。两者对原文等价，但译文自身还带 `.85`，乘进颜色会变成
@@ -71,10 +75,11 @@
 //   根本看不到 —— 下一行变化时照旧跟随。
 //
 // * **两档规格表逐字**（compact / full）：容器左右 padding 4 / 8，行内边距
-//   `6 8` / `12 14`，字号 17 / 19，行高 1.55（继承）/ 1.5，圆角都是 10，译文
-//   字号 13 / 14、上间距 1 / 3、行高都 1.45、不透明度 .85。唱过的行 `textDim` +
-//   不透明度 compact .62（`--past-opacity`）/ full .5（`--past-opacity-page`）。
-//   颜色一律 `context.tokens`，本文件不出现颜色字面量（ui/ 内的规矩）。
+//   `6 8` / `12 14`，字号 17 / 17（两档同字号：切换简约 / 沉浸模式不跳字号，
+//   对表 React `.lyrics-page .lyrics--full` 那档 17px 覆盖），行高 1.55 / 1.5，
+//   圆角都是 10，译文字号 13 / 13、上间距 1 / 3、行高都 1.45、不透明度 .85。
+//   唱过的行 `textDim` + 不透明度 compact .62（`--past-opacity`）/ full .5
+//   （`--past-opacity-page`）。颜色一律 `context.tokens`，本文件不出现颜色字面量（ui/ 内的规矩）。
 import 'dart:async';
 
 import 'package:flutter/gestures.dart';
@@ -104,6 +109,17 @@ const Duration kLyricsManualHold = Duration(milliseconds: 2600);
 
 /// 空行占位符（App.tsx:275 / :309 的 `text || '·'`）。
 const String _kGapGlyph = '·';
+
+/// 当前行（高亮行）的字号放大倍数：只放大这一行的原文，译文维持原字号。
+/// 对译 React `.lyrics__line.is-active .lyrics__text` 的 `font-size: 1.2em`
+/// （`em` 相对行本身的基础字号，所以「T」面板的字号缩放照样叠乘）。
+const double kActiveLyricFontScale = 1.2;
+
+/// 字号渐变的时长与曲线，与 CSS 的
+/// `transition: font-size 0.28s var(--ease)`（`--ease: cubic-bezier(0.22, 0.61, 0.36, 1)`）
+/// 对齐：换行时旧当前行缩回、新当前行长出来都是同一条过渡。
+const Duration _kActiveFontDuration = Duration(milliseconds: 280);
+const Curve _kActiveFontCurve = Cubic(0.22, 0.61, 0.36, 1);
 
 /// 一档的规格数值。两档的差异全在这张表里，渲染代码不写死任何一档。
 ///
@@ -151,9 +167,12 @@ class _LyricsMetrics {
   static const _LyricsMetrics full = _LyricsMetrics(
     horizontalPadding: 8,
     linePadding: EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-    fontSize: 19,
+    // 与 compact 同字号：React 歌词页那一档覆盖成 17px
+    // （`.lyrics-page .lyrics--full .lyrics__line`），不是通用 `.lyrics--full` 的 19。
+    // 切换简约 / 沉浸模式时同一句歌词不跳字号。
+    fontSize: 17,
     lineHeight: 1.5,
-    transFontSize: 14,
+    transFontSize: 13,
     transTopGap: 3,
     pastOpacity: 0.5,
   );
@@ -214,10 +233,27 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
   Timer? _manualTimer;
   bool _manualHeld = false;
 
+  /// 上一次布局的视口高度。
+  ///
+  /// 只用来判断「尺寸真的变了」：`ScrollMetricsNotification` 在内容高度变化时也会
+  /// 发（例如打开双语后每行多一段译文），那种情况没有重新对位的必要 —— 当前行的
+  /// 中线本来就不会因为别处多一行而跑掉。
+  double? _viewportDimension;
+
   @override
   void initState() {
     super.initState();
     _syncKeys();
+    // 新挂载（打开歌词页 / 从沉浸模式切回简约模式）时首帧就把当前行放到中间。
+    //
+    // 以前只有 `didUpdateWidget` 里「activeIndex 变了才跟随」，新挂载这一下没有
+    // 任何人触发跟随：列表停在 offset 0，而当前行可能在几十行之外 —— 切过去看到
+    // 的永远是前几行，高亮行停在屏幕外，看起来就是「模式切换后高亮没同步」。
+    // 这一档不做动画：切换本身是瞬时的，滑过去反而像没对齐。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _centerOnCurrent(animate: false);
+    });
   }
 
   @override
@@ -231,6 +267,16 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
   void didUpdateWidget(covariant LyricsLinesView oldWidget) {
     super.didUpdateWidget(oldWidget);
     _syncKeys();
+    // 档位换了（compact ⇄ full，同一棵树里换规格）：字号两档一致，但行高 /
+    // 行内边距 / 译文间距不同，旧偏移按旧尺寸算的、已经对不上，直接重对当前行
+    // （不做动画）。
+    if (oldWidget.variant != widget.variant) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _centerOnCurrent(animate: false);
+      });
+      return;
+    }
     // 歌词内容换了（换歌 / 同一首的纯文本升级成带时间轴）：旧歌的滚动位置不能
     // 留给新歌 —— 拨回最上方。判定用**列表身份**：LyricsState 每次重算都造新的
     // displayLines，同一首的行内容没变时身份也不变。
@@ -280,27 +326,50 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
     });
   }
 
-  /// 跟随当前行；手动暂停期内不动。
+  /// 把当前行对到视口中线；[animate] = false 用于「刚进入这个视图 / 尺寸刚变」。
   ///
   /// 与 App.tsx:251-260 一致：`activeIndex < 0`、没有这一行、或还在手动暂停期内
-  /// 都直接返回。真实滚动排在下一帧，避免在构建期改布局。
-  void _followIfAllowed() {
+  /// 都直接返回。
+  void _centerOnCurrent({required bool animate}) {
     final index = widget.activeIndex;
     if (index < 0 || index >= _itemKeys.length) return;
     if (_manualHeld) return;
+    final context = _itemKeys[index].currentContext;
+    if (context == null) return;
+    // 减少动态效果：不滚动动画，直接跳到位（项目既有约定）。
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    Scrollable.ensureVisible(
+      context,
+      alignment: 0.5,
+      duration: (animate && !reduceMotion) ? _kFollowDuration : Duration.zero,
+      curve: _kFollowCurve,
+    );
+  }
+
+  /// 跟随当前行；手动暂停期内不动。
+  ///
+  /// 滚动排在下一帧，避免在构建期改布局。
+  void _followIfAllowed() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final context = _itemKeys[index].currentContext;
-      if (context == null) return;
-      // 减少动态效果：不滚动动画，直接跳到位（项目既有约定）。
-      final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-      Scrollable.ensureVisible(
-        context,
-        alignment: 0.5,
-        duration: reduceMotion ? Duration.zero : _kFollowDuration,
-        curve: _kFollowCurve,
-      );
+      _centerOnCurrent(animate: true);
     });
+  }
+
+  /// 视图尺寸变化时重新对位。
+  ///
+  /// 场景正是「简约 ⇄ 沉浸切换」：整张播放卡重排、歌词区高度从预览条变成整页，
+  /// 新挂载的首帧偶尔在布局还没落定时量到旧尺寸；窗口缩放、字号 / 字体换档同理。
+  /// 只在视口高度真的变了时动，内容变高（打开双语）不重新居中。
+  bool _onScrollMetrics(ScrollMetricsNotification notification) {
+    final dimension = notification.metrics.viewportDimension;
+    if (_viewportDimension == dimension) return false;
+    _viewportDimension = dimension;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _centerOnCurrent(animate: false);
+    });
+    return false;
   }
 
   @override
@@ -312,36 +381,39 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
     }
     return ScrollConfiguration(
       // 歌词两处都不显示滚动条、也不占位（CSS :1893-1900）。
-      behavior: ScrollConfiguration.of(
-        context,
-      ).copyWith(scrollbars: false, overscroll: false),
-      child: Listener(
-        // 滚轮：算手动（App.tsx:291 的 onWheel）。
-        onPointerSignal: (event) {
-          if (event is PointerScrollEvent) _beginManual();
-        },
-        child: NotificationListener<ScrollStartNotification>(
-          onNotification: (notification) {
-            // 触摸拖动：算手动（App.tsx:292 的 onTouchMove）。
-            // `dragDetails == null` 是程序化滚动（含本文件的居中），绝不能算。
-            if (notification.dragDetails != null) _beginManual();
-            return false;
+      behavior: ScrollConfiguration.of(context)
+          .copyWith(scrollbars: false, overscroll: false),
+      // 视口尺寸变化（切模式后重排 / 窗口缩放）→ 当前行重新对位，见 _onScrollMetrics。
+      child: NotificationListener<ScrollMetricsNotification>(
+        onNotification: _onScrollMetrics,
+        child: Listener(
+          // 滚轮：算手动（App.tsx:291 的 onWheel）。
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) _beginManual();
           },
-          child: SingleChildScrollView(
-            key: const Key('lyrics-scroll'),
-            // 自己持控制器：换歌时要把位置拨回最上方（见 _resetToTop）。
-            controller: _scrollController,
-            child: Padding(
-              key: const Key('lyrics-content-padding'),
-              padding: EdgeInsets.symmetric(
-                horizontal: metrics.horizontalPadding,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (var index = 0; index < widget.lines.length; index++)
-                    _buildLine(context, metrics, index),
-                ],
+          child: NotificationListener<ScrollStartNotification>(
+            onNotification: (notification) {
+              // 触摸拖动：算手动（App.tsx:292 的 onTouchMove）。
+              // `dragDetails == null` 是程序化滚动（含本文件的居中），绝不能算。
+              if (notification.dragDetails != null) _beginManual();
+              return false;
+            },
+            child: SingleChildScrollView(
+              key: const Key('lyrics-scroll'),
+              // 自己持控制器：换歌时要把位置拨回最上方（见 _resetToTop）。
+              controller: _scrollController,
+              child: Padding(
+                key: const Key('lyrics-content-padding'),
+                padding: EdgeInsets.symmetric(
+                  horizontal: metrics.horizontalPadding,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var index = 0; index < widget.lines.length; index++)
+                      _buildLine(context, metrics, index),
+                  ],
+                ),
               ),
             ),
           ),
@@ -399,26 +471,41 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
       opacity = 1;
     }
 
-    // 当前行只换色 + 加粗；译文行保持 400（:1980-1983）。
+    // 当前行换色 + 加粗 + 放大一档；译文行保持 400、原字号（:1980-1983）。
     // 字号乘上缩放系数（CSS 那边是 calc(原 px * var(--lyric-scale))）。
-    final textStyle = applyLyricFont(
-      TextStyle(
-        fontSize: metrics.fontSize * scale,
-        height: metrics.lineHeight,
-        color: color,
-        fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-      ),
-      font,
-    );
+    final baseFontSize = metrics.fontSize * scale;
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
-    final Widget mainText = canSeek
-        ? GestureDetector(
-            // 热区只覆盖文字本身：包文字，不包整行（:1948-1957）。
-            behavior: HitTestBehavior.opaque,
-            onTap: () => widget.onSeek!(line.time),
-            child: _lineText(textStyle, line.text, isEmpty),
-          )
-        : _lineText(textStyle, line.text, isEmpty);
+    Widget mainTextAt(double factor) {
+      final textStyle = applyLyricFont(
+        TextStyle(
+          fontSize: baseFontSize * factor,
+          height: metrics.lineHeight,
+          color: color,
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+        ),
+        font,
+      );
+      return canSeek
+          ? GestureDetector(
+              // 热区只覆盖文字本身：包文字，不包整行（:1948-1957）。
+              behavior: HitTestBehavior.opaque,
+              onTap: () => widget.onSeek!(line.time),
+              child: _lineText(textStyle, line.text, isEmpty),
+            )
+          : _lineText(textStyle, line.text, isEmpty);
+    }
+
+    // 放大 / 缩回都走渐变：目标倍数交给 TweenAnimationBuilder 插值，换行时旧行
+    // 在 0.28s 内缩回 1 倍、新行同时长到 1.2 倍；首帧不动画（直接落在目标值，
+    // 与切模式重挂载时的行为一致）。减少动态效果时直接到位。
+    final targetFactor = isActive ? kActiveLyricFontScale : 1.0;
+    final Widget mainText = TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: targetFactor, end: targetFactor),
+      duration: reduceMotion ? Duration.zero : _kActiveFontDuration,
+      curve: _kActiveFontCurve,
+      builder: (context, factor, _) => mainTextAt(factor),
+    );
 
     final Widget row = Column(
       mainAxisSize: MainAxisSize.min,
@@ -476,7 +563,10 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
     isEmpty ? _kGapGlyph : text,
     textAlign: TextAlign.center,
     style: isEmpty
-        ? style.copyWith(letterSpacing: 4, color: style.color!.withValues(alpha: 0.4))
+        ? style.copyWith(
+            letterSpacing: 4,
+            color: style.color!.withValues(alpha: 0.4),
+          )
         : style,
   );
 }
@@ -495,10 +585,14 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
 ///
 /// 修法不是砍行数（全量构建是居中定位的硬前提，见文件头），而是把「tick」和
 /// 「重建」拆开：本 widget 缓存上一次交出去的列表实例，**只有 activeIndex 真的
-/// 换了**（或歌词 / 译文换了身份）才造一个新的。`Element.updateChild` 对
+/// 换了**（或歌词 / 译文真的变了）才造一个新的。`Element.updateChild` 对
 /// 「同一个 widget 实例」会直接短路，整棵歌词树因此完全不重建。一句歌词持续
 /// 3~5 秒，于是重建从 4Hz 降到「换行时一次」—— 与 CSS 那边只切 `is-active`
 /// 类的代价同阶。
+///
+/// 「译文真的变了」用 [[BilingualState.revision]] 判：开关切换、译文异步到位都
+/// 不改行号，若只看 activeIndex，点了「双语」要等下一行才生效（关掉后译文还会
+/// 一直留在屏幕上）。
 class LyricsView extends StatefulWidget {
   const LyricsView({required this.variant, super.key});
 
@@ -519,6 +613,13 @@ class _LyricsViewState extends State<LyricsView> {
   double _cachedPhase = double.nan;
   List<LyricLine>? _cachedLines;
   LyricsVariant? _cachedVariant;
+
+  /// 译文可见状态的版本（`BilingualState.revision`）。
+  ///
+  /// 必须参与判等：双语开关的切换、译文异步到位都不改行号，只看
+  /// `activeIndex` 会让「刚点开的双语」等到下一行才出现（关掉也一样，
+  /// 译文会留在屏幕上直到换行）。
+  int _cachedRevision = -1;
 
   @override
   Widget build(BuildContext context) {
@@ -546,6 +647,7 @@ class _LyricsViewState extends State<LyricsView> {
         // 缓存永远失效 —— 这条在实测里表现为「加了缓存还是 34ms/次」。
         if (cached != null &&
             _cachedPhase == phase &&
+            _cachedRevision == bilingual.revision &&
             identical(_cachedLines, lines) &&
             _cachedVariant == widget.variant) {
           return cached;
@@ -560,6 +662,7 @@ class _LyricsViewState extends State<LyricsView> {
         );
         _cachedList = built;
         _cachedPhase = phase;
+        _cachedRevision = bilingual.revision;
         _cachedLines = lines;
         _cachedVariant = widget.variant;
         return built;

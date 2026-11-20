@@ -13,11 +13,14 @@ import 'package:light_music/lyrics/translate_source.dart';
 import 'package:light_music/lyrics/upstream.dart';
 import 'package:light_music/playback/track.dart';
 import 'package:light_music/state/bilingual_state.dart';
+import 'package:light_music/state/lyrics_page_controller.dart';
 import 'package:light_music/state/lyrics_state.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/ui/lyrics_page.dart';
+import 'package:light_music/ui/tool_buttons.dart';
+import 'package:light_music/ui/wave_style_picker.dart';
 import 'package:provider/provider.dart';
 
 class _Matcher implements LyricsMatcher {
@@ -67,12 +70,16 @@ Widget harness({
   required LyricsState lyrics,
   required BilingualState bilingual,
   required PlayerState player,
+  LyricsPageController? page,
   required Widget child,
 }) => MultiProvider(
   providers: [
     ChangeNotifierProvider<LyricsState>.value(value: lyrics),
     ChangeNotifierProvider<BilingualState>.value(value: bilingual),
     ChangeNotifierProvider<PlayerState>.value(value: player),
+    // 歌词页开合：不传就是纯展示（旧用例一律不传，行为不变）。
+    if (page != null)
+      ChangeNotifierProvider<LyricsPageController>.value(value: page),
   ],
   child: MaterialApp(
     theme: buildTheme().copyWith(extensions: const [AppTokensData(tokens: AppTokens.dark)]),
@@ -246,5 +253,112 @@ void main() {
     final narrowCard = tester.getRect(find.byType(LyricsPage));
     expect(narrow.left - narrowCard.left, closeTo(16, 0.6));
     expect(narrow.top - narrowCard.top, closeTo(16, 0.6));
+  });
+
+  testWidgets('小屏：点正文空白切回简约模式；点歌词行仍定位、不退出', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    // 手机档（<900）：热区只在这一档存在
+    tester.view.physicalSize = const Size(430, 900);
+    lyrics.attach(Track(
+      id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true,
+    ));
+    await bilingual.settle();
+    final page = LyricsPageController()..open();
+    addTearDown(page.dispose);
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, page: page,
+      child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('lyrics-tap-to-simple')), findsOneWidget);
+
+    // 点歌词行：里层那颗「定位播放」的识别器先入先赢，页面不退出
+    await tester.tap(find.text('Hello'));
+    await tester.pumpAndSettle();
+    expect(page.isOpen, isTrue, reason: '点歌词文字仍是定位，不该切回简约模式');
+
+    // 点正文底部留白（最后一行歌词之下）：切回简约模式
+    final zone = tester.getRect(find.byKey(const Key('lyrics-tap-to-simple')));
+    await tester.tapAt(Offset(zone.left + 4, zone.bottom - 4));
+    await tester.pumpAndSettle();
+    expect(page.isOpen, isFalse, reason: '点空白应切回简约模式');
+  });
+
+  testWidgets('小屏：点歌名那条带（页头）也能切回简约模式', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(430, 900);
+    lyrics.attach(Track(
+      id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true,
+    ));
+    await bilingual.settle();
+    final page = LyricsPageController()..open();
+    addTearDown(page.dispose);
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, page: page,
+      child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+
+    // 热区包住整页（含页头）：从前只包正文，点歌名那一带没反应
+    await tester.tap(find.text('A').first);
+    await tester.pumpAndSettle();
+    expect(page.isOpen, isFalse, reason: '点歌名那一带也应切回简约模式');
+  });
+
+  testWidgets('桌面（≥900）不做这个热区（有 Esc / L，避免鼠标误点留白退出）', (tester) async {
+    useDesktopViewport(tester);
+    lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
+    await bilingual.settle();
+    final page = LyricsPageController()..open();
+    addTearDown(page.dispose);
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, page: page,
+      child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('lyrics-tap-to-simple')), findsNothing);
+  });
+
+  testWidgets('窄屏页头不再挂「T/水滴/闹钟」与波形下拉（它们下移到控制条）', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(430, 900);
+    lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
+    await bilingual.settle();
+    final page = LyricsPageController()..open();
+    addTearDown(page.dispose);
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, page: page,
+      child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+
+    // 页头只剩歌名 + 艺人（见 transport.dart 的 `_WaveRow`：窄屏那组搬到频谱上方）
+    expect(find.byType(ToolButtons), findsNothing);
+    expect(find.byType(WaveStylePicker), findsNothing);
+  });
+
+  testWidgets('桌面（≥900）页头仍带那三颗按钮与波形下拉', (tester) async {
+    useDesktopViewport(tester);
+    lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
+    await bilingual.settle();
+    final page = LyricsPageController()..open();
+    addTearDown(page.dispose);
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, page: page,
+      child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ToolButtons), findsOneWidget);
+    expect(find.byType(WaveStylePicker), findsOneWidget);
   });
 }

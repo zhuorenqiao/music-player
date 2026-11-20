@@ -58,6 +58,40 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('与 Web 对齐：说明行、药丸分段、竖排 22px 色卡、340 宽', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 800);
+    addTearDown(tester.view.reset);
+    final state = await ThemeState.load(AppPrefs.inMemory());
+    await tester.pumpWidget(wrap(state));
+
+    // 面板宽度：Web `.drawer__panel` 是 `min(340px, 88vw)`（旧的 Flutter 写死 312）。
+    expect(tester.getSize(find.byType(ThemeDrawer)).width, ThemeDrawer.width);
+
+    // 抬头多了说明行（`.drawer__hint`，一级菜单那档没有）。
+    expect(find.text('明暗和主题色分开设置，选择会记住'), findsOneWidget);
+
+    // 三段选择是一颗药丸里的「渐变」选中块（旧实现是三个独立淡底方块）。
+    final seg = tester.widget<AnimatedContainer>(
+      find.ancestor(of: find.text('系统'), matching: find.byType(AnimatedContainer)).first,
+    );
+    final segDecoration = seg.decoration! as BoxDecoration;
+    expect(segDecoration.gradient, isNotNull, reason: '选中项铺强调色渐变');
+    expect(
+      (segDecoration.borderRadius! as BorderRadius).topLeft.x,
+      greaterThan(100),
+      reason: '药丸圆角（= --radius-pill）',
+    );
+
+    // 色卡是竖排：色点在文字上方，且色点 22px（旧实现横排、12px）。
+    final dot = tester.getRect(find.byKey(const Key('swatch-dot-mint')));
+    final label = tester.getRect(find.text('薄荷'));
+    expect(dot.width, 22);
+    expect(dot.height, 22);
+    expect(dot.bottom, lessThanOrEqualTo(label.top), reason: '色点在上、文字在下');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('mode==system 时提示行出现并随平台亮度解析', (tester) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(800, 800);

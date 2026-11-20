@@ -23,10 +23,10 @@ import 'toast_state.dart';
 /// 缺省时长（分钟）：面板打开时滑杆停在这一档，自定义输入也预填它。
 const int kSleepTimerDefaultMinutes = 10;
 
-/// 时长范围（分钟）：滑杆走的是这一整段（1 分钟 ~ 16 小时 39 分钟），
+/// 时长范围（分钟）：滑杆走的是这一整段（1 分钟 ~ 4 小时），
 /// 自定义输入框也夹在这里。
 const int kSleepTimerMinMinutes = 1;
-const int kSleepTimerMaxMinutes = 999;
+const int kSleepTimerMaxMinutes = 240;
 
 /// 剩余不足这一分钟就算「快到了」（按钮上换个颜色提醒）。
 const Duration kSleepTimerEndingThreshold = Duration(minutes: 1);

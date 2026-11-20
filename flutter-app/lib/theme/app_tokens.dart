@@ -51,6 +51,7 @@ class AppTokens {
     required this.dangerLine,
     required this.shadowCard,
     required this.shadowBar,
+    required this.shadowPop,
     required this.glassBlurSigma,
     required this.lightboxScrim,
     required this.glowA,
@@ -189,6 +190,14 @@ class AppTokens {
   /// `--shadow-bar`：深色 `0 -14px 44px -24px rgba(0,0,0,0.95)`（app.css:114），
   /// 浅色 `0 -12px 36px -22px rgba(24,42,60,0.28)`（app.css:191）。
   final List<BoxShadow> shadowBar;
+
+  /// `--shadow-pop`：浮层面板（右侧抽屉 / 弹出面板）的投影。
+  /// 深色 `0 24px 52px -24px rgba(0,0,0,0.95)`（app.css:84），
+  /// 浅色 `0 20px 44px -22px rgba(24,42,60,0.32)`（app.css:195）。
+  ///
+  /// 比 `--shadow-card` 更「贴」（blur 52 vs 60、spread -24 vs -34、浅色略轻）：
+  /// 抽屉是浮在页面之上的一次性浮层，CSS 特意给了单独一档。
+  final List<BoxShadow> shadowPop;
 
   /// 毛玻璃强度：CSS 里底栏是 `backdrop-filter: blur(20px)`。
   final double glassBlurSigma;
@@ -331,6 +340,15 @@ class AppTokens {
         spreadRadius: -24,
       ),
     ],
+    // 0 24px 52px -24px rgba(0, 0, 0, 0.95)（app.css:84）
+    shadowPop: <BoxShadow>[
+      BoxShadow(
+        color: Color(0xF2000000),
+        offset: Offset(0, 24),
+        blurRadius: 52,
+        spreadRadius: -24,
+      ),
+    ],
     glassBlurSigma: 20,
     lightboxScrim: Color(0xDB04080C), // rgba(4, 8, 12, 0.86)
     glowA: Color(0x292EE6A8), // --glow-a: rgba(46, 230, 168, 0.16)
@@ -409,6 +427,15 @@ class AppTokens {
         color: Color(0xF2000000),
         offset: Offset(0, -14),
         blurRadius: 44,
+        spreadRadius: -24,
+      ),
+    ],
+    // --shadow-pop 未在粉 / 蓝的深色覆写区出现，沿用深色默认。
+    shadowPop: <BoxShadow>[
+      BoxShadow(
+        color: Color(0xF2000000),
+        offset: Offset(0, 24),
+        blurRadius: 52,
         spreadRadius: -24,
       ),
     ],
@@ -493,6 +520,15 @@ class AppTokens {
         spreadRadius: -24,
       ),
     ],
+    // --shadow-pop 未在粉 / 蓝的深色覆写区出现，沿用深色默认。
+    shadowPop: <BoxShadow>[
+      BoxShadow(
+        color: Color(0xF2000000),
+        offset: Offset(0, 24),
+        blurRadius: 52,
+        spreadRadius: -24,
+      ),
+    ],
     glassBlurSigma: 20,
     lightboxScrim: Color(0xDB04080C), // 沿用深色默认
     glowA: Color(0x384D8DFF), // rgba(77, 141, 255, 0.22)
@@ -533,9 +569,9 @@ class AppTokens {
     textFaint: Color(0xFF5D7083), // #5d7083
     accent: Color(0xFF12B98C), // #12b98c
     accentLight: Color(0xFF0A7A5D), // #0a7a5d
-    // app.css:129-214 没有 --accent-ink 覆写行，逐字原则沿用 :root 的 #04231b；
-    // 该值在浅色底上对比度如何是 M3 真机验项（消费点是 onPrimary，薄荷主按钮）。
-    accentInk: Color(0xFF04231B),
+    // 浅色：实底按钮（accent 填色）的图标 / 文字压白（app.css 的 --accent-ink 覆写）。
+    // 白底 / 浅底按钮不走这个 token（走 text / accentLight），不受影响。
+    accentInk: Color(0xFFFFFFFF),
     accentRgb: (18, 185, 140), // 18 185 140
     danger: Color(0xFFC9253F), // #c9253f
     dangerInk: Color(0xFF9D1B30), // #9d1b30
@@ -573,6 +609,15 @@ class AppTokens {
         color: Color(0x47182A3C), // rgba(24, 42, 60, 0.28)
         offset: Offset(0, -12),
         blurRadius: 36,
+        spreadRadius: -22,
+      ),
+    ],
+    // 0 20px 44px -22px rgba(24, 42, 60, 0.32)（app.css:195）
+    shadowPop: <BoxShadow>[
+      BoxShadow(
+        color: Color(0x52182A3C),
+        offset: Offset(0, 20),
+        blurRadius: 44,
         spreadRadius: -22,
       ),
     ],
@@ -619,8 +664,8 @@ class AppTokens {
     textFaint: Color(0xFF5D7083),
     accent: Color(0xFFEC4F92), // #ec4f92
     accentLight: Color(0xFFA3175A), // #a3175a
-    // 浅色粉同样没有 --accent-ink 覆写行，沿用 :root 的 #04231b。
-    accentInk: Color(0xFF04231B),
+    // 浅色粉同样压白（与浅色薄荷同一条规则）。
+    accentInk: Color(0xFFFFFFFF),
     accentRgb: (236, 79, 146), // 236 79 146
     danger: Color(0xFFC9253F), // 浅色危险态翻转沿用浅色薄荷
     dangerInk: Color(0xFF9D1B30),
@@ -656,6 +701,15 @@ class AppTokens {
         color: Color(0x47182A3C),
         offset: Offset(0, -12),
         blurRadius: 36,
+        spreadRadius: -22,
+      ),
+    ],
+    // --shadow-pop 未在粉 / 蓝的浅色覆写区出现，沿用浅色薄荷（app.css:195）。
+    shadowPop: <BoxShadow>[
+      BoxShadow(
+        color: Color(0x52182A3C),
+        offset: Offset(0, 20),
+        blurRadius: 44,
         spreadRadius: -22,
       ),
     ],
@@ -699,8 +753,8 @@ class AppTokens {
     textFaint: Color(0xFF5D7083),
     accent: Color(0xFF3B7CF6), // #3b7cf6
     accentLight: Color(0xFF1B4FAE), // #1b4fae
-    // 浅色蓝同样没有 --accent-ink 覆写行，沿用 :root 的 #04231b。
-    accentInk: Color(0xFF04231B),
+    // 浅色蓝同样压白（与浅色薄荷同一条规则）。
+    accentInk: Color(0xFFFFFFFF),
     accentRgb: (59, 124, 246), // 59 124 246
     danger: Color(0xFFC9253F), // 浅色危险态翻转沿用浅色薄荷
     dangerInk: Color(0xFF9D1B30),
@@ -736,6 +790,15 @@ class AppTokens {
         color: Color(0x47182A3C),
         offset: Offset(0, -12),
         blurRadius: 36,
+        spreadRadius: -22,
+      ),
+    ],
+    // --shadow-pop 未在粉 / 蓝的浅色覆写区出现，沿用浅色薄荷（app.css:195）。
+    shadowPop: <BoxShadow>[
+      BoxShadow(
+        color: Color(0x52182A3C),
+        offset: Offset(0, 20),
+        blurRadius: 44,
         spreadRadius: -22,
       ),
     ],

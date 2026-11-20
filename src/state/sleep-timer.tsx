@@ -22,9 +22,9 @@ import { useToast } from './toast';
 /** 缺省时长（分钟）：面板打开时滑杆停在这一档，自定义输入也预填它。 */
 export const SLEEP_TIMER_DEFAULT_MINUTES = 10;
 
-/** 自定义输入的范围（分钟）。 */
+/** 时长范围（分钟）：滑杆与自定义输入共用（1 分钟 ~ 4 小时）。 */
 export const SLEEP_TIMER_MIN_MINUTES = 1;
-export const SLEEP_TIMER_MAX_MINUTES = 999;
+export const SLEEP_TIMER_MAX_MINUTES = 240;
 
 /** 剩余不足这一分钟就算「快到了」（按钮上换个颜色提醒）。 */
 const ENDING_THRESHOLD_MS = 60_000;

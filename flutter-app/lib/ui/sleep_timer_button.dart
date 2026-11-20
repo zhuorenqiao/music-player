@@ -5,18 +5,18 @@
 //
 //   ┌────────────────────────────────┐
 //   │ 剩余 09:32            [取消定时] │  ← 只有倒计时跑着时才有这一行
-//   │ 30 分钟            1 分钟 – 16 小时 39 分钟 │
+//   │ 30 分钟            1 分钟 – 4 小时 │
 //   │ ▁▁▁▁▁▁▁▁●▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁       │  ← 滑杆走对数量级，短时长行程更宽
 //   │ 自定义  [ 30 ]  分钟             │
 //   │ [            开始            ]   │  ← 运行中变「重新计时」
 //   └────────────────────────────────┘
 //
-// 闹钟小按钮（T 与水滴右侧 26×26 那一排）；倒计时跑着时按钮撑成一枚药丸，直接
-// 显示剩余 mm:ss —— 不用再点开面板看。面板用 Overlay 挂：点面板以外收起
-// （与 GlassControl 同一套做法）。
+// 闹钟小按钮（T 与水滴右侧 26×26 那一排，只留图标、不带按钮壳）；倒计时跑着时
+// 把剩余 mm:ss 跟在图标后面 —— 不用再点开面板看。面板用 Overlay 挂：点面板以外
+// 收起（与 GlassControl 同一套做法）。
 //
-// 滑杆映射照 React 原样：**指数**（1~999 分钟，低端 1、2、3… 分辨得很清，
-// 高端自然变粗到 999），所以位置↔分钟数是 [minutesForPosition] /
+// 滑杆映射照 React 原样：**指数**（1~240 分钟，低端 1、2、3… 分辨得很清，
+// 高端自然变粗到 240），所以位置↔分钟数是 [minutesForPosition] /
 // [positionForMinutes] 这一对反函数，面板里不另存刻度表。
 import 'dart:math' as math;
 
@@ -54,7 +54,7 @@ String sleepTimerReadout(int minutes) {
   return rest == 0 ? '${minutes ~/ 60} 小时' : '${minutes ~/ 60} 小时 $rest 分钟';
 }
 
-/// 滑杆右端的上限读数（999 分钟 = 16 小时 39 分钟）。
+/// 滑杆右端的上限读数（240 分钟 = 4 小时）。
 final String kSleepTimerMaxReadout = sleepTimerReadout(kSleepTimerMaxMinutes);
 
 /// 睡眠定时器按钮 + 弹出面板。
@@ -203,26 +203,23 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
         key: _anchorKey,
         behavior: HitTestBehavior.opaque,
         onTap: _toggle,
-        // 同一套 26×26 壳（圆角 8 / 1px 描边 / surface 底，展开与运行中换 accent，
-        // 最后一分钟换 danger）。运行中按 CSS 的 `width: auto; padding: 0 8px`
-        // 撑成药丸；居中由 ToolTriggerChrome 的 `alignment: center` 保证 ——
-        // 之前这里是 Row(mainAxisSize.min) 在**紧约束**里靠 start 排，图标
-        // 直接贴左边框，右边空一大块。
+        // 同一套 26×26 命中区、**不带按钮壳**（无描边 / 无底色 / 无圆角）。
+        // 运行中不再撑成药丸、也不上底色：宽度跟着「图标 + 剩余时间」走，
+        // 左右各留 6px，让图标跟另外两颗 26px 盒子里的图标对齐；最后一分钟
+        // 图标与时间一起换成 danger（CSS 的 `is-ending`）。
         child: ToolTriggerChrome(
           key: const Key('sleep-timer-trigger'),
-          active: running || _entry != null,
-          danger: running && ending,
           width: running ? null : kToolTriggerSize,
           padding: running
-              ? const EdgeInsets.symmetric(horizontal: 8)
+              ? const EdgeInsets.symmetric(horizontal: 6)
               : EdgeInsets.zero,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 图标 14×14（`.sleep-timer__icon:2943-2949`），颜色 `--accent-light`。
+              // 图标 17×17（`.sleep-timer__icon:2934-2938`），颜色 `--accent-light`。
               Icon(
                 Icons.alarm_outlined,
-                size: 14,
+                size: 17,
                 color: ending ? tokens.dangerInk : tokens.accentLight,
               ),
               if (running) ...[
@@ -244,7 +241,7 @@ class _SleepTimerButtonState extends State<SleepTimerButton> {
   }
 }
 
-/// 面板：滑杆选时长（1~999 分钟）+ 自定义分钟数 + 开始 / 重新计时。
+/// 面板：滑杆选时长（1~240 分钟）+ 自定义分钟数 + 开始 / 重新计时。
 class _SleepTimerPanel extends StatelessWidget {
   const _SleepTimerPanel({
     required this.minutes,

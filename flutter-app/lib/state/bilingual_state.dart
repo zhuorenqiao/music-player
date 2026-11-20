@@ -184,6 +184,17 @@ class BilingualState extends ChangeNotifier {
 
   bool _disposed = false;
 
+  /// 译文可见状态的版本号：`_translation` / `_state` / `_reason` 每变一次就 +1。
+  ///
+  /// 存在的理由是「重建缓存」：`LyricsView` 为了压住每秒数次的重建，只在行号
+  /// 变化时新建歌词树。译文开关切换 / 译文到位都**不改行号**，只靠行号判等会
+  /// 让开关点了像没点（关掉后译文还留在屏幕上，打开后也等不到译文出现）。
+  /// 视图读这个整数做缓存键，就能在译文真正变化的这一次重建。
+  int _revision = 0;
+
+  /// 译文可见状态版本号（只读；由 [BilingualState] 自己维护，视图不该改写）。
+  int get revision => _revision;
+
   /// getter 触发的对账期间为真：通知改排微任务（见文件头差异 B）。
   bool _deferNotify = false;
   bool _notifyScheduled = false;
@@ -514,6 +525,10 @@ class BilingualState extends ChangeNotifier {
   /// 通知订阅者。构建期（getter 触发的对账）排微任务，见文件头差异 B。
   void _notify() {
     if (_disposed) return;
+    // 版本号只在这里涨：`_notify` 是「可见状态真的变了」的唯一出口（`_run` /
+    // `_request` 都是先比对快照再调进来）。放在最前面，连被合并掉的微任务通知
+    // 也照样记上一版，视图不会因为通知被合并而漏掉一次重建。
+    _revision += 1;
     if (!_deferNotify) {
       notifyListeners();
       return;

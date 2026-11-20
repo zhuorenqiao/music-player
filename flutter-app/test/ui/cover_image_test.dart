@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:light_music/cover/generated_cover.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/ui/cover_image.dart';
@@ -117,6 +118,32 @@ void main() {
       );
       expect(find.byKey(const Key('cover-placeholder')), findsOneWidget);
       expect(find.byType(GeneratedCoverView), findsNothing);
+    });
+
+    testWidgets('无路径 + 空串歌手（有曲目但标签没歌手）→ 画生成卡，不落占位碟', (
+      tester,
+    ) async {
+      // 空串 ≠ 空态：曲目在、只是标签里没有歌手。灯箱 / 歌词页都拿这个空串
+      // 现算生成卡（'unknown' 种子 = 首字母 ♪ + 「未知歌手」），碟面若把它当
+      // 「没有生成卡信息」就会停在音符占位碟 —— 点开放大却有图。
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(600, 600);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        wrap(const CoverDisc(
+          coverPath: '',
+          size: 200,
+          spinning: false,
+          fallbackArtist: '',
+          fallbackTitle: '十年',
+        )),
+      );
+      expect(find.byKey(const Key('cover-placeholder')), findsNothing);
+      final view = tester.widget<GeneratedCoverView>(
+        find.byType(GeneratedCoverView),
+      );
+      expect(view.spec, generatedCoverSpec('', '十年'));
+      expect(view.spec.key, 'unknown');
     });
   });
 }

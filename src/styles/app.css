@@ -152,6 +152,11 @@
   --accent-light: #0a7a5d;
   --accent-soft: rgba(18, 185, 140, 0.14);
   --accent-line: rgba(18, 185, 140, 0.34);
+  /* 实底按钮（按钮自己铺满 accent）上的图标 / 文字：浅色模式统一压白。
+     深色的 --accent-ink 只适合深色模式的亮色块；浅色模式下彩块本身够深，
+     再压深字会糊成一块，白字才立得住。白底 / 浅底按钮仍走 --text / --accent-light，
+     不受这一条影响。 */
+  --accent-ink: #ffffff;
 
   --tint-1: rgba(18, 38, 58, 0.045);
   --tint-2: rgba(18, 38, 58, 0.07);
@@ -596,9 +601,17 @@ h2 {
   font-size: 12.5px;
 }
 
+/* 图标 16px（模式切换那颗仍按这一档） */
 .app__actions .btn .icon {
   width: 16px;
   height: 16px;
+}
+
+/* 「更多」那颗三点图标单独放大到 19px：竖排三点本来就显小，
+   放大后与 T / 水滴 / 闹钟同一档视觉重量；旁边的模式按钮保持 16px 不变。 */
+.app__actions .app__menu .icon {
+  width: 19px;
+  height: 19px;
 }
 
 /* --------------------------------------------------------------------------
@@ -770,17 +783,28 @@ h2 {
   backdrop-filter: blur(16px);
   /* 纵向手势滚歌词、双指仍可缩放，横向手势留给「左右滑切歌」 */
   touch-action: pan-y pinch-zoom;
+  /* 唱臂摆到暂停位后，它的包围盒是盘面的 ~1.41 倍，会在窄屏上顶出横向滚动条。
+     横向裁掉即可 —— 裁的是那圈空白包围盒，唱臂本身仍在卡内 */
+  overflow-x: clip;
 }
 
 .stage__cover-wrap {
   --vinyl-label: 62%;
+  /* 唱片（黑胶盘面 + 唱臂 + 中央标签位）的整体倍率。默认 1：桌面维持原尺寸；
+     只有 <900 的手机档（封面本身就小）放大到 1.2 —— 见那一档断点里的覆写。
+     盘面、纹路、唱臂、标签位、光晕全都按百分比定位，放大容器即可等比放大整套唱机，
+     不需要逐个改像素值；要再调只改这一个数。 */
+  --disc-scale: 1;
   position: relative;
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: var(--cover-size);
+  /* 按倍率等比放大；左右各留 20px，暂停时甩出来的唱臂才不会被屏幕边切掉
+     （正常窗口下恒等于倍率尺寸，只有极窄屏才会碰到这条上限） */
+  width: min(calc(var(--cover-size) * var(--disc-scale)), calc(100% - 40px));
   max-width: 100%;
-  height: var(--cover-size);
+  /* 正圆：窄屏被 max-width 压回来时按宽度收高度，不变成椭圆 */
+  aspect-ratio: 1 / 1;
   padding: 0;
   border: none;
   /* 与封面同形：聚焦环画在圆上，而不是套住一个看不见的方框 */
@@ -1143,8 +1167,11 @@ h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  /* 与 .progress__slider 左端对齐（让出 36px 时间标签 + 8px 间距的一半视觉差） */
-  margin: 0 22px -4px;
+  /* 左右不额外内缩：与下面那行进度条的**整行**（左右时间标签的外沿）同一个
+     起点/终点 —— 也就是控制区自己的左右内边距。Flutter 端这两行同样共用一个
+     padding（`transport.dart` 的 Padding + `_WaveRow`），所以是「图标行 / 音谱条
+     的两端 = 时间标签的两端」。 */
+  margin: 0 0 -4px;
 }
 
 /* 简约模式不渲染频谱（JSX 里没挂），这条留着防以后误加。 */
@@ -1161,8 +1188,9 @@ body.is-lyrics-page .transport {
 }
 
 body.is-lyrics-page .transport__wave {
-  /* 让出左右时间标签（36px）+ 间距（8px）= 44px，与 .progress__slider 等长 */
-  margin: 0 44px;
+  /* 不再让出时间标签的宽度：音谱条与进度条整行等宽（两端与「01:33 / 05:26」
+     两个时间标签的外沿对齐），参考 Flutter 端的同一条规则。 */
+  margin: 0;
   /* 2px：频谱底边到进度条顶边的距离 */
   padding-bottom: 2px;
 }
@@ -1355,7 +1383,7 @@ body.is-lyrics-page .lyrics-page__art .lyrics-page__wave {
 }
 
 .volume__input {
-  --volume-percent: 70%;
+  --volume-percent: 100%;
   -webkit-appearance: none;
   appearance: none;
   flex: 1 1 auto;
@@ -2024,7 +2052,12 @@ body.is-sheet-open {
 /* 文字收缩到内容宽度：点击热区只覆盖歌词本身，行内左右留白不算 */
 .lyrics__text {
   display: inline-block;
-  transition: color 0.2s var(--ease);
+  /* 高亮行切进来 / 离开时，字号在 0.28s 内渐变，而不是一步跳到位。
+     字号变化会带着这一行与下面各行的位置一起平滑推移（不是 transform 缩放，
+     那样字会压到相邻行上）；换「T」面板的字号档位也走同一条过渡。 */
+  transition:
+    color 0.2s var(--ease),
+    font-size 0.28s var(--ease);
 }
 
 /* 可跳转的行只在文字上给手型和悬停反馈，行内留白不误导成可点 */
@@ -2036,9 +2069,16 @@ body.is-sheet-open {
   color: var(--text-dim);
 }
 
-/* 当前行只换颜色加粗，不发光：发光会在字周围糊出一团颜色，看着像背景高亮 */
+/* 当前行只换颜色、加粗、放大一档，不发光：发光会在字周围糊出一团颜色，看着像背景高亮 */
 .lyrics__line.is-active .lyrics__text {
   font-weight: 650;
+}
+
+/* 高亮行字号放大：1.2em 相对这一行自己的正文字号，所以紧凑区 / 完整歌词页 /
+   歌词页那几处不同的基础字号，以及「T」面板的字号缩放都会一起叠乘，不用在
+   每一处再补一条 px。译文排除在外 —— 主次仍要分得开（见下面译文那条 400）。 */
+.lyrics__line.is-active .lyrics__text:not(.lyrics__trans) {
+  font-size: 1.2em;
 }
 
 /* 中文译文：跟在原文下面另起一行。
@@ -2083,10 +2123,10 @@ body.is-sheet-open {
   cursor: default;
 }
 
-/* 紧凑版字号略小，完整版明显更大 */
+/* 紧凑版只把行内边距收小、多放几行；字号与完整歌词页一致（17px），
+   简约 ⇄ 沉浸切换时同一句歌词不会跳字号 */
 .lyrics--compact .lyrics__line {
   padding: 6px 8px;
-  /* 与完整歌词页同字号（详情页 17px），只把行内边距收小以多放几行 */
   font-size: calc(17px * var(--lyric-scale, 1));
 }
 
@@ -2096,9 +2136,11 @@ body.is-sheet-open {
   font-size: calc(13px * var(--lyric-scale, 1));
 }
 
+/* 完整版与紧凑预览同字号（17px）：两处必须保持相等，否则切换模式会跳字号。
+   歌词页另有更松的行高 / 内边距（见 8.5.1 的 `.lyrics-page .lyrics--full`） */
 .lyrics--full .lyrics__line {
   padding: 12px 14px;
-  font-size: calc(19px * var(--lyric-scale, 1));
+  font-size: calc(17px * var(--lyric-scale, 1));
   line-height: 1.5;
 }
 
@@ -2500,7 +2542,9 @@ body.is-sheet-open {
   flex: 0 0 auto;
 }
 
-/* 「T」小按钮：字本身就是当前高亮色，一眼看出设置的是哪个色 */
+/* 「T」小按钮：字本身就是当前高亮色，一眼看出设置的是哪个色。
+   简约模式与沉浸模式都是**只留图标**：没有描边、没有底色、没有圆角，
+   26×26 只是命中区（热区不缩，手指 / 鼠标照样好点）。 */
 .lyric-color__trigger {
   display: inline-flex;
   align-items: center;
@@ -2509,27 +2553,15 @@ body.is-sheet-open {
   height: 26px;
   padding: 0;
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   line-height: 1;
   color: var(--lyric-hl);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
-  transition:
-    color 0.18s var(--ease),
-    border-color 0.18s var(--ease),
-    background-color 0.18s var(--ease);
-}
-
-.lyric-color__trigger:hover {
-  background: var(--surface-2);
-}
-
-.lyric-color__trigger[aria-expanded="true"] {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+  transition: color 0.18s var(--ease);
 }
 
 .lyric-color__trigger:focus-visible {
@@ -2769,6 +2801,7 @@ body.is-sheet-open {
   flex: 0 0 auto;
 }
 
+/* 水滴：与「T」同规格的 26×26 命中区，同样**只留图标**（无描边 / 无底色 / 无圆角）。 */
 .glass-control__trigger {
   display: inline-flex;
   align-items: center;
@@ -2777,28 +2810,16 @@ body.is-sheet-open {
   height: 26px;
   padding: 0;
   color: var(--accent-light);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
-  transition:
-    color 0.18s var(--ease),
-    border-color 0.18s var(--ease),
-    background-color 0.18s var(--ease);
+  transition: color 0.18s var(--ease);
 }
 
 .glass-control__icon {
-  width: 14px;
-  height: 14px;
-}
-
-.glass-control__trigger:hover {
-  background: var(--surface-2);
-}
-
-.glass-control__trigger[aria-expanded="true"] {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+  width: 17px;
+  height: 17px;
 }
 
 .glass-control__trigger:focus-visible {
@@ -2911,8 +2932,9 @@ body.is-sheet-open {
   box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.35);
 }
 
-/* 睡眠定时器：与「T」「水滴」同规格的 26px 小按钮（同一排里挨着水滴）。
-   倒计时跑着时按钮撑成一枚药丸，直接显示剩余 mm:ss —— 不用再点开面板看。 */
+/* 睡眠定时器：与「T」「水滴」同规格的 26px 命中区，同样**只留图标**。
+   倒计时跑着时不再撑成药丸、也不上底色，只是把剩余 mm:ss 跟在图标后面
+   （左右各 6px 内边距，让图标与另外两颗 26px 盒子里的图标对齐）。 */
 .sleep-timer {
   position: relative;
   flex: 0 0 auto;
@@ -2927,29 +2949,25 @@ body.is-sheet-open {
   height: 26px;
   padding: 0;
   color: var(--accent-light);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
   transition:
     color 0.18s var(--ease),
-    border-color 0.18s var(--ease),
-    background-color 0.18s var(--ease),
     width 0.18s var(--ease);
 }
 
 .sleep-timer__icon {
-  width: 14px;
-  height: 14px;
+  width: 17px;
+  height: 17px;
   flex: 0 0 auto;
 }
 
-/* 运行中：撑成药丸，把剩余时间写在按钮里 */
+/* 运行中：宽度跟着内容走，把剩余时间写在图标右边（没有壳，所以不需要底色） */
 .sleep-timer__trigger.is-running {
   width: auto;
-  padding: 0 8px;
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+  padding: 0 6px;
 }
 
 .sleep-timer__time {
@@ -2959,23 +2977,13 @@ body.is-sheet-open {
   color: var(--accent-light);
 }
 
-/* 最后一分钟：换个颜色提醒一下 */
+/* 最后一分钟：换个颜色提醒一下（图标走 currentColor，和时间一起变） */
 .sleep-timer__trigger.is-ending {
-  border-color: var(--danger-line);
-  background: var(--danger-soft);
+  color: var(--danger-ink);
 }
 
 .sleep-timer__trigger.is-ending .sleep-timer__time {
   color: var(--danger-ink);
-}
-
-.sleep-timer__trigger:hover {
-  background: var(--surface-2);
-}
-
-.sleep-timer__trigger[aria-expanded="true"] {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
 }
 
 .sleep-timer__trigger:focus-visible {
@@ -3757,6 +3765,8 @@ body.is-sheet-open {
   padding: 24px 12px 40px;
 }
 
+/* 字号与 `.lyrics--compact` 同为 17px（含大屏，见文件末尾的 ≥1680 段）：
+   简约 ⇄ 沉浸切换时不换字号，同一句歌词不会忽大忽小。 */
 .lyrics-page .lyrics--full .lyrics__line {
   padding: 7px 12px;
   font-size: calc(17px * var(--lyric-scale, 1));
@@ -3771,7 +3781,8 @@ body.is-sheet-open {
 
 .lyrics-page .lyrics--full .lyrics__trans {
   margin-top: 3px;
-  font-size: calc(14px * var(--lyric-scale, 1));
+  /* 译文也跟随紧凑预览那一档（13px），切换模式时整块歌词不跳字号 */
+  font-size: calc(13px * var(--lyric-scale, 1));
 }
 
 /* 数字等宽：时间 / 时长变化时不会左右抽动 */
@@ -4657,8 +4668,17 @@ body.is-lightbox-open {
     margin-top: auto;
   }
 
+  /* 手机这一档封面本来就小（视口窄、还得给歌词留地方），唱机放大到 1.2 倍才够看。
+     桌面两个档位不放大，仍是 1 倍原尺寸。 */
+  .stage__cover-wrap {
+    --disc-scale: 1.2;
+  }
+
   :root {
     --cover-size: clamp(108px, 24vh, 150px);
+    /* 顶部安全区（刘海 / 灵动岛 / 状态栏）：真机上按 env() 让开，
+       没有刘海的窗口也保底 8px，歌名不至于贴着屏幕边 */
+    --safe-top: max(8px, env(safe-area-inset-top, 0px));
   }
 
   /* 手机单栏空间足：歌词区不再固定行数，吃掉封面 / 信息区剩下的高度，
@@ -4686,10 +4706,11 @@ body.is-lightbox-open {
     position: static;
   }
 
-  /* 歌词页在手机上吃掉除控制区以外的整屏，字号略降一档 */
+  /* 歌词页在手机上吃掉除控制区以外的整屏，字号略降一档。
+     卡面照旧铺到屏幕边（顶栏也浮在上面），只把内容让出顶部安全区 */
   .lyrics-page {
     min-height: 0;
-    padding: 12px 12px 4px;
+    padding: calc(12px + var(--safe-top)) 12px 4px;
   }
 
   /* 手机上不显示右侧大图，歌词独占一列（高度要留给歌词） */
@@ -4717,21 +4738,125 @@ body.is-lightbox-open {
   }
 }
 
-/* 小屏：按钮只留图标，给标题腾出空间 */
-@media (max-width: 479px) {
-  .brand__sub {
-    display: none;
-  }
-
-  .btn__text {
-    display: none;
-  }
-
-  /* 只留图标时收成 36px 方块，跟下面那排胶囊同高（不要 44px，否则又比别处粗一圈） */
-  .app__actions .btn {
-    width: 36px;
-    min-height: 36px;
+/* 小屏（<900px）：顶栏不再单独占一行。
+   左侧品牌（logo + 名称）整块去掉，右侧那组动作按钮（沉浸/简约 + 更多）改成
+   浮在播放卡右上角的角标 —— 卡片自己顶上就是一条留白，按钮贴进去正好不挡内容。
+   注意：只在「简约模式」（非 .is-lyrics-page）这么做；歌词页卡片顶部自带
+   T / 毛玻璃 / 睡眠 + 波形样式下拉，浮上去会压住那一排，所以仍是正常的顶栏行。 */
+@media (max-width: 899px) {
+  /* 绝对定位的顶栏要以整页为参照，才能量到卡片的右上角 */
+  .app {
+    position: relative;
+    /* 页面直接铺满：外层的 16 / 14 留白去掉，边角交给外层容器去裁，
+       不再出现「卡片套在窗口里」的双层留白 */
     padding: 0;
+  }
+
+  /* 卡片自己的圆角也去掉：直角铺满，由容器的圆角决定最终形状 */
+  .player {
+    border: none;
+    border-radius: 0;
+  }
+
+  /* 铺满之后控制区贴在屏幕底边，底部留白加厚到 30px
+     （原来的 12px 是给卡片内留白用的，现在那条留白没了）。
+     仍然保留 env()：刘海屏 / 手势条的机型要在这 30px 之外再让出安全区 */
+  .transport {
+    padding-bottom: calc(30px + env(safe-area-inset-bottom));
+  }
+
+  /* 歌词页：页头那组控件（T / 毛玻璃 / 睡眠 + 波形样式下拉）下移到频谱条上方。
+     手机上一只手够不到页头顶端，跟进度条挤在一起才顺手。
+     左右不再内缩 —— 这一行与下面的音谱条、再下面的进度条整行共用一个内外沿，
+     两端正好落在「01:33 / 05:26」两个时间标签的外沿上（与 Flutter 端一致）。 */
+  .transport__lyric-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 6px;
+  }
+
+  /* 下拉贴右（与页头那版一致），面板改成向上弹：这一行下面只剩进度条 */
+  .transport__lyric-row .wave-style {
+    margin-left: auto;
+  }
+
+  .transport__lyric-row .wave-style__panel {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .app__header {
+    justify-content: flex-end;
+  }
+
+  /* 小屏顶栏只剩「电台 / 更多」两颗图标，简约模式（封面页）和沉浸模式（歌词页）
+     共用这一条：贴视口右上角、右侧缩进 10px。
+     纵向位置与电台页右上角那两颗对齐（`.radio-head__back` / `.radio-head__menu`
+     也写在 28px）：电台页品牌块中心在 44px，按钮 32px 高 → top = 44 - 16 = 28px，
+     音乐页虽然窄屏没有品牌行，但两页切来切去时这两颗图标不再上下跳。
+     只贴右边、不给 left：盒子按按钮大小收窄，横着不会盖住歌名与「双语」那一排。 */
+  body:not(.is-lyrics-page) .app__header,
+  body.is-lyrics-page .app__header {
+    position: absolute;
+    top: 28px;
+    right: 0;
+    /* 卡片自己有 isolation，顶栏浮上去要明确压在卡片内容之上 */
+    z-index: 6;
+    padding: 0 10px;
+  }
+
+  /* 模式切换按钮在小屏上整个拿掉：简约模式点曲目区就能进歌词页，歌词页点空白
+     处就能退回来（.stage 的 app:open-lyrics-page / onBlankClick），这颗按钮
+     在小屏是重复的。小屏顶栏只剩「更多」。 */
+  .app__mode {
+    display: none;
+  }
+
+  /* 「更多」浮在页头右侧，页头得让出它的宽度（32px 按钮 + 8px 间隙 + 2px 余量），
+     长歌名才会在按钮左边省略，而不是一直钻到按钮底下（窄屏 390 上尤其明显） */
+  body.is-lyrics-page .lyrics-page__head {
+    padding-right: 42px;
+  }
+
+  /* 顶栏按钮在小屏只留那颗图标：文字去掉，按钮自己的地（底色 / 边框 / 圆角）
+     也全不要 —— 看上去就是一枚浮在卡片角上的 ⋯，而不是一颗胶囊。
+     32×32 的点击区保留（透明不等于点不到），图标 16px 居中。 */
+  .app__actions .btn__text {
+    display: none;
+  }
+
+  .app__actions .btn {
+    width: 32px;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--text-dim);
+  }
+
+  /* 盖掉 .btn:hover 那层 surface：图标按钮不该在悬停时长出一块底 */
+  .app__actions .btn:hover {
+    background: none;
+    border-color: transparent;
+    color: var(--text);
+  }
+
+  .app__actions .btn .icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* 窄屏同样只放大「更多」那枚 ⋯（32×32 点击区不变） */
+  .app__actions .app__menu .icon {
+    width: 19px;
+    height: 19px;
   }
 }
 
@@ -4912,7 +5037,7 @@ body.is-lightbox-open {
 
   /* 封面随可用高度缩放，始终是正圆，不会拉伸变形 */
   .stage__cover-wrap {
-    width: min(var(--cover-size), 46vh, 340px);
+    width: min(calc(var(--cover-size) * var(--disc-scale)), 46vh, 340px);
     max-width: 100%;
     height: auto;
     aspect-ratio: 1 / 1;
@@ -5083,14 +5208,10 @@ body.is-lightbox-open {
     gap: 14px;
   }
 
-  /* 正文排版在大屏上放开一档，读起来不至于挤成一条细线 */
+  /* 大屏只放开行内留白；字号不再单独抬高 —— 与简约模式的紧凑歌词同为 17px，
+     切换模式时文字不会忽大忽小（2026-11-19：修「切换后歌词大小不一致」） */
   .lyrics-page .lyrics--full .lyrics__line {
-    font-size: calc(19px * var(--lyric-scale, 1));
     padding: 9px 14px;
-  }
-
-  .lyrics-page .lyrics--full .lyrics__trans {
-    font-size: calc(15px * var(--lyric-scale, 1));
   }
 
   .stage__lyrics {
@@ -5133,3 +5254,993 @@ body.is-lightbox-open {
     opacity: 0.5;
   }
 }
+
+/* ==========================================================================
+   T31 · 电台（入口按钮 + 电台页）
+   与 Flutter `lib/ui/header.dart` 的 `_RadioChip`、`lib/ui/radio_page.dart` 成对：
+   字号 / 高度 / 圆角 / 间距一一对应，颜色全部取上面的 token（换肤、切明暗
+   自动跟着翻，不新增一枚表外颜色）。
+   ========================================================================== */
+
+/* ---- 顶栏入口：在「更多」左侧，顶栏里唯一带主题色的一颗 ---- */
+.app__radio {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: linear-gradient(150deg, rgb(var(--accent-rgb) / 0.18), var(--surface));
+  box-shadow: 0 6px 18px -10px rgb(var(--accent-rgb) / 0.7);
+}
+
+.app__radio:hover {
+  color: var(--accent-light);
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  background: linear-gradient(150deg, rgb(var(--accent-rgb) / 0.26), var(--surface-2));
+}
+
+/* 文字后那颗 4px「在播」点：让入口看起来像「开着的一台电台」 */
+.app__radio-dot {
+  flex: 0 0 auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgb(var(--accent-rgb) / 0.8);
+}
+
+/* ---- 页面外壳：长列表，要放开桌面那档「锁一屏高」 ---- */
+.app--radio,
+/* 双保险：万一 body 上还留着 is-lyrics-page（那边 `height: 100vh` 的优先级更高），
+   电台页也必须能整页滚起来 */
+body.is-radio-page .app {
+  gap: 0;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+  padding: 24px 28px 28px;
+}
+
+.radio-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+/* ---- 页头 ---- */
+.radio-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.radio-head__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.radio-head__logo {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  border-radius: 13px;
+  background: linear-gradient(150deg, rgb(var(--accent-rgb) / 0.24), rgb(var(--accent-rgb) / 0.04));
+  box-shadow: 0 0 26px -10px rgb(var(--accent-rgb) / 0.75);
+}
+
+.radio-head__logo-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.radio-head__text {
+  display: flex;
+  flex-direction: column;
+  /* 中文站名与下方英文之间留 4px：两行都压着 1.1 的行高，不加这一档
+     英文几乎贴着「电台」的下缘（与 Flutter 的 SizedBox(height: 4) 同值）。 */
+  gap: 4px;
+  min-width: 0;
+}
+
+.radio-head__title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 1px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.radio-head__sub {
+  font-size: 10px;
+  letter-spacing: 1.7px;
+  line-height: 1.1;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.radio-head__back {
+  margin-left: auto;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  gap: 6px;
+}
+
+.radio-head__back .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* 右上角「更多」：与「音乐」回退胶囊同一档（36px 高、12.5px 字），
+   ⋯ 图标按音乐页顶栏那颗放大到 19px（竖排三点本来就显小）。 */
+.radio-head__menu {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  gap: 6px;
+}
+
+.radio-head__menu .icon {
+  width: 19px;
+  height: 19px;
+}
+
+/* ---- 台卡底图：主题色渐变 + 右上光晕 + 三道同心环 + 底部静息波段 ----
+   background-image 由 RadioPage 逐台内联（环心与混色比例按 seed 错开），
+   这里只负责盒模型与那五根柱子。 */
+.radio-art {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.radio-art__bars {
+  position: absolute;
+  left: 12%;
+  bottom: 14%;
+  display: flex;
+  align-items: flex-end;
+  gap: 5%;
+  width: 35%;
+  height: 20%;
+}
+
+.radio-art__bars i {
+  flex: 1 1 0;
+  max-width: 3px;
+  border-radius: 2px;
+  background: rgb(var(--accent-rgb) / 0.44);
+}
+
+/* ---- 台面的同心圆（只挂在大播放卡上）----
+   没播过时是三道静止环；播过一次就淡出，换成四道等相位的水波：
+   每道 16s 从最内圈匀速推到 2.6 倍再淡掉，彼此错开 4s —— 半径线性长，
+   四道的间隔就始终相等，画面里每一圈都匀称地向外走。暂停只冻相位。 */
+.radio-art__rings {
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.radio-art__ring {
+  position: absolute;
+  left: var(--ring-cx);
+  top: var(--ring-cy);
+  box-sizing: border-box;
+  border: 1px solid rgb(var(--accent-rgb));
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.36s var(--ease);
+}
+
+/* 播放接管之后静止环退场，剩下的每一圈都是会走的水波 */
+.radio-art__ring.is-hidden {
+  opacity: 0;
+}
+
+.radio-art__waves {
+  position: absolute;
+  inset: 0;
+  display: block;
+  opacity: 0;
+  transition: opacity 0.36s var(--ease);
+}
+
+.radio-art__waves.is-armed {
+  opacity: 1;
+}
+
+.radio-art__waves i {
+  position: absolute;
+  left: var(--ring-cx);
+  top: var(--ring-cy);
+  box-sizing: border-box;
+  border: 1px solid rgb(var(--accent-rgb));
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(1);
+  animation:
+    radio-wave-scale 16s linear infinite,
+    radio-wave-fade 16s linear infinite,
+    radio-wave-stroke 16s linear infinite;
+  animation-delay: var(--wave-delay), var(--wave-delay), var(--wave-delay);
+  animation-play-state: paused, paused, paused;
+  will-change: transform, opacity;
+}
+
+.radio-art__waves.is-live i {
+  animation-play-state: running, running, running;
+}
+
+/* 半径线性长：四道相隔 4s 的环，任意时刻的间距都是同一个值 */
+@keyframes radio-wave-scale {
+  from { transform: translate(-50%, -50%) scale(1); }
+  to { transform: translate(-50%, -50%) scale(2.6); }
+}
+
+/* transform 会把 1px 描边一起放大：描边反向收细，屏幕上始终是 1px，
+   外圈不会比内圈粗一截 */
+@keyframes radio-wave-stroke {
+  from { border-width: 1px; }
+  to { border-width: 0.385px; }
+}
+
+/* 入场轻轻点亮（12% 到顶），再一路线性收掉：四道前后错开就是连续的水波 */
+@keyframes radio-wave-fade {
+  0% { opacity: 0; }
+  12% { opacity: 0.28; }
+  100% { opacity: 0; }
+}
+
+/* ---- 问候语 + 大标题 ---- */
+.radio-greet {
+  margin-top: 26px;
+}
+
+.radio-greet__hi {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 1.4px;
+  line-height: 1.1;
+  color: var(--accent);
+}
+
+.radio-greet__title {
+  margin: 8px 0 0;
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: 1.2px;
+  line-height: 1.24;
+  color: var(--text);
+}
+
+/* ---- 大播放卡：铺满整宽，底图由 RadioPage 逐台内联（seed 错开环心） ---- */
+.radio-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 226px;
+  margin-top: 20px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+}
+
+/* 卡面压一层底：文字落在这层上，浅色模式也不会糊在亮绿上。
+   落点色用播放卡自己的收尾色（--hero-end，由 RadioPage 按台写入），不用 --bg：
+   浅色底下 --bg 是冷调灰蓝，压到暖色卡面上，下半张会拐出一道灰带（粉 → 灰 → 冷白）。
+   现在两层从顶到底同一支色，只加深、不换调；五个停靠把斜率摊匀，没有可见的折点。 */
+.radio-hero__veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 14%,
+    color-mix(in srgb, var(--hero-end) 14%, transparent) 40%,
+    color-mix(in srgb, var(--hero-end) 44%, transparent) 64%,
+    color-mix(in srgb, var(--hero-end) 76%, transparent) 85%,
+    var(--hero-end) 100%
+  );
+}
+
+.radio-hero__labels {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  line-height: 1.1;
+  /* 「所属分类」就是这一行：换台时跟着换，永远在播放卡里 */
+  color: color-mix(in srgb, var(--text) 60%, transparent);
+}
+
+.radio-hero__cat,
+.radio-hero__en {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radio-hero__en {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text) 44%, transparent);
+}
+
+/* 参考图里那枚「播放头」：一根竖线 + 末端小点，在播时点亮 */
+.radio-hero__stem {
+  position: absolute;
+  top: 46px;
+  left: 18px;
+  width: 1px;
+  height: 44%;
+  background: rgb(var(--accent-rgb) / 0.34);
+}
+
+.radio-hero__stem::after {
+  position: absolute;
+  bottom: -2.5px;
+  left: -2.5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.62;
+  content: '';
+}
+
+.radio-hero__stem.is-live::after {
+  opacity: 1;
+  box-shadow: 0 0 12px rgb(var(--accent-rgb) / 0.85);
+}
+
+.radio-hero__body {
+  position: relative;
+  z-index: 1;
+  max-width: calc(100% - 96px);
+  padding: 0 18px 18px;
+}
+
+.radio-hero__name {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: 2px;
+  line-height: 1.16;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radio-hero__detail {
+  margin: 6px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  line-height: 1.2;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radio-hero__error {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--danger);
+}
+
+.radio-hero__play {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  box-shadow: 0 8px 22px -12px rgb(var(--accent-rgb) / 0.9);
+}
+
+.radio-hero__play:hover {
+  transform: scale(1.04);
+}
+
+.radio-hero__play:active {
+  transform: scale(0.97);
+}
+
+.radio-hero__play:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 3px;
+}
+
+.radio-hero__play .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.radio-hero__spinner {
+  width: 18px;
+  height: 18px;
+  border: 1.6px solid transparent;
+  border-top-color: var(--accent-ink);
+  border-radius: 50%;
+  animation: radio-spin 0.9s linear infinite;
+}
+
+/* 转圈：只给播放卡的「起播 / 续播 / 重连」用；在播时按钮不转 */
+@keyframes radio-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- 播放状线 ---- */
+.radio-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.radio-status__dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.radio-status__dot.is-live {
+  background: var(--accent);
+}
+
+.radio-status__text {
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  line-height: 1.1;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+}
+
+.radio-status__right {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  line-height: 1.1;
+  color: var(--text-faint);
+}
+
+.radio-status__right.is-live {
+  color: var(--accent);
+}
+
+/* ---- 分类页签：短名 + 台数，选中走 accent 与一根短下划线 ---- */
+.radio-tabs {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 18px;
+}
+
+.radio-tabs__btn {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 0 0 9px;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  line-height: 1.1;
+  cursor: pointer;
+  transition: color 0.2s var(--ease);
+}
+
+.radio-tabs__btn:hover {
+  color: var(--text);
+}
+
+.radio-tabs__btn.is-active {
+  color: var(--text);
+}
+
+.radio-tabs__btn.is-active::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  content: '';
+}
+
+.radio-tabs__btn:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.radio-tabs__count {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+}
+
+.radio-tabs__btn.is-active .radio-tabs__count {
+  color: color-mix(in srgb, var(--accent) 80%, transparent);
+}
+
+/* ---- 单列台表：缩略 + 台名 / 频率城市 + 右侧角标，发丝线分隔 ---- */
+.radio-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.radio-list__item + .radio-list__item {
+  border-top: 1px solid var(--border);
+}
+
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.radio-row:focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
+}
+
+.radio-row__thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+}
+
+.radio-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.radio-row__name,
+.radio-row__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radio-row__name {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  line-height: 1.15;
+  color: var(--text);
+}
+
+.radio-row__detail {
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  line-height: 1.15;
+  color: var(--text-dim);
+}
+
+.radio-row.is-selected .radio-row__name {
+  color: var(--accent);
+}
+
+.radio-row__kind {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  color: var(--text-faint);
+}
+
+.radio-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  height: 15px;
+}
+
+/* 在播的那一台：三根柱子从底部各自起伏（相位错开，像真在跳动的电平表） */
+.radio-eq i {
+  display: block;
+  width: 2px;
+  border-radius: 1px;
+  background: rgb(var(--accent-rgb) / 0.9);
+  transform-origin: bottom center;
+  animation: radio-eq-beat 1.1s ease-in-out infinite;
+}
+
+.radio-eq i:nth-child(1) {
+  height: 12px;
+  animation-delay: -0.06s;
+}
+
+.radio-eq i:nth-child(2) {
+  height: 7px;
+  background: rgb(var(--accent-rgb) / 0.55);
+  animation-delay: -0.30s;
+}
+
+.radio-eq i:nth-child(3) {
+  height: 15px;
+  animation-delay: -0.52s;
+}
+
+@keyframes radio-eq-beat {
+  0%, 100% { transform: scaleY(0.42); }
+  28% { transform: scaleY(1); }
+  52% { transform: scaleY(0.64); }
+  74% { transform: scaleY(0.94); }
+}
+
+/* ---- 页脚：一句轻话，前面一根短横 ---- */
+.radio-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 26px 0 0;
+  font-size: 10.5px;
+  letter-spacing: 1.6px;
+  line-height: 1.2;
+  color: var(--text-faint);
+}
+
+.radio-foot::before {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 1px;
+  background: rgb(var(--accent-rgb) / 0.34);
+  content: '';
+}
+
+/* ---- 迷你电台条（电台退到后台继续放时，贴在控制条正上方） ---- */
+.mini-radio {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 46px;
+  margin: 0 16px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: 14px;
+  background: linear-gradient(90deg, rgb(var(--accent-rgb) / 0.14), var(--surface));
+}
+
+.mini-radio__main {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0 0 12px;
+  border: 0;
+  border-radius: 14px 0 0 14px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  cursor: pointer;
+}
+
+.mini-radio__main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mini-radio__dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.mini-radio__dot.is-live {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgb(var(--accent-rgb) / 0.8);
+}
+
+.mini-radio__tag {
+  flex: 0 0 auto;
+  font-size: 8.5px;
+  letter-spacing: 1.8px;
+  color: rgb(var(--accent-rgb) / 0.9);
+  white-space: nowrap;
+}
+
+.mini-radio__name {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-radio__detail {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-radio__main:hover .mini-radio__name {
+  color: var(--accent-light);
+}
+
+.mini-radio__btn {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text);
+  background: none;
+  cursor: pointer;
+}
+
+.mini-radio__btn:hover {
+  background: var(--accent-soft);
+}
+
+.mini-radio__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mini-radio__btn .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.mini-radio__btn--close {
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.mini-radio__btn--close:hover {
+  color: var(--text);
+}
+
+.mini-radio__btn--close .icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* ---- 窄屏 ---- */
+@media (max-width: 899px) {
+  .app--radio {
+    /* 页头两颗按钮绝对定位的参照物（绝对定位按 padding box 量，
+       所以 right 值就是到屏幕右侧的距离，不受本页内容内缩影响） */
+    position: relative;
+    padding: calc(12px + var(--safe-top)) 16px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  /* 页头右上角那两颗「音乐 / 更多」：
+     贴视口右上角、右侧内缩 10px、32×32 点击区、两颗之间 8px、
+     图标 16px（音符，与音乐页那颗「电台」同档）/ 19px（⋯）。
+     做法同源：脱离品牌行、绝对定位；品牌（电台 / LIVE RADIO）照旧留在流内。
+     竖直方向要**跟左侧品牌块居中对齐**：本页窄屏的 padding-top 是 24px
+     （见上方 `.app--radio` 那条，`body.is-radio-page .app` 优先级更高），
+     品牌行 40px 高、中心落在 44px；这颗按钮 32px，所以 top = 44 - 16 = 28px，
+     上下各留 4px —— 不再像以前那样顶在 safe-top 上、比品牌高出一截。 */
+  .radio-head__back,
+  .radio-head__menu {
+    position: absolute;
+    top: 28px;
+    z-index: 6;
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+    margin-left: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--text-dim);
+  }
+
+  /* 「音乐」：与音乐页那排的「电台」同宽同位。
+     50 = 10（右内缩）+ 32（⋯ 的点击区）+ 8（两颗之间的间距） */
+  .radio-head__back {
+    right: 50px;
+  }
+
+  .radio-head__menu {
+    right: 10px;
+  }
+
+  .radio-head__back .btn__text,
+  .radio-head__menu .btn__text {
+    display: none;
+  }
+
+  .radio-head__back .icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .radio-head__menu .icon {
+    width: 19px;
+    height: 19px;
+  }
+
+  .radio-head__back:hover,
+  .radio-head__menu:hover {
+    background: none;
+    border-color: transparent;
+    color: var(--text);
+  }
+
+  /* 顶栏那颗按钮：与其它动作按钮同一套「只剩图标」的规则（32×32 / 无底色），
+     但保留 accent 着色 —— 它是另一个页面的入口，颜色是它唯一的身份标记 */
+  .app__actions .app__radio {
+    color: var(--accent);
+    box-shadow: none;
+  }
+
+  .app__actions .app__radio:hover {
+    color: var(--accent-light);
+  }
+
+  .app__radio-dot {
+    display: none;
+  }
+
+  /* 迷你电台条：窄屏上它贴着控制条（底部安全区由控制条自己让），
+     左右收窄一档，与卡片铺满后的内沿对齐 */
+  .mini-radio {
+    height: 44px;
+    margin: 0 12px 8px;
+  }
+
+  .mini-radio__btn {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+/* 桌面：整页收成一条 760 的版心（参考图是手机版式，宽屏把它摊成一张长表会很空），
+   卡与行随之放大一档 —— 与 Flutter 的 `width >= 900` 同档 */
+@media (min-width: 900px) {
+  .radio-page {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  .radio-greet {
+    margin-top: 30px;
+  }
+
+  .radio-greet__title {
+    font-size: 34px;
+  }
+
+  .radio-hero {
+    height: 248px;
+    margin-top: 24px;
+  }
+
+  .radio-hero__labels {
+    top: 20px;
+    left: 22px;
+    right: 22px;
+  }
+
+  .radio-hero__stem {
+    top: 52px;
+    left: 22px;
+  }
+
+  .radio-hero__body {
+    max-width: calc(100% - 110px);
+    padding: 0 22px 22px;
+  }
+
+  .radio-hero__name {
+    font-size: 30px;
+    letter-spacing: 2.4px;
+  }
+
+  .radio-hero__play {
+    right: 22px;
+    bottom: 22px;
+    width: 58px;
+    height: 58px;
+  }
+
+  .radio-hero__play .icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .radio-tabs {
+    margin-top: 22px;
+  }
+
+  .radio-row {
+    padding: 14px 0;
+  }
+
+  .radio-row__thumb {
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+  }
+}
+
+/* 减少动效：转圈留着（它是「在加载」的唯一反馈），均衡柱与按钮位移收掉 */
+@media (prefers-reduced-motion: reduce) {
+  .radio-hero__play:active {
+    transform: none;
+  }
+
+  .radio-eq i {
+    animation: none;
+    transform: none;
+  }
+
+  /* 水波整层收掉；静止环即使在播放中也补回来 —— 减少动效时画面不许空掉 */
+  .radio-art__waves {
+    display: none;
+  }
+
+  .radio-art__ring.is-hidden {
+    opacity: 1;
+  }
+}
+

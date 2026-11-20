@@ -1,8 +1,17 @@
 // lib/ui/drawer_menu.dart
 //
 // 一级抽屉菜单：添加音乐 / 添加整个文件夹 / 清空播放列表 / 换肤 四个一级入口。
-// 平铺 44px 行、16px 图标 + 13px 文案，不带任何说明文字。
+// 外观逐条对译 Web 端 `src/components/LibraryMenu.tsx` + `app.css:3488-3560`：
 //
+//   ┌────────────────────────┐
+//   │ ● 更多            (×)  │  ← `.drawer__head`：点题圆点 + 16px 标题 + 正圆关闭钮
+//   │ [＋] 添加音乐           │  ← `.menu-row`：54px 小卡、34px 图标托、14px 文案
+//   │ [▣] 添加整个文件夹      │
+//   │ [▤] 清空播放列表   (红) │  ← `.menu-row--danger`
+//   │ [◐] 换肤           ›    │  ← `.menu-row--sub`：右侧小箭头提示还能进去
+//   └────────────────────────┘
+//
+// 面板宽度是 `min(288px, 82vw)`（`.drawer__panel--narrow`），比换肤那档窄一档。
 // 只画内容，不负责打开：遮罩、滑入动画与「先收抽屉再执行」的时序在
 // `header.dart` 的 `AppHeader` 里。三个回调都由调用方注入，测试不碰 file_picker。
 import 'dart:math' as math;
@@ -11,13 +20,14 @@ import 'package:flutter/material.dart';
 
 import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
+import 'drawer_shell.dart';
 import 'theme_drawer.dart' show showThemeDrawer;
 
 /// 抽屉里的一个入口动作。
 typedef MenuAction = Future<void> Function();
 
 /// 遮罩色：直接取 `--scrim`（[AppTokens.scrim]）—— 与 React
-/// `.drawer__scrim { background: var(--scrim) }`（app.css:3207）同源。
+/// `.drawer__scrim { background: var(--scrim) }`（app.css:3190-3199）同源。
 ///
 /// 深色三套 `rgba(4, 8, 12, 0.66)`（粉/蓝是 0.68）、浅色三套
 /// `rgba(28, 42, 56, 0.3)`（app.css:82/:190/:294/:336），都是**压暗**背景。
@@ -27,12 +37,25 @@ typedef MenuAction = Future<void> Function();
 /// 推远的观感正好相反（弹层一开，整页像被漂白过）。
 Color scrimColor(AppTokens tokens) => tokens.scrim;
 
-/// 右侧一级抽屉。宽度固定 [width]，屏幕更窄时按可用宽度收。
+/// 菜单卡描边（`.menu-row { border: 1px solid var(--border) }`）。
+///
+/// 深色主题的 `--border` 是 7% 白，落在深底上 1px 线会被抗锯齿摊成一条
+/// 半透明的软边 —— 截图上几乎看不出来，和 Web 端 1px 实线一眼就能看出
+/// 「这是一张卡」的观感对不上。这里取 `--border` 与 `--border-strong`
+/// 的中间档（深色薄荷 ≈ 11.5% 白），线条才立得住，又不到 hover 那么亮。
+///
+/// 浅色主题本来就是深色描边（12% 深蓝），压在近白底上很清楚，不加浓。
+Color menuCardBorder(AppTokens tokens) => tokens.brightness == Brightness.light
+    ? tokens.border
+    : Color.lerp(tokens.border, tokens.borderStrong, 0.5)!;
+
+/// 右侧一级抽屉。宽度固定 [width]，屏幕更窄时按 `82vw` 收。
 class DrawerMenu extends StatelessWidget {
   const DrawerMenu({
     required this.onAddFiles,
     required this.onAddFolder,
     required this.onClear,
+    this.showLibraryActions = true,
     super.key,
   });
 
@@ -40,73 +63,53 @@ class DrawerMenu extends StatelessWidget {
   final MenuAction onAddFolder;
   final MenuAction onClear;
 
-  /// 收窄后的抽屉宽度；原版一级菜单是 `min(288px, 82vw)`，这里取 300。
-  static const double width = 300;
+  /// 是否展示添加音乐 / 添加整个文件夹 / 清空播放列表三条曲库操作。
+  /// 电台页传 false：那页只留「换肤」，不掺音乐曲库的动作。
+  final bool showLibraryActions;
+
+  /// 一级菜单档位宽度：Web `.drawer__panel--narrow` 是 `min(288px, 82vw)`。
+  static const double width = 288;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    final radius = BorderRadius.circular(kRadiusXl);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // 小屏（如 320）上固定 300 会把外面的 12px 边距挤爆，按可用宽度收
-        final panelWidth = constraints.hasBoundedWidth
-            ? math.min(width, constraints.maxWidth)
-            : width;
-        return SizedBox(
-          width: panelWidth,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: radius,
-              border: Border.all(color: tokens.borderStrong),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [tokens.sheetA, tokens.sheetB],
-              ),
-              boxShadow: tokens.shadowCard,
-            ),
-            child: ClipRRect(
-              borderRadius: radius,
-              // 透明 Material 只为给 InkWell 一块画布，底色已经在外面画好了
-              child: Material(
-                type: MaterialType.transparency,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _Head(onClose: () => _close(context)),
-                    _MenuRow(
-                      icon: Icons.add,
-                      label: '添加音乐',
-                      onTap: () => _closeAnd(context, onAddFiles),
-                    ),
-                    _MenuRow(
-                      icon: Icons.folder_open,
-                      label: '添加整个文件夹',
-                      onTap: () => _closeAnd(context, onAddFolder),
-                    ),
-                    _MenuRow(
-                      icon: Icons.delete_outline,
-                      label: '清空播放列表',
-                      danger: true,
-                      onTap: () => _confirmClear(context),
-                    ),
-                    _MenuRow(
-                      icon: Icons.colorize_outlined,
-                      label: '换肤',
-                      // 换肤是二级抽屉：先收一级再弹二级（与 LibraryMenu 的
-                      // 二级入口同序）—— 两层叠着会让 Esc/遮罩语义变糊。
-                      onTap: () => _closeAnd(context, () => _openTheme(context)),
-                    ),
-                    const SizedBox(height: 6),
-                  ],
-                ),
-              ),
-            ),
+    return DrawerPanel(
+      baseWidth: width,
+      viewportFraction: 0.82,
+      title: '更多',
+      closeLabel: '关闭菜单',
+      // `.menu-list { display: flex; flex-direction: column; gap: 8px }`
+      gap: 8,
+      onClose: () => Navigator.of(context).maybePop(),
+      children: [
+        // 曲库操作只在音乐页出现：电台页是另一条音频链路，那页的「更多」
+        // 只负责换肤，避免收听中被「清空播放列表」误导。
+        if (showLibraryActions) ...[
+          _MenuRow(
+            icon: Icons.add,
+            label: '添加音乐',
+            onTap: () => _closeAnd(context, onAddFiles),
           ),
-        );
-      },
+          _MenuRow(
+            icon: Icons.folder_open,
+            label: '添加整个文件夹',
+            onTap: () => _closeAnd(context, onAddFolder),
+          ),
+          _MenuRow(
+            icon: Icons.delete_outline,
+            label: '清空播放列表',
+            danger: true,
+            onTap: () => _confirmClear(context),
+          ),
+        ],
+        _MenuRow(
+          icon: Icons.palette_outlined,
+          label: '换肤',
+          sub: true,
+          // 换肤是二级抽屉：先收一级再弹二级（与 LibraryMenu 的二级入口同序）——
+          // 两层叠着会让 Esc/遮罩语义变糊。
+          onTap: () => _closeAnd(context, () => _openTheme(context)),
+        ),
+      ],
     );
   }
 
@@ -192,60 +195,29 @@ class DrawerMenu extends StatelessWidget {
   }
 }
 
-/// 抽屉抬头：只有一个小标题与关闭按钮，不放说明文字。
-class _Head extends StatelessWidget {
-  const _Head({required this.onClose});
-
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 8, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              '菜单',
-              style: TextStyle(fontSize: 13, color: tokens.textFaint),
-            ),
-          ),
-          Semantics(
-            button: true,
-            label: '关闭菜单',
-            excludeSemantics: true,
-            onTap: onClose,
-            child: InkWell(
-              onTap: onClose,
-              borderRadius: BorderRadius.circular(999),
-              overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
-              child: SizedBox(
-                width: 28,
-                height: 28,
-                child: Icon(Icons.close, size: 14, color: tokens.textDim),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 一级入口行：44px 高、16px 图标、13px 文案，没有副标题。
+/// 一级入口行（`.menu-row`）：54px 小卡，34px 图标托 + 14px 文案。
+///
+/// 三档变体与 CSS 一一对应：
+///   · 默认：`--tint-1` 底 + 1px 描边（[menuCardBorder]），图标托 `--accent-soft`
+///     / 图标 `--accent-light`；
+///   · [danger]：整行字色 `--danger`，图标托换 `--danger-soft`（清空播放列表）；
+///   · [sub]：右侧补一个 6px 小箭头（`.menu-row--sub::after`），提示还能再点进去。
 class _MenuRow extends StatelessWidget {
   const _MenuRow({
     required this.icon,
     required this.label,
     required this.onTap,
     this.danger = false,
+    this.sub = false,
   });
 
   final IconData icon;
   final String label;
   final MenuAction onTap;
   final bool danger;
+
+  /// 二级入口：行尾画一颗指向右侧的小箭头。
+  final bool sub;
 
   @override
   Widget build(BuildContext context) {
@@ -258,25 +230,75 @@ class _MenuRow extends StatelessWidget {
       onTap: onTap,
       child: InkWell(
         onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
         overlayColor: WidgetStatePropertyAll<Color>(
           danger ? tokens.dangerSoft : tokens.accentSoft,
         ),
-        child: SizedBox(
-          height: kTouchTarget,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Icon(icon, size: 16, color: color),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(fontSize: 13, color: color),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 54),
+          // `.menu-row { padding: 9px 12px }`；二级入口额外 `padding-right: 34px`
+          //（15 右边距 + 6 箭头 + 13 间隙），箭头位置才和 Web 一致。
+          padding: EdgeInsets.fromLTRB(12, 9, sub ? 15 : 12, 9),
+          decoration: BoxDecoration(
+            color: tokens.tint1,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: menuCardBorder(tokens)),
+          ),
+          child: Row(
+            children: [
+              // `.menu-row__icon`：34×34、11 圆角、`--accent-soft` 托、17px 图标
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(11),
+                  color: danger ? tokens.dangerSoft : tokens.accentSoft,
+                ),
+                child: Icon(
+                  icon,
+                  size: 17,
+                  color: danger ? tokens.danger : tokens.accentLight,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    // CSS `font-weight: 550`：Flutter 的字重只有整百档，取 600。
+                    fontWeight: FontWeight.w600,
+                    color: color,
                   ),
                 ),
-              ],
-            ),
+              ),
+              if (sub) ...[const SizedBox(width: 13), const _SubChevron()],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// `.menu-row--sub::after`：6×6 的「上 + 右」两条边，转 45° 成一颗右向箭头。
+class _SubChevron extends StatelessWidget {
+  const _SubChevron();
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.tokens;
+    return Transform.rotate(
+      angle: math.pi / 4,
+      child: Container(
+        width: 6,
+        height: 6,
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: tokens.textFaint, width: 1.6),
+            right: BorderSide(color: tokens.textFaint, width: 1.6),
           ),
         ),
       ),

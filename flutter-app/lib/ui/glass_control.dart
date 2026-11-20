@@ -123,14 +123,13 @@ class _GlassControlState extends State<GlassControl> {
           key: _anchorKey,
           behavior: HitTestBehavior.opaque,
           onTap: _toggle,
-          // 26×26 / 圆角 8 / 1px border-strong / surface 底：与「T」、闹钟同一套壳
-          // （之前这里只有一颗裸图标，三颗并排看出来少了个框）。
-          // 图标 14×14 + `--accent-light`（`.glass-control__icon:2787-2796`）。
+          // 26×26 的命中区、**不带按钮壳**（无描边 / 无底色 / 无圆角），
+          // 与「T」、闹钟一致：只留图标。
+          // 图标 17×17 + `--accent-light`（`.glass-control__icon`）。
           child: ToolTriggerChrome(
-            active: _entry != null,
             child: Icon(
               Icons.water_drop_outlined,
-              size: 14,
+              size: 17,
               color: tokens.accentLight,
             ),
           ),
@@ -223,13 +222,18 @@ class _GlassRow extends StatelessWidget {
               inactiveTrackColor: tokens.progressTrack,
               thumbColor: tokens.sliderThumb,
               overlayColor: tokens.accentSoft,
+              // 拖滑杆时**不弹百分比气泡**：面板右侧那格 `40%` 一直在显示当前值，
+              // 气泡再弹一次既盖住面板上沿、又挡手指。与睡眠定时器、歌词字号
+              // 两根滑杆同一处置（都写 ShowValueIndicator.never）。
+              showValueIndicator: ShowValueIndicator.never,
             ),
             child: Slider(
               value: value.toDouble(),
               min: 0,
               max: kMaxGlassTransparency.toDouble(),
               divisions: kMaxGlassTransparency,
-              // 读屏：valueHint 用百分比文案（spec §14 滑块语义）。
+              // label 仍保留：它同时是 Slider 的语义值（读屏念 `40%`，
+              // spec §14 滑块语义），只是不再画成气泡。
               label: '$value%',
               onChanged: (v) => onChanged(v.round()),
             ),

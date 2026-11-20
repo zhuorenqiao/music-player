@@ -17,9 +17,12 @@
 // 与原版的两处有意差异（改之前先读）：
 //
 // 1. **没有「返回」按钮，与原版一致**（早先版本在头部左侧加过一颗，已按原版
-//    的感受去掉）。退出走全局快捷键：Esc / L（`src/App.tsx:1595` 的 `Escape`、
-//    `:1603` 的 `KeyL`，Flutter 侧在 `core/shortcuts.dart` 的
-//    `CloseOverlayIntent` / `ToggleLyricsPageIntent`），以及开合按钮本身。
+//    的感受去掉）。桌面退出走全局快捷键：Esc / L（`src/App.tsx:1595` 的
+//    `Escape`、`:1603` 的 `KeyL`，Flutter 侧在 `core/shortcuts.dart` 的
+//    `CloseOverlayIntent` / `ToggleLyricsPageIntent`），以及顶栏那颗开合按钮本身。
+//    **手机上没有键盘**，所以窄屏（<900）另加一条手势：点整页任意空白处
+//    （歌名那条带、歌词周围的留白，以及控制条上那行工具周围的空白）即切回
+//    简约模式（[_maybeTapToRestore]）；点歌词行仍是定位播放、点频谱条不触发。
 //
 // 2. **状态行用 T16 的 `LyricsStatusLine`，位置从右栏脚注挪到左列顶部**。
 //    原版那句 `.lyrics-page__status--art`（`:1146`）挂在右栏封面下方；本工程窄屏
@@ -48,6 +51,7 @@ import '../playback/track.dart';
 import '../state/bilingual_state.dart';
 import '../state/cover_state.dart';
 import '../state/lightbox_controller.dart';
+import '../state/lyrics_page_controller.dart';
 import '../state/lyrics_state.dart';
 import '../theme/app_tokens.dart';
 import 'bilingual_toggle.dart';
@@ -206,58 +210,80 @@ class _LyricsPageState extends State<LyricsPage> {
     // 阴影全剥掉（app.css:510-518），卡面只留**一张** —— 沉浸模式与简约模式
     // 因此长得一样（原版截图里歌词页与控制条同在一张卡里，卡内没有第二道缝）。
     // 纯展示 / 测试没有 scope 时仍是独立卡（既有几何断言不破）。
-    final body = Padding(
-      key: const Key('lyrics-page-body'),
-      padding: _pagePadding(MediaQuery.sizeOf(context).width),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            // 富余空间全落在「左组」与下拉之间 —— 这就是 React 那道
-            // `margin-left: auto`（app.css 的 .wave-style）：按钮紧跟歌名，
-            // 下拉贴最右。
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // 左组：歌名块 + 三颗工具按钮（原版 `header.lyrics-page__head`
-              // 就是 meta → ToolButtons → WaveStylePicker 三个孩子，没有返回按钮）。
-              // 组内用 mainAxisSize.min —— 组不撑开，宽度由内容决定。
-              Flexible(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(child: meta),
+    //
+    // 小屏：**整页（含歌名那条带）**都是「点哪儿都切回简约模式」的热区，
+    // 所以包装在最外层 —— 从前的热区只包正文，点页头（歌名 / artist）没反应。
+    // 里层的按钮与歌词行各有自己的识别器，仍按原样工作（见 [_maybeTapToRestore]）。
+    final body = _maybeTapToRestore(
+      enabled: !desktop,
+      child: Padding(
+        key: const Key('lyrics-page-body'),
+        padding: _pagePadding(MediaQuery.sizeOf(context).width),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              // 窄屏那颗 ⋯ 浮在卡片右上角（`shell.dart` 里那条 `Positioned`），
+              // 歌名行给它让出 42px：长歌名在图标左边省略，而不是钻到图标底下
+              // （Web 的 `body.is-lyrics-page .lyrics-page__head { padding-right: 42px }`）。
+              padding: EdgeInsets.only(right: desktop ? 0 : 42),
+              child: Row(
+                // 富余空间全落在「左组」与下拉之间 —— 这就是 React 那道
+                // `margin-left: auto`（app.css 的 .wave-style）：按钮紧跟歌名，
+                // 下拉贴最右。
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // 左组：歌名块 + 三颗工具按钮（原版 `header.lyrics-page__head`
+                  // 就是 meta → ToolButtons → WaveStylePicker 三个孩子，没有返回按钮）。
+                  // 组内用 mainAxisSize.min —— 组不撑开，宽度由内容决定。
+                  // 窄屏（<900）：这一组连同右边的下拉一起下移到频谱条上方
+                  // （见 `transport.dart` 的 `_WaveRow`，对译 app.css 的
+                  // `.transport__lyric-row`），页头只剩歌名 —— 手机上一只手够不到顶端。
+                  Flexible(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(child: meta),
+                        if (desktop) ...[
+                          const SizedBox(width: _kHeadGap),
+                          // 「T」/毛玻璃/睡眠定时器：桌面沉浸模式里从控制条挪到这一格
+                          // （歌名右边、下拉左边），面板随之改向下弹。
+                          const ToolButtons(side: ToolPanelSide.below),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (desktop) ...[
+                    // M3 D.4：右上角是波形样式下拉（原版 App.tsx:1100 的
+                    // WaveStylePicker）。面板用 Overlay 挂在更上层，不会被歌词页的
+                    // 裁剪/圆角切掉。
+                    // 与左侧工具按钮之间补头部 gap（React `.lyrics-page__head { gap: 12px }`）：
+                    // 这一行是 spaceBetween，空间紧张时左组会把下拉挤到贴住工具按钮，
+                    // 没有这段固定间距两颗控件边框会相贴。
                     const SizedBox(width: _kHeadGap),
-                    // 「T」/毛玻璃/睡眠定时器：沉浸模式里从控制条挪到这一格
-                    // （歌名右边、下拉左边），面板随之改向下弹。
-                    const ToolButtons(side: ToolPanelSide.below),
+                    const WaveStylePicker(),
                   ],
-                ),
-              ),
-              // M3 D.4：右上角是波形样式下拉（原版 App.tsx:1100 的
-              // WaveStylePicker）。面板用 Overlay 挂在更上层，不会被歌词页的
-              // 裁剪/圆角切掉。
-              // 与左侧工具按钮之间补头部 gap（React `.lyrics-page__head { gap: 12px }`）：
-              // 这一行是 spaceBetween，空间紧张时左组会把下拉挤到贴住工具按钮，
-              // 没有这段固定间距两颗控件边框会相贴。
-              const SizedBox(width: _kHeadGap),
-              const WaveStylePicker(),
-            ],
-          ),
-          const SizedBox(height: _kPageGap),
-          Expanded(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                border: Border(top: BorderSide(color: tokens.border)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.only(top: _kBodyPaddingTop),
-                child: desktop
-                    ? _desktopBody(lyrics: lyrics, bilingual: bilingual)
-                    : _narrowBody(lyrics: lyrics, bilingual: bilingual),
+                ],
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: _kPageGap),
+            // 正文不再是热区本身：热区已经包在整页外面（见 [body] 与
+            // [_maybeTapToRestore]），点页头那一带同样能切回简约模式。
+            Expanded(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: tokens.border)),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: _kBodyPaddingTop),
+                  child: desktop
+                      ? _desktopBody(lyrics: lyrics, bilingual: bilingual)
+                      : _narrowBody(lyrics: lyrics, bilingual: bilingual),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
     if (PlayerCardScope.maybeOf(context) != null) {
@@ -276,6 +302,37 @@ class _LyricsPageState extends State<LyricsPage> {
         boxShadow: tokens.shadowCard,
       ),
       child: body,
+    );
+  }
+
+  /// 窄屏（<900）里「点卡片任意处 → 切回简约模式（封面页）」的热区。
+  ///
+  /// 为什么需要：手机上没有 Esc / L，页内也不再放「返回」胶囊（见文件头），
+  /// 退出只剩顶栏那颗模式按钮 —— 手指要够到右上角，还是个小图标。
+  /// 于是把**整页**（歌名那条带 + 正文，即 `.lyrics-page__head` 与
+  /// `.lyrics-page__body`）做成热区：点哪儿都 `LyricsPageController.close()`，
+  /// 回到封面页。控制条上那行工具（`.transport__lyric-row`）在 `transport.dart`
+  /// 里另挂一个同样的热区 —— 那一行不在本页子树内。
+  ///
+  /// 三处**有意排除**（改之前先读）：
+  ///   * 歌词行自己那颗 `GestureDetector`（点击定位播放）留在里层 —— 内层识别器
+  ///     在竞技场里先入先赢，点文字仍然是定位，不会误退出；
+  ///   * 页头的按钮（「双语」开关 / 三颗工具按钮 / 波形下拉）同样是内层识别器，
+  ///     点它们照旧弹面板；只有它们周围的空白算热区；
+  ///   * 频谱条在控制条的 `transport__wave` 行里，根本不在本页子树内，
+  ///     点它不触发（频谱是纯装饰）。
+  ///
+  /// 只在窄屏生效：桌面有 Esc / L，鼠标还容易误点留白，不做这个热区。
+  Widget _maybeTapToRestore({required bool enabled, required Widget child}) {
+    final controller = context.read<LyricsPageController?>();
+    if (!enabled || controller == null) return child;
+    return GestureDetector(
+      key: const Key('lyrics-tap-to-simple'),
+      // opaque：两行歌词之间的留白、页头两侧的内边距也算热区
+      // （子树没底的像素同样要能点到）。
+      behavior: HitTestBehavior.opaque,
+      onTap: controller.close,
+      child: child,
     );
   }
 

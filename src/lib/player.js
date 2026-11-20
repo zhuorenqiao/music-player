@@ -16,6 +16,9 @@ export const AUDIO_ERROR_MESSAGES = Object.freeze({
 /** 无法归类时的兜底提示。 */
 export const UNKNOWN_ERROR_MESSAGE = '音频播放失败，请稍后重试';
 
+/** 默认音量：没有存档时按 100% 起步。 */
+export const DEFAULT_VOLUME = 1;
+
 /** 播放被浏览器自动播放策略拦截时的提示。 */
 export const AUTOPLAY_BLOCKED_MESSAGE = '浏览器阻止了自动播放，请点击播放按钮开始';
 
@@ -52,7 +55,7 @@ export class Player {
   #loading = false;
 
   /** @type {number} 静音前的音量，用于恢复 */
-  #lastVolume = 0.7;
+  #lastVolume = DEFAULT_VOLUME;
 
   /** @type {boolean} 是否已销毁 */
   #disposed = false;
@@ -71,7 +74,7 @@ export class Player {
       throw new TypeError('Player 需要一个 <audio> 元素');
     }
     this.#audio = audio;
-    this.#lastVolume = clamp01(audio.volume || 0.7) || 0.7;
+    this.#lastVolume = clamp01(audio.volume || DEFAULT_VOLUME) || DEFAULT_VOLUME;
     this.#bindNativeEvents();
   }
 
@@ -332,7 +335,7 @@ export class Player {
     this.#audio.muted = Boolean(muted);
     if (!muted && this.#audio.volume === 0) {
       // 音量是 0 的情况下取消静音，恢复上一次的音量
-      this.#audio.volume = this.#lastVolume > 0 ? this.#lastVolume : 0.7;
+      this.#audio.volume = this.#lastVolume > 0 ? this.#lastVolume : DEFAULT_VOLUME;
     }
   }
 
@@ -350,7 +353,7 @@ export class Player {
     } else {
       this.#audio.muted = false;
       if (this.#audio.volume === 0) {
-        this.#audio.volume = this.#lastVolume > 0 ? this.#lastVolume : 0.7;
+        this.#audio.volume = this.#lastVolume > 0 ? this.#lastVolume : DEFAULT_VOLUME;
       }
     }
     return this.#audio.muted;

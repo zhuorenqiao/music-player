@@ -28,6 +28,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_media_session/flutter_media_session.dart' as fms;
 
+import '../cover/generated_artwork.dart';
 import 'media_session_bridge.dart';
 
 /// 通知渠道名（Android 通知栏上显示的应用名 / 渠道名）。
@@ -145,7 +146,17 @@ MediaSessionCommand? commandFromAction(fms.MediaAction action) {
 
 /// 平台媒体会话的桥。启动一次、按快照推状态、把动作转成命令。
 class FlutterMediaSessionBridge implements MediaSessionBridge {
-  FlutterMediaSessionBridge();
+  /// [artwork] 是「没有真封面时用来兜底的生成卡」：有人传（生产装配会传）
+  /// 才会去栅格化落盘；不传（测试、无界面场景）就维持旧行为，只推真封面。
+  FlutterMediaSessionBridge({this.artwork}) {
+    artwork?.addListener(_onArtworkReady);
+  }
+
+  /// 生成卡的栅格化缓存；null = 不接管第四级封面。
+  final GeneratedArtworkCache? artwork;
+
+  /// 最近一次推出去的快照：生成卡是异步画出来的，画完之后得拿它重推一遍。
+  PublishedSnapshot? _lastSnapshot;
 
   final fms.FlutterMediaSession _session = fms.FlutterMediaSession();
   final StreamController<MediaSessionCommand> _commands =
@@ -200,7 +211,9 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
     if (_disposed) return;
     final platform = fms.FlutterMediaSessionPlatform.instance;
 
-    final artworkUri = toArtUri(snapshot.artUri);
+    // 记住这一条：生成卡落盘之后要靠它重推（见 [_onArtworkReady]）。
+    _lastSnapshot = snapshot;
+    final artworkUri = _artworkUriOf(snapshot);
     final metadataKey = [
       snapshot.title,
       snapshot.artist,
@@ -264,6 +277,7 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    artwork?.removeListener(_onArtworkReady);
     await _actionSub?.cancel();
     _actionSub = null;
     if (_started) {
@@ -272,6 +286,39 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
       await _session.deactivate();
     }
     await _commands.close();
+  }
+
+  /// 系统侧要的那张封面 URI：真封面优先，没有就用生成卡。
+  ///
+  /// 生成卡是**纯绘制**的东西（spec §12：不落盘、不写回 `Track.cover`），
+  /// 系统卡片只认 URI，于是无内嵌 / 无在线封面的歌在通知栏一直是应用小图标。
+  /// 这里在平台边界上补最后一刀：把同一张卡栅格化成 PNG 交给系统 —— 界面
+  /// 四级兜底的语义一点没变，变的只是「第四级也能给系统看」。
+  ///
+  /// 栅格化是异步的：这一轮先返回 null（通知栏继续挂占位图标），画完由
+  /// 缓存 notify、[_onArtworkReady] 拿最后一条快照重推一次，图就换上了。
+  String? _artworkUriOf(PublishedSnapshot snapshot) {
+    final real = toArtUri(snapshot.artUri);
+    if (real != null) return real;
+    final cache = artwork;
+    if (cache == null || snapshot.title.isEmpty) return null;
+    final generated = cache.pathFor(
+      artist: snapshot.artist,
+      title: snapshot.title,
+    );
+    if (generated != null) return toArtUri(generated);
+    unawaited(cache.prime(artist: snapshot.artist, title: snapshot.title));
+    return null;
+  }
+
+  /// 生成卡落盘了：拿最后一条快照重推一遍。
+  ///
+  /// 重推是安全的：publish 内部按「标题 + 歌手 + 专辑 + 封面 URI」指纹去重，
+  /// 封面 URI 变了才会真的打平台，其它字段只是跟着再走一遍。
+  void _onArtworkReady() {
+    final last = _lastSnapshot;
+    if (last == null || _disposed) return;
+    unawaited(publish(last));
   }
 
   /// 取 / 放后台保活（spec §7.2「息屏续播」）。

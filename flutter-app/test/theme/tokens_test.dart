@@ -270,6 +270,15 @@ void main() {
     expect(tokens.toastErrorBg, const Color(0xFFFFF1F3)); // #fff1f3
   });
 
+  test('浅色模式下实底按钮的图标 / 文字压白（app.css 的 --accent-ink 覆写）', () {
+    // 按钮自己铺 accent 时（电台播放键、睡眠定时器「开始」…）用白字；
+    // 白底 / 浅底按钮走 text / accentLight，不读这个 token。
+    expect(AppTokens.lightMint.accentInk, const Color(0xFFFFFFFF));
+    expect(AppTokens.lightPink.accentInk, const Color(0xFFFFFFFF));
+    expect(AppTokens.lightBlue.accentInk, const Color(0xFFFFFFFF));
+    expect(AppTokens.lightMint.colorScheme.onPrimary, const Color(0xFFFFFFFF));
+  });
+
   test('深色蓝的 accentLine 是浅靛蓝（app.css:321 逐字），不是 accent 同色', () {
     expect(AppTokens.darkBlue.accentLine, const Color(0x578DB4FF));
     // rgba(141, 180, 255, 0.34)：0.34 × 255 = 86.7 → 0x57

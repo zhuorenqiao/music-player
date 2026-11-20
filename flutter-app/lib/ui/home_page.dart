@@ -22,6 +22,8 @@ import 'cover_lightbox.dart';
 import 'header.dart';
 import 'lyrics_page.dart';
 import 'panel.dart';
+import 'radio_bar.dart';
+import 'radio_page.dart';
 import 'shell.dart';
 import 'stage.dart';
 import 'transport.dart';
@@ -74,6 +76,9 @@ class HomePage extends StatelessWidget {
                 onAddFiles: () => _addFiles(library),
                 onAddFolder: () => _addFolder(library),
                 onClearPlaylist: library.clearPlaylist,
+                // 「电台」入口（T31）：整页切过去；回来时电台继续在后台放，
+                // 由控制条上方那条迷你电台条交代状态（见 RadioBar）。
+                onOpenRadio: () => _openRadio(context),
                 // React `App.tsx:1700` 的 onSwitchView：在封面页 / 完整歌词页
                 // 之间切，与「点曲目区进歌词页」共用同一个控制器。
                 onSwitchView: page.toggle,
@@ -86,6 +91,8 @@ class HomePage extends StatelessWidget {
                 frostLevel: frostLevel,
               ),
               transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
+              // 迷你电台条：贴在控制条正上方；没有当前台时它自己返回空。
+              radioBar: RadioBar(onOpen: () => _openRadio(context)),
               coverPath: coverPath,
               frostLevel: frostLevel,
               // 融合卡整张底色的 alpha 缩放（`.app__main` 的 color-mix）
@@ -95,11 +102,31 @@ class HomePage extends StatelessWidget {
             // 放大层（M2b T11）：全屏 Stack 顶层；关闭走 controller.close
             //（焦点归还给封面热区，T11 的入口接线）。
             if (lightbox.isOpen)
-              Positioned.fill(
-                child: CoverLightbox(onClose: lightbox.close),
-              ),
+              Positioned.fill(child: CoverLightbox(onClose: lightbox.close)),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 「电台」：整页切到电台页（淡入，与开屏同一节奏）。
+  ///
+  /// 页面是**独立路由**而不是同一棵树里的第 4 个区域：电台页有自己的顶栏
+  ///（标题 + 回音乐按钮）和自己的滚动区，塞进 [HomeLayout] 的槽位只会把
+  /// 两套骨架搅在一起。
+  ///
+  /// 返回后**不停台**：电台继续在后台放，音乐页底部那条 [RadioBar] 接着交代
+  ///「还在响的是哪一台」，点它就能回到电台页。关掉只有两条路：条上的暂停 /
+  /// 关闭，或者在音乐页按下播放（音乐一开声，电台自动让位）。
+  Future<void> _openRadio(BuildContext context) async {
+    final navigator = Navigator.of(context);
+    await navigator.push<void>(
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 240),
+        pageBuilder: (_, _, _) => RadioPage(onBack: navigator.pop),
+        transitionsBuilder: (_, animation, _, child) =>
+            FadeTransition(opacity: animation, child: child),
       ),
     );
   }

@@ -1,28 +1,42 @@
 // lib/ui/header.dart
 //
-// 顶栏：左侧品牌区，右侧唯一的「更多」按钮。
+// 顶栏：左侧品牌区，右侧「模式切换」+「电台」+「更多」。
 //
-//   - 宽 <480（`isUltraCompact`）：隐藏副标题，按钮收成 36×36 图标钮；
-//   - 其余：三点图标 + 「更多」文字胶囊（36px 高、999 圆角）。
+//   - 宽 <900（`!isDesktop`，与 `@media (max-width: 899px)` 同档）：
+//     品牌整块不渲染（页面已铺满，品牌让位给卡片），按钮只留图标、
+//     并且**不再有按钮的「地」**（无底色 / 无描边 / 无圆角），看上去就是一枚
+//     浮在卡片右上角的 ⋯；「模式切换」整个不渲染 —— 点封面板 / 曲目区就能进歌词页，
+//     歌词页点空白处就能退回来，这颗按钮在小屏是重复的。顶栏只剩「电台」与「更多」。
+//     这一组按钮由 [HomeLayout] 浮到播放卡右上角，简约 / 沉浸两种模式同一个位置。
+//   - 宽 ≥900：品牌 40×40 logo + 中文标题 + 英文副标题；按钮是
+//     三点图标 + 文字胶囊（36px 高、999 圆角）。
 //
 // 按钮的视觉文案与读屏名都是「更多」（React `LibraryMenu.tsx:65` 的
 // `btn__text` 与 `aria-label="更多"` 同名）—— 从前 Flutter 侧写的是「菜单」
 // 而读屏叫「更多」，与原版差一截，一并对齐。语义里只留这一套名字，
 // 否则读屏会念两遍。
 //
-// 抽屉用 `showGeneralDialog` 从右侧滑入（不是底部弹层）：原版是右边缘的窄面板。
+// 「更多」按钮与抽屉住在 `more_menu.dart`（电台页页头也用它，两处同一颗）。
 // 三个动作回调由调用方注入，`HomePage` 接 `core/file_picking.dart`。
+//
+// T31 起「更多」左侧多一颗「电台」：进电台页的入口。它是顶栏里**唯一**带主题色
+// 的一颗（accent 描边 + accent 图标 + accent 微光），因为它是「另一个页面」的
+// 入口而不是又一个工具按钮；窄屏与其它按钮一样收成 32×32 图标，但保留 accent
+// 着色，仍能一眼认出来。
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
-import 'drawer_menu.dart';
+import 'more_menu.dart';
 
 class AppHeader extends StatelessWidget {
   const AppHeader({
     required this.onAddFiles,
     required this.onAddFolder,
     required this.onClearPlaylist,
+    this.onOpenRadio,
     this.onSwitchView,
     this.immersive = false,
     super.key,
@@ -31,6 +45,9 @@ class AppHeader extends StatelessWidget {
   final Future<void> Function() onAddFiles;
   final Future<void> Function() onAddFolder;
   final Future<void> Function() onClearPlaylist;
+
+  /// 「电台」入口：切到电台页。null 时不渲染（纯展示 / 旧调用点保持原样）。
+  final VoidCallback? onOpenRadio;
 
   /// 顶部「模式切换」按钮（React `App.tsx:220-229` 的 `.app__mode`）：
   /// 在封面页 / 完整歌词页之间切。null 时不渲染（纯展示 / 旧调用点保持原样）。
@@ -42,79 +59,79 @@ class AppHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
-    final compact = isUltraCompact(MediaQuery.sizeOf(context).width);
-    return Row(
-      children: [
-        Expanded(child: _Brand(compact: compact)),
-        const SizedBox(width: 8),
-        // `.app__actions`：模式切换在菜单左侧，gap 8（app.css:580-599）。
-        if (onSwitchView != null) ...[
+    final width = MediaQuery.sizeOf(context).width;
+    // 窄屏：没有品牌、按钮只留图标并收到 32px（app.css 的 `@media (max-width: 899px)`
+    // 里那三条 `.brand { display: none }` / `.btn__text { display: none }` /
+    // `.app__actions .btn { width: 32px; min-height: 32px }`）。
+    final narrow = !isDesktop(width);
+    // 极窄（<480）才隐藏副标题 —— 品牌现在只在桌面出现，这条留给未来复用。
+    final compact = isUltraCompact(width);
+    // 模式切换：窄屏整个不渲染（简约模式点曲目区进歌词页、歌词页点空白处退出，
+    // 这颗按钮在小屏是重复的；app.css 的 `@media (max-width: 899px)` 里
+    // `.app__mode { display: none }`）。
+    final showMode = onSwitchView != null && !narrow;
+    // 电台入口：桌面与「更多」并排；窄屏仍是图标一枚（见 [_RadioChip]）。
+    final openRadio = onOpenRadio;
+
+    final children = <Widget>[];
+    if (!narrow) {
+      children
+        ..add(Expanded(child: _Brand(compact: compact)))
+        ..add(const SizedBox(width: 8));
+    }
+    if (showMode) {
+      final switchView = onSwitchView!;
+      children
+        ..add(
           Semantics(
             key: const Key('view-mode-button'),
             button: true,
             label: immersive ? '切换到简约模式（封面页）' : '切换到沉浸模式（歌词页）',
             excludeSemantics: true,
-            onTap: onSwitchView,
+            onTap: switchView,
             child: InkWell(
-              onTap: onSwitchView,
+              onTap: switchView,
               borderRadius: BorderRadius.circular(999),
               overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
-              child: _ViewModeChip(compact: compact, immersive: immersive),
+              child: _ViewModeChip(iconOnly: narrow, immersive: immersive),
             ),
           ),
-          const SizedBox(width: 8),
-        ],
-        Semantics(
-          button: true,
-          label: '更多',
-          excludeSemantics: true,
-          onTap: () => _openMenu(context),
-          child: InkWell(
-            key: const Key('menu-button'),
-            onTap: () => _openMenu(context),
-            borderRadius: BorderRadius.circular(999),
-            overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
-            child: _MenuChip(compact: compact),
+        )
+        ..add(const SizedBox(width: 8));
+    }
+    if (openRadio != null) {
+      children
+        ..add(
+          Semantics(
+            button: true,
+            label: '电台',
+            excludeSemantics: true,
+            onTap: openRadio,
+            child: InkWell(
+              key: const Key('radio-button'),
+              onTap: openRadio,
+              borderRadius: BorderRadius.circular(999),
+              overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
+              child: _RadioChip(iconOnly: narrow),
+            ),
           ),
-        ),
-      ],
-    );
-  }
-
-  /// 右侧抽屉：遮罩可点、Esc 可关（`barrierDismissible`），滑入 240ms。
-  void _openMenu(BuildContext context) {
-    final tokens = context.tokens;
-    showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭菜单',
-      barrierColor: scrimColor(tokens),
-      transitionDuration: const Duration(milliseconds: 240),
-      pageBuilder: (context, animation, secondaryAnimation) => SafeArea(
-        minimum: const EdgeInsets.all(12),
-        child: Align(
-          alignment: Alignment.topRight,
-          child: DrawerMenu(
-            onAddFiles: onAddFiles,
-            onAddFolder: onAddFolder,
-            onClear: onClearPlaylist,
-          ),
-        ),
+        )
+        ..add(const SizedBox(width: 8));
+    }
+    children.add(
+      MoreMenu(
+        onAddFiles: onAddFiles,
+        onAddFolder: onAddFolder,
+        onClearPlaylist: onClearPlaylist,
+        iconOnly: narrow,
       ),
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(1, 0),
-            end: Offset.zero,
-          ).animate(curved),
-          child: child,
-        );
-      },
+    );
+
+    return Row(
+      mainAxisAlignment: narrow
+          ? MainAxisAlignment.end
+          : MainAxisAlignment.start,
+      children: children,
     );
   }
 }
@@ -181,25 +198,29 @@ class _Brand extends StatelessWidget {
   }
 }
 
-/// 模式切换按钮：与菜单同档（36px 高、12.5px 字、16px 图标、999 圆角）。
-/// 宽 <480 时 `.btn__text` 隐藏、按钮收成 36×36（app.css:4022-4045）。
+/// 模式切换按钮：桌面与菜单同档（36px 高、12.5px 字、16px 图标、999 圆角）；
+/// 窄屏 `.btn__text` 隐藏、按钮收成 32×32、图标 15px
+/// （app.css 的 `@media (max-width: 899px)`：`.app__actions .btn { width:32px;
+/// min-height:32px }` + `.app__actions .btn .icon { width:15px }`）。
 ///
 /// 图标是**描边**风格的两颗自定义图标（React `DiscIcon` / `LyricsIcon`），
 /// 不是 Material 的 `Icons.album` / `Icons.queue_music` —— 后者是实心的，
 /// 与原版的 1.7~1.8 描边观感差得很远。
 class _ViewModeChip extends StatelessWidget {
-  const _ViewModeChip({required this.compact, required this.immersive});
+  const _ViewModeChip({required this.iconOnly, required this.immersive});
 
-  final bool compact;
+  /// 窄屏档：只留图标、32px 方块；桌面档：图标 + 文字胶囊。
+  final bool iconOnly;
   final bool immersive;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
+    final iconSize = iconOnly ? 15.0 : 16.0;
     return Container(
-      height: 36,
-      width: compact ? 36 : null,
-      padding: compact
+      height: iconOnly ? 32 : 36,
+      width: iconOnly ? 32 : null,
+      padding: iconOnly
           ? EdgeInsets.zero
           : const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
@@ -208,12 +229,16 @@ class _ViewModeChip extends StatelessWidget {
         color: tokens.surface,
       ),
       alignment: Alignment.center,
-      child: compact
-          ? _ModeIcon(immersive: immersive, size: 16, color: tokens.text)
+      child: iconOnly
+          ? _ModeIcon(immersive: immersive, size: iconSize, color: tokens.text)
           : Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _ModeIcon(immersive: immersive, size: 16, color: tokens.text),
+                _ModeIcon(
+                  immersive: immersive,
+                  size: iconSize,
+                  color: tokens.text,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   immersive ? '简约模式' : '沉浸模式',
@@ -303,92 +328,128 @@ class _ModeIconPainter extends CustomPainter {
       oldDelegate.immersive != immersive || oldDelegate.color != color;
 }
 
-/// 菜单按钮：窄屏只剩一个 36×36 的图标位，其余时候是图标 + 文案的胶囊。
+/// 「电台」入口胶囊。
 ///
-/// 图标是**三个竖排圆点**（React `MoreIcon`：cx=12、cy=5.5/12/18.5、r=1.7，
-/// `fill=currentColor`），不是三条横线 —— 后者是 Material 的 `Icons.menu`，
-/// 与原版的「更多」语义对不上。窄屏（<.btn__text 隐藏>）时仍保留这三颗点。
-class _MenuChip extends StatelessWidget {
-  const _MenuChip({required this.compact});
+/// 顶栏里唯一带主题色的一颗：accent 描边 + accent 图标 + 一点点外发光，
+/// 与旁边的「模式切换 / 更多」那两颗素色胶囊分得开，又不会抢走播放按钮的注意力。
+/// 窄屏（<900）与其它顶栏按钮同一套规则：只剩 32×32 图标、去掉「地」，
+/// 但图标保留 accent 色 —— 它是另一个页面的入口，颜色是它唯一的身份标记。
+class _RadioChip extends StatelessWidget {
+  const _RadioChip({required this.iconOnly});
 
-  final bool compact;
+  final bool iconOnly;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
+    if (iconOnly) {
+      return SizedBox(
+        width: 32,
+        height: 32,
+        child: Center(child: _RadioIcon(size: 18, color: tokens.accent)),
+      );
+    }
     return Container(
       height: 36,
-      width: compact ? 36 : null,
-      padding: compact
-          ? EdgeInsets.zero
-          : const EdgeInsets.symmetric(horizontal: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        // 白底：与顶栏旁边那颗排序圆钮、卡片里 T/水滴/闹钟同一档（--surface，
-        // React `.btn` 的 `background: var(--surface)`）。从前这里只描边不填色，
-        // 透明底会透出背景渐变，跟旁边几颗白钮不成一套。
-        color: tokens.surface,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: tokens.border),
+        border: Border.all(color: tokens.accentLine),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [tokens.accentSoft, tokens.surface],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: tokens.accent.withValues(alpha: 0.16),
+            blurRadius: 18,
+            spreadRadius: -8,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       alignment: Alignment.center,
-      child: compact
-          ? const _MoreIcon(size: 16)
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const _MoreIcon(size: 16),
-                const SizedBox(width: 6),
-                Text(
-                  '更多',
-                  style: TextStyle(fontSize: 12.5, color: tokens.text),
-                ),
-              ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _RadioIcon(size: 16, color: tokens.accent),
+          const SizedBox(width: 6),
+          Text(
+            '电台',
+            style: TextStyle(
+              fontSize: 12.5,
+              letterSpacing: 0.6,
+              color: tokens.text,
             ),
+          ),
+          const SizedBox(width: 6),
+          // 一颗 4px 的「在播」点：让入口看起来像「开着的一台电台」，
+          // 而不是又一个纯图标按钮（只有装饰作用，点整颗胶囊都能进页面）。
+          Container(
+            width: 4,
+            height: 4,
+            decoration: BoxDecoration(
+              color: tokens.accent.withValues(alpha: 0.8),
+              shape: BoxShape.circle,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-/// React `MoreIcon` 的等价物：三个竖排圆点（filled）。
+/// 电台图标：下方一颗实心点 + 上方三道同心弧（广播波）。
 ///
-/// 规格逐字：viewBox 24×24、circle cx=12、cy=5.5/12/18.5、r=1.7、fill=currentColor。
-/// 用 CustomPaint 画而不是拼三个 `Icon`（Material 里没有对应的三点图标），
-/// 这样尺寸与圆点半径都由这份规格说了算。
-class _MoreIcon extends StatelessWidget {
-  const _MoreIcon({required this.size});
+/// 规格：viewBox 24×24，圆心 (12, 17.2)，点 r=1.9，弧半径 4.6 / 7.2 / 9.8，
+/// 每道都从 180° 扫到 360°（正上方那半圈），描边 1.6、圆端。
+class _RadioIcon extends StatelessWidget {
+  const _RadioIcon({required this.size, required this.color});
 
-  /// 图标边长（`.app__actions .btn .icon { width:16px; height:16px }`）。
   final double size;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = context.tokens;
     return SizedBox(
       width: size,
       height: size,
       child: CustomPaint(
-        painter: _MoreIconPainter(tokens.text),
+        painter: _RadioIconPainter(color: color),
         size: Size.square(size),
       ),
     );
   }
 }
 
-class _MoreIconPainter extends CustomPainter {
-  const _MoreIconPainter(this.color);
+class _RadioIconPainter extends CustomPainter {
+  const _RadioIconPainter({required this.color});
 
   final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 24×24 视口 → 按实际尺寸缩放（描边宽度不缩放，圆点半径按比例）。
     final s = size.width / 24;
-    final paint = Paint()..color = color;
-    final r = 1.7 * s;
-    for (final cy in const [5.5, 12.0, 18.5]) {
-      canvas.drawCircle(Offset(12 * s, cy * s), r, paint);
+    final center = Offset(12 * s, 17.2 * s);
+    canvas.drawCircle(center, 1.9 * s, Paint()..color = color);
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = 1.6 * s;
+    for (final radius in const [4.6, 7.2, 9.8]) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius * s),
+        math.pi,
+        math.pi,
+        false,
+        stroke,
+      );
     }
   }
 
   @override
-  bool shouldRepaint(_MoreIconPainter oldDelegate) => oldDelegate.color != color;
+  bool shouldRepaint(_RadioIconPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

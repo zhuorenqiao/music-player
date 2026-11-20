@@ -98,6 +98,42 @@ void main() {
     expect(driver.calls, contains('seek:50.0'));
   });
 
+  test('电台在响时，系统侧的播放类按键不再拉起音乐（否则听起来像「自动放歌」）', () async {
+    final bridge = FakeMediaSessionBridge();
+    final driver = FakeAudioDriver();
+    final transport = TransportController(
+      player: AudioPlayer(driver, scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1'), t('2')]),
+    );
+    final coordinator = MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+    );
+    var radioPlaying = true;
+    coordinator.suppressTransportCommands = () => radioPlaying;
+    await coordinator.attach();
+    await transport.playTrack('1');
+    // 电台接管声音：音乐被暂停（用户听到的是电台）
+    await transport.pause();
+    driver.calls.clear();
+
+    bridge.emit(PlayCommand());
+    await Future<void>.delayed(Duration.zero);
+    expect(driver.calls, isNot(contains('play')), reason: '电台在响，Play 不能把音乐拉起来');
+
+    bridge.emit(NextCommand());
+    await Future<void>.delayed(Duration.zero);
+    expect(transport.current!.id, '1', reason: '电台在响，Next 也不能换歌');
+
+    // 电台停了（用户按了关闭 / 断流用尽），系统按键恢复原样
+    radioPlaying = false;
+    bridge.emit(PlayCommand());
+    await Future<void>.delayed(Duration.zero);
+    expect(driver.calls, contains('play'));
+  });
+
   test('随机模式把 shuffle 与单曲循环同步给系统', () async {
     final bridge = FakeMediaSessionBridge();
     final transport = TransportController(

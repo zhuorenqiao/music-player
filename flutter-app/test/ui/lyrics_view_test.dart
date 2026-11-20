@@ -7,8 +7,8 @@
 //   * LyricsView —— 真实入口，订阅 LyricsState / BilingualState / PlayerState。
 //
 // 规格断言全部对着 CSS 的数值写（容器左右 padding 4/8、行内边距 6 8 / 12 14、
-// 字号 17/19、译文 13/14 + 上间距 1/3、行高 1.55/1.5、译文行高 1.45、past 不透明度
-// .62/.5、译文 .85）。手动暂停那条用例刻意区分「用户拖动」与「程序化居中」：前者
+// 字号 17/17（两档同字号，切换模式不跳；高亮行再乘 1.2）、译文 13/13 + 上间距 1/3、
+// 行高 1.55/1.5、译文行高 1.45、past 不透明度 .62/.5、译文 .85）。手动暂停那条用例刻意区分「用户拖动」与「程序化居中」：前者
 // 必须暂停跟随，后者绝不能被自己触发的滚动当成手动（否则当前行永远停在旧位置）。
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
@@ -161,7 +161,9 @@ void main() {
       expect(text.style!.height, closeTo(1.55, 0.001));
     });
 
-    testWidgets('full：容器 8、行内边距 12 14、字号 19、行高 1.5', (tester) async {
+    testWidgets('full：容器 8、行内边距 12 14、字号 17（与 compact 同字号）、行高 1.5', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         wrap(
           SizedBox(
@@ -183,14 +185,39 @@ void main() {
       );
       expect(lineBox(tester, 1).padding, _linePadFull);
       final text = tester.widget<Text>(find.text('第1句'));
-      expect(text.style!.fontSize, 19);
+      expect(text.style!.fontSize, 17);
       expect(text.style!.height, closeTo(1.5, 0.001));
     });
 
-    testWidgets('译文：compact 13/上间距 1，full 14/上间距 3，行高都 1.45', (tester) async {
+    testWidgets('两档同字号：简约 ⇄ 沉浸切换时同一句歌词不跳字号', (tester) async {
+      // 2026-11-19：full（歌词页）曾按通用 `.lyrics--full` 取 19px，比 compact 的
+      // 17px 大两号，切模式时整页歌词会突然变大 / 变小；两档必须同为 17。
+      for (final variant in LyricsVariant.values) {
+        await tester.pumpWidget(
+          wrap(
+            SizedBox(
+              height: 300,
+              child: LyricsLinesView(
+                lines: cued([(0, '同一句歌词')]),
+                trans: const [],
+                variant: variant,
+                activeIndex: 0,
+              ),
+            ),
+          ),
+        );
+        expect(
+          tester.widget<Text>(find.text('同一句歌词')).style!.fontSize,
+          closeTo(20.4, 0.001),
+          reason: '$variant 高亮行字号',
+        );
+      }
+    });
+
+    testWidgets('译文：compact 13/上间距 1，full 13/上间距 3，行高都 1.45', (tester) async {
       for (final entry in const [
         (LyricsVariant.compact, 13.0, 1.0),
-        (LyricsVariant.full, 14.0, 3.0),
+        (LyricsVariant.full, 13.0, 3.0),
       ]) {
         final variant = entry.$1;
         await tester.pumpWidget(
@@ -483,7 +510,10 @@ void main() {
       expect(find.byType(Scrollbar), findsNothing);
       // 也不占位：滚动视图的横向尺寸等于容器宽度（没有 8px 槽位）。
       final outer = tester.getSize(find.byType(LyricsLinesView));
-      expect(tester.getSize(find.byKey(const Key('lyrics-scroll'))).width, outer.width);
+      expect(
+        tester.getSize(find.byKey(const Key('lyrics-scroll'))).width,
+        outer.width,
+      );
     });
 
     testWidgets('手动拖动后 2.6s 内不跟随，到点恢复', (tester) async {
@@ -507,7 +537,10 @@ void main() {
           .position;
 
       // 模拟用户拖动（真的拖动，不是程序化滚动）
-      await tester.drag(find.byKey(const Key('lyrics-scroll')), const Offset(0, -300));
+      await tester.drag(
+        find.byKey(const Key('lyrics-scroll')),
+        const Offset(0, -300),
+      );
       await tester.pumpAndSettle();
       final afterManual = position.pixels;
       expect(afterManual, greaterThan(0));
@@ -622,6 +655,69 @@ void main() {
         0,
       );
     });
+
+    testWidgets('首次挂载就按当前行居中（简约 ⇄ 沉浸切换不再停在顶部）', (tester) async {
+      // 切模式会把整棵歌词树重新挂载。旧实现只在 activeIndex 变化时跟随，
+      // 新挂载这一下没人触发：列表停在 offset 0，当前行（第 20 行）在屏幕外，
+      // 看起来就是「切换后高亮没同步」。
+      await tester.pumpWidget(
+        wrap(
+          SizedBox(
+            height: 220,
+            child: LyricsLinesView(
+              lines: lines,
+              trans: const [],
+              variant: LyricsVariant.full,
+              activeIndex: 20,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final position = tester
+          .state<ScrollableState>(find.byType(Scrollable))
+          .position;
+      expect(position.pixels, greaterThan(0), reason: '首帧不能停在最上方');
+      final lineRect = tester.getRect(
+        find.byKey(const ValueKey('lyric-line-20')),
+      );
+      final viewRect = tester.getRect(find.byKey(const Key('lyrics-scroll')));
+      expect(
+        (lineRect.center.dy - viewRect.center.dy).abs(),
+        lessThan(lineRect.height),
+        reason: '首帧应把当前行放在视口中间',
+      );
+      // 首次定位不做动画：切过去的那一帧就该在位，而不是从第一行滑过来。
+      expect(position.isScrollingNotifier.value, isFalse);
+    });
+
+    testWidgets('视口高度变了（切模式后整卡重排）→ 当前行重新对位', (tester) async {
+      Widget build(double height) => wrap(
+        SizedBox(
+          height: height,
+          child: LyricsLinesView(
+            lines: lines,
+            trans: const [],
+            variant: LyricsVariant.full,
+            activeIndex: 20,
+          ),
+        ),
+      );
+      await tester.pumpWidget(build(220));
+      await tester.pumpAndSettle();
+      // 高度变了：旧偏移是按旧视口算的，当前行不在中间了。
+      await tester.pumpWidget(build(400));
+      await tester.pumpAndSettle();
+      final lineRect = tester.getRect(
+        find.byKey(const ValueKey('lyric-line-20')),
+      );
+      final viewRect = tester.getRect(find.byKey(const Key('lyrics-scroll')));
+      expect(
+        (lineRect.center.dy - viewRect.center.dy).abs(),
+        lessThan(lineRect.height),
+        reason: '视口尺寸变化后当前行应重新回到中间',
+      );
+    });
   });
 
   group('切歌后回到最上方', () {
@@ -676,9 +772,7 @@ void main() {
       expect(position.pixels, 0, reason: '换歌后新歌的歌词应从最上方开始');
     });
 
-    testWidgets('内容换了但高亮行没变（旧实现漏掉的那种）也回到顶部', (
-      tester,
-    ) async {
+    testWidgets('内容换了但高亮行没变（旧实现漏掉的那种）也回到顶部', (tester) async {
       await tester.pumpWidget(
         wrap(
           SizedBox(
@@ -734,9 +828,7 @@ void main() {
       expect(position.pixels, 0);
     });
 
-    testWidgets('内容换了这一轮不做居中：停在顶部，下一行变化时恢复跟随', (
-      tester,
-    ) async {
+    testWidgets('内容换了这一轮不做居中：停在顶部，下一行变化时恢复跟随', (tester) async {
       await tester.pumpWidget(
         wrap(
           SizedBox(
@@ -934,6 +1026,23 @@ void main() {
       );
     });
 
+    testWidgets('切换双语开关后译文立即出现 / 消失（不等下一行）', (tester) async {
+      await pumpView(tester);
+      harness.driver.emitPosition(1.5);
+      await tester.pumpAndSettle();
+      expect(find.text('你好'), findsOneWidget);
+
+      harness.bilingual.setEnabled(false);
+      await tester.pumpAndSettle();
+      // 关掉双语：译文立即消失，而不是停在上一行直到换了行号才重建
+      expect(find.text('你好'), findsNothing);
+
+      harness.bilingual.setEnabled(true);
+      await tester.pumpAndSettle();
+      // 重新打开：已有译文立即恢复显示
+      expect(find.text('你好'), findsOneWidget);
+    });
+
     testWidgets('点歌词 seek 到那句的时间', (tester) async {
       await pumpView(tester);
       await tester.tap(find.text('Darkness'));
@@ -967,10 +1076,10 @@ void main() {
     });
   });
 
-  // 同步 React「T」面板（app.css: `font-size: calc(19px * var(--lyric-scale))`
+  // 同步 React「T」面板（app.css: `font-size: calc(17px * var(--lyric-scale))`
   // + `font-family: var(--lyric-font)`，:1971-1990）
   group('歌词字号缩放与字体', () {
-    /// 两行原文 + 两行译文，完整歌词页那一套（19 / 14）。
+    /// 两行原文 + 两行译文，完整歌词页那一套（17 / 13）。
     Widget scaledLyrics({int activeIndex = 0}) => SizedBox(
       height: 400,
       child: LyricsLinesView(
@@ -981,7 +1090,7 @@ void main() {
       ),
     );
 
-    testWidgets('150%：原文 19→28.5、译文 14→21（乘的，不是换字号）', (tester) async {
+    testWidgets('150%：原文 17→25.5（高亮行再乘 1.2）、译文 13→19.5', (tester) async {
       final prefs = AppPrefs.inMemory();
       final theme = await ThemeState.load(prefs, platformDark: () => false);
       addTearDown(theme.dispose);
@@ -992,26 +1101,27 @@ void main() {
         ),
       );
 
-      // 100% 时就是规格表那套数值
-      expect(tester.widget<Text>(find.text('第一句')).style!.fontSize, 19);
-      expect(tester.widget<Text>(find.text('first')).style!.fontSize, 14);
+      // 100%：基础 17，高亮行再放大 1.2 倍
+      expect(
+        tester.widget<Text>(find.text('第一句')).style!.fontSize,
+        closeTo(20.4, 0.001),
+      );
+      expect(tester.widget<Text>(find.text('first')).style!.fontSize, 13);
 
       theme.setLyricScale(150);
       await tester.pump();
 
       expect(
         tester.widget<Text>(find.text('第一句')).style!.fontSize,
-        closeTo(28.5, 0.001),
+        closeTo(30.6, 0.001),
       );
       expect(
         tester.widget<Text>(find.text('first')).style!.fontSize,
-        closeTo(21, 0.001),
+        closeTo(19.5, 0.001),
       );
     });
 
-    testWidgets('选「霞鹜文楷」：原文与译文一起换成随包字体，默认那款不设家族', (
-      tester,
-    ) async {
+    testWidgets('选「霞鹜文楷」：原文与译文一起换成随包字体，默认那款不设家族', (tester) async {
       final prefs = AppPrefs.inMemory();
       final theme = await ThemeState.load(prefs, platformDark: () => false);
       addTearDown(theme.dispose);
@@ -1038,7 +1148,7 @@ void main() {
       );
     });
 
-    testWidgets('紧凑版也吃同一份缩放（17 * scale）', (tester) async {
+    testWidgets('紧凑版也吃同一份缩放（17 * scale，高亮行再 * 1.2）', (tester) async {
       final prefs = AppPrefs.inMemory();
       final theme = await ThemeState.load(prefs, platformDark: () => false);
       addTearDown(theme.dispose);
@@ -1059,13 +1169,92 @@ void main() {
         ),
       );
 
-      expect(tester.widget<Text>(find.text('第一句')).style!.fontSize, 17);
+      expect(
+        tester.widget<Text>(find.text('第一句')).style!.fontSize,
+        closeTo(20.4, 0.001),
+      );
       theme.setLyricScale(70);
       await tester.pump();
       expect(
         tester.widget<Text>(find.text('第一句')).style!.fontSize,
-        closeTo(11.9, 0.001),
+        closeTo(14.28, 0.001),
       );
+    });
+
+    testWidgets('高亮行放大 1.2 倍，相邻行与译文保持原字号', (tester) async {
+      for (final entry in const [
+        (LyricsVariant.compact, 17.0, 13.0),
+        (LyricsVariant.full, 17.0, 13.0),
+      ]) {
+        final variant = entry.$1;
+        await tester.pumpWidget(
+          wrap(
+            SizedBox(
+              height: 300,
+              child: LyricsLinesView(
+                lines: cued([(0, '第一句'), (1, '第二句')]),
+                trans: const ['first', 'second'],
+                variant: variant,
+                activeIndex: 0,
+              ),
+            ),
+          ),
+        );
+        expect(
+          tester.widget<Text>(find.text('第一句')).style!.fontSize,
+          closeTo(entry.$2 * 1.2, 0.001),
+          reason: '$variant 高亮行放大',
+        );
+        expect(
+          tester.widget<Text>(find.text('第二句')).style!.fontSize,
+          entry.$2,
+          reason: '$variant 普通行不变',
+        );
+        expect(
+          tester.widget<Text>(find.text('first')).style!.fontSize,
+          entry.$3,
+          reason: '$variant 译文不变',
+        );
+      }
+    });
+
+    testWidgets('换行时字号渐变：旧行缩回、新行放大都有中间态', (tester) async {
+      final pairs = cued([(0, '第一句'), (1, '第二句')]);
+      Widget build(int activeIndex) => wrap(
+        SizedBox(
+          height: 300,
+          child: LyricsLinesView(
+            lines: pairs,
+            trans: const [],
+            variant: LyricsVariant.full,
+            activeIndex: activeIndex,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(build(0));
+      // 首帧直接落在目标值：切模式重挂载不做入场放大
+      expect(
+        tester.widget<Text>(find.text('第一句')).style!.fontSize,
+        closeTo(20.4, 0.001),
+      );
+
+      await tester.pumpWidget(build(1));
+      await tester.pump(const Duration(milliseconds: 140));
+      final growing = tester.widget<Text>(find.text('第二句')).style!.fontSize;
+      final shrinking = tester.widget<Text>(find.text('第一句')).style!.fontSize;
+      // 半程两边都在中间态，而不是一步跳到位
+      expect(growing, greaterThan(17.0));
+      expect(growing, lessThan(20.4));
+      expect(shrinking, greaterThan(17.0));
+      expect(shrinking, lessThan(20.4));
+
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.text('第二句')).style!.fontSize,
+        closeTo(20.4, 0.001),
+      );
+      expect(tester.widget<Text>(find.text('第一句')).style!.fontSize, 17);
     });
   });
 }
@@ -1133,7 +1322,10 @@ class _Harness {
       ChangeNotifierProvider<PlayerState>.value(value: player),
     ],
     child: wrap(
-      const SizedBox(height: 400, child: LyricsView(variant: LyricsVariant.full)),
+      const SizedBox(
+        height: 400,
+        child: LyricsView(variant: LyricsVariant.full),
+      ),
     ),
   );
 

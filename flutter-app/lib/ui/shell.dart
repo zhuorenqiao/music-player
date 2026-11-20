@@ -41,14 +41,14 @@ const EdgeInsets kDesktopPadding = EdgeInsets.fromLTRB(28, 24, 28, 28);
 /// 满宽档外层边距：`padding: 28px 32px 32px`（app.css:5061-5064）。
 const EdgeInsets kUltraPadding = EdgeInsets.fromLTRB(32, 28, 32, 32);
 
-/// 窄屏外层边距：`padding: 16px 14px 14px`（app.css:419）。
+/// 窄屏外层边距：`padding: 0`。
 ///
-/// 底边 14 是原版那句注释的所在：「底部留白：整张播放卡浮在页面里，底边圆角与
-/// 边距都要露出来」。之前这里写 0，是把它和 `.transport { position: sticky;
-/// bottom: 0 }` 混成了一件事 —— 卡底边于是直接贴在窗口底边、24px 圆角被切掉，
-/// 小屏上看着就是「底部留白没了」。控制条自己的 `12px`（+ 安全区）内边距在
-/// [TransportBar] 里，和这层页面留白是两码事。
-const EdgeInsets kNarrowPadding = EdgeInsets.fromLTRB(14, 16, 14, 14);
+/// 小屏（<900）现在「页面铺满」：React 侧把 `.app { padding: 16px 14px 14px }`
+/// 改成了 `padding: 0`，同时 `.player { border: none; border-radius: 0 }`，
+/// 边角交给外层容器（窗口 / 手机屏幕）去裁 —— 不再有「卡片套在窗口里」的
+/// 双层留白。原来那句「底部留白：整张播放卡浮在页面里，底边圆角与边距都要
+/// 露出来」随铺满作废，控制条自己补 30px 底内边距（见 [TransportBar]）。
+const EdgeInsets kNarrowPadding = EdgeInsets.zero;
 
 /// 桌面左列（列表面板）的固定宽度：`grid-template-columns: 400px minmax(0, 1fr)`。
 const double kDesktopPanelWidth = 400;
@@ -60,6 +60,7 @@ class HomeLayout extends StatelessWidget {
     required this.stage,
     required this.panel,
     required this.transport,
+    this.radioBar,
     this.coverPath = '',
     this.frostLevel = 0,
     this.glassLevel = 1,
@@ -71,6 +72,14 @@ class HomeLayout extends StatelessWidget {
   final Widget stage;
   final Widget panel;
   final Widget transport;
+
+  /// 迷你电台条（T31）：电台在后台放时，贴在控制条**正上方**的那一条。
+  ///
+  /// 位置刻意放在卡内最底、紧邻控制条：窄屏上它就是「播放器底部的一条迷你条」
+  /// （与流媒体 App 的下栏同位），桌面则落在右列控制区上方 —— 两档都不需要
+  /// 另起一行动骨架，卡还是同一张卡。[RadioBar] 自己在无当前台时返回空，
+  /// 所以这里不必判空。
+  final Widget? radioBar;
 
   /// 播放卡玻璃后垫的封面路径（React `.glass-frost` 用 `useCover(current)`）。
   /// 由 [HomePage] 注入；不传时为空串（纯展示 / 测试）。
@@ -109,16 +118,36 @@ class HomeLayout extends StatelessWidget {
         // 列表靠控制条那颗入口唤出弹层。
         final wideLyrics = isWide(MediaQuery.sizeOf(context).width);
         final ultra = isUltraWide(MediaQuery.sizeOf(context).width);
+        // 系统栏占位（状态栏 / 手势条 / 刘海）。窄屏铺满时卡面要一直画到屏幕
+        // 四边（见 [PlayerCard.contentInsets]），所以这里先取一份原始 insets，
+        // 交给卡内内容与右上角那颗 ⋯ 各自内缩。
+        final insets = MediaQuery.paddingOf(context);
         // 公共字段不参与类型提升，先取到局部变量（`overlay != null` 之后才好用）。
         final overlay = this.overlay;
         // `.player`：曲目区与控制区合成一张卡（app.css:427-518）。两档都用它，
         // 差异只在「卡外还有没有一张常驻面板」。
-        Widget playerCard(Widget content) => PlayerCard(
+        //
+        // 窄屏铺满：`radius` 传 0，卡面只留玻璃底、边框与卡外投影一并去掉
+        // （React `@media (max-width: 899px) { .player { border: none;
+        // border-radius: 0 } }`）。
+        //
+        // [contentInsets] 是「卡面铺满、内容让位」的那一半：卡面（玻璃底 +
+        // 渐变）一直铺到屏幕四边 —— 状态栏 / 手势条底下也是卡面，系统栏透明
+        // 之后就看不到那条没被背景盖住的黑边；卡里的内容再按 insets 内缩，
+        // 文字与按钮不会钻到系统栏下面。把 SafeArea 加在卡外做不到这一点：
+        // 卡本身会被挤离屏幕顶边（那正是顶部那块黑色的来路）。
+        Widget playerCard(
+          Widget content, {
+          EdgeInsets contentInsets = EdgeInsets.zero,
+        }) => PlayerCard(
           coverPath: coverPath,
           frostLevel: frostLevel,
           glassLevel: glassLevel,
+          radius: desktop ? kRadiusXl : 0,
+          contentInsets: contentInsets,
           children: [
             Expanded(child: content),
+            ?radioBar,
             transport,
           ],
         );
@@ -135,7 +164,15 @@ class HomeLayout extends StatelessWidget {
                 Expanded(child: player),
               ],
             );
+        // 安全区：桌面档整块让出（窗口里的 insets 通常为 0，只当装饰性边距）；
+        // **窄屏不让位** —— 卡面要铺到屏幕四边（状态栏 / 手势条底下也是卡面），
+        // 内缩交给 [PlayerCard.contentInsets] 与右上角那颗 ⋯（见下面的
+        // `Positioned`）。四条全 false 时 SafeArea 只剩透明的一层，等于原样。
         return SafeArea(
+          top: desktop,
+          bottom: desktop,
+          left: desktop,
+          right: desktop,
           child: Padding(
             padding: ultra
                 ? kUltraPadding
@@ -150,8 +187,19 @@ class HomeLayout extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    header,
-                    SizedBox(height: desktop ? 18 : 14),
+                    // 窄屏的顶栏不再占一行：简约 / 沉浸两种模式都只有「电台 / 更多」
+                    // 两颗图标，位置由下面 Stack 里那一条 `Positioned` 统一给 ——
+                    // 贴卡片（= 视口）右上角、右侧内缩 10px，纵向 = 安全区 + 16
+                    // （与电台页右上角那两颗同一条水平线；对译 app.css 小屏媒体块的
+                    //  `body:not(.is-lyrics-page) .app__header,
+                    //   body.is-lyrics-page .app__header { top: 28px;
+                    //   right: 0; padding: 0 10px }`）。
+                    // 从前沉浸模式的顶栏在流内（10 + 32 + 14 间距）：切模式时那颗 ⋯
+                    // 会跟着上下跳一截，卡片也被推下去；现在两处都浮在卡上、同源落位。
+                    if (desktop) ...[
+                      header,
+                      const SizedBox(height: 18),
+                    ],
                     if (desktop)
                       if (overlay != null)
                         // 沉浸模式（完整歌词页）也只剩**一张卡**：歌词页与控制条
@@ -193,14 +241,33 @@ class HomeLayout extends StatelessWidget {
                             ),
                           ),
                         )
-                    else if (overlay != null)
-                      // 窄屏：歌词页与控制条同在那一张 `.player` 卡里
-                      // （中间不再留 14px 缝 —— 原版此处也是同一张卡的两段）。
-                      Expanded(child: playerCard(overlay))
                     else
-                      // 窄屏无 overlay：只有一张 `.player` 卡吃掉全部可用高度。
-                      // 面板按 React `App.tsx:1714` 收进底部弹层，这里不渲染。
-                      Expanded(child: playerCard(stage)),
+                      // 窄屏：两种模式共用同一套 —— 卡片铺满整屏（歌词页的歌词与
+                      // 控制条也在这一张卡里），顶栏那颗 ⋯ 浮在卡片右上角。
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              // 卡面铺满整屏（含系统栏底下），内容按 insets 内缩。
+                              child: playerCard(
+                                overlay ?? stage,
+                                contentInsets: insets,
+                              ),
+                            ),
+                            // 顶栏贴视口右上角、右侧内侧 10px，纵向 = 安全区 + 16
+                            // （与电台页右上角那两颗同一条水平线；对译 app.css
+                            //  小屏媒体块的
+                            //  `body:not(.is-lyrics-page) .app__header,
+                            //   body.is-lyrics-page .app__header { top: 28px;
+                            //   right: 0; padding: 0 10px }`）。
+                            Positioned(
+                              top: insets.top + 16,
+                              right: insets.right + 10,
+                              child: header,
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               ),

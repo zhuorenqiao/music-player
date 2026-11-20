@@ -2,7 +2,8 @@
 //
 // M3 T1 首日风险闸（spec §18）：audio_decoder 在 Windows 上的解码实测。
 // 路线：任意格式 → convertToWav(44100Hz/mono/16bit) → 自解析 WAV 头拿 PCM。
-// 夹具用仓库自带的合成 wav（tools/gen_demo_audio.py 的产物链同源），不依赖用户曲库。
+// 夹具在下面自己合成（1 秒 440Hz 正弦），不读仓库里的文件 —— 早先那 3 首示例
+// 曲目已随 Web 端一起移除，测试也不该再依赖它们的 wav。
 import 'dart:io';
 import 'dart:typed_data';
 

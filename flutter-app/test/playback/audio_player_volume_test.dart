@@ -1,7 +1,7 @@
 // test/playback/audio_player_volume_test.dart
 //
 // 锁住原版 #lastVolume 的语义：音量 0 视为静音但不忘记忆值，
-// 取消静音时恢复上一次（默认 0.7 而不是 0）。
+// 取消静音时恢复上一次（默认 1.0 = 100% 而不是 0）。
 // 并对齐 player.js:315-324：setVolume 的**两个分支都清 muted**（终审 R5），
 // 只有 v > 0 那支额外记 lastVolume。
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +19,7 @@ void main() {
     expect(player.volume, 0);
     // UI 判图标只看 volume：0 就是静音外观，与 muted 标志无关
     expect(player.volume == 0, isTrue);
-    // 静音一次再取消：恢复记忆值 0.42，而不是默认 0.7
+    // 静音一次再取消：恢复记忆值 0.42，而不是默认 1.0
     expect(await player.toggleMute(), isTrue);
     expect(player.volume, 0);
     expect(await player.toggleMute(), isFalse);
@@ -37,14 +37,15 @@ void main() {
     expect(driver.calls, contains('volume:0.62'));
   });
 
-  test('默认音量 0.7，静音后取消恢复默认而非 0', () async {
+  test('默认音量 100%，静音后取消恢复默认而非 0', () async {
     final player = AudioPlayer(FakeAudioDriver());
-    expect(player.volume, 0.7);
+    expect(player.volume, kDefaultVolume);
+    expect(player.volume, 1.0);
     await player.setMuted(true);
     await player.setMuted(false);
     expect(player.volume, greaterThan(0));
 
-    // 记忆值 0.42：静音往返不该回落到默认 0.7
+    // 记忆值 0.42：静音往返不该回落到默认 1.0
     await player.setVolume(0.42);
     await player.toggleMute();
     await player.toggleMute();
@@ -79,10 +80,10 @@ void main() {
     expect(player.volume, closeTo(0.42, 0.001));
   });
 
-  test('从未设过音量时静音往返回落到默认 0.7', () async {
+  test('从未设过音量时静音往返回落到默认 100%', () async {
     final player = AudioPlayer(FakeAudioDriver());
     await player.toggleMute();
     await player.toggleMute();
-    expect(player.volume, closeTo(0.7, 0.001));
+    expect(player.volume, closeTo(1.0, 0.001));
   });
 }

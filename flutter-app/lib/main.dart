@@ -21,14 +21,18 @@
 // [TransportController] 上。
 import 'dart:async';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 // 只取 MediaKit.ensureInitialized：包里的 Playlist 与我们的歌单模型重名。
 import 'package:media_kit/media_kit.dart' show MediaKit;
+import 'package:flutter/services.dart' show SystemChrome, SystemUiMode;
 import 'package:path_provider/path_provider.dart';
 
 import 'app.dart';
 import 'core/app_prefs.dart';
 import 'core/platform_services.dart';
+import 'core/screen_wake_lock.dart';
 import 'core/storage_keys.dart';
 import 'library/duration_probe.dart';
 import 'library/import_service.dart';
@@ -47,11 +51,13 @@ import 'playback/flutter_media_session_bridge.dart';
 import 'playback/media_kit_driver.dart';
 import 'playback/media_session_bridge.dart';
 import 'playback/playlist.dart';
+import 'playback/screen_awake_keeper.dart';
 import 'playback/transport_controller.dart';
 import 'playback/track.dart';
 import 'cover/artist_image.dart';
 import 'cover/cover_disk_cache.dart';
 import 'cover/cover_source.dart';
+import 'cover/generated_artwork.dart';
 import 'theme/theme_state.dart';
 import 'state/cover_state.dart';
 import 'state/library_state.dart';
@@ -78,6 +84,15 @@ const Duration kNotificationQueryTimeout = Duration(seconds: 3);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 沉浸式全屏：Flutter 视图铺到状态栏与手势条**底下**。不开这一档，窗口本身
+  // 就在状态栏下沿截止，顶部会留一条系统给的黑边 —— 页面背景（渐变 + 播放卡）
+  // 再满也盖不到它。现在由界面自己填满：卡面一直画到屏幕四边，内容按 insets
+  // 内缩（见 `ui/shell.dart` 的 `contentInsets`）。
+  // 只在移动端调：Windows 桌面没有系统栏，平台通道也不实现这个方法。
+  if (defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS) {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
   // media_kit 的原生库要在创建 Player 之前初始化。
   MediaKit.ensureInitialized();
   final prefs = await AppPrefs.ready();
@@ -86,13 +101,21 @@ Future<void> main() async {
     prefs: prefs,
     dataDirectory: support.path,
     driver: MediaKitDriver(),
-    bridge: FlutterMediaSessionBridge(),
+    // 生成卡（第四级封面）得先栅格化成文件，系统才读得到：交给平台桥，
+    // 目录与在线封面 / 内嵌封面并列，随时可删可重建。
+    bridge: FlutterMediaSessionBridge(
+      artwork: GeneratedArtworkCache(directory: '${support.path}/artwork'),
+    ),
     // 生产上才真的用 Future.delayed 排 4s 慢提示 / 25s 自动重试。
     // buildBootstrap 的默认是不排 Timer 的挂起延时（见参数注释），因为所有
     // testWidgets 都跑在 FakeAsync 里，收尾时要求「没有 pending Timer」。
     lyricsDelay: Future.delayed,
+    // 播放期间屏幕常亮（安卓窗口 flag）。放在这里而不是 buildBootstrap 的默认
+    // 值里：测试装配一律走 noop，绝不碰 Activity 的平台通道。
+    screenWakeLock: const SystemScreenWakeLock(),
   );
-  runApp(LightMusicApp(bootstrap: bootstrap));
+  // 生产入口才打开 2 秒开屏；测试里直接构造 LightMusicApp 时默认跳过。
+  runApp(LightMusicApp(bootstrap: bootstrap, showSplash: true));
 }
 
 /// 建对象、恢复存档、挂上媒体会话。测试可注入假 driver / 假 bridge。
@@ -147,6 +170,9 @@ Future<AppBootstrap> buildBootstrap({
   // D.3：实时频谱的注入接缝。生产不传，内部按 dataDirectory 建真的
   // SpectrumPipeline；测试传假源，既不解码也不碰平台通道。
   SpectrumSource? spectrumSource,
+  // 「播放期间屏幕常亮」的平台出口。生产 `main()` 传 [SystemScreenWakeLock]
+  // （安卓窗口 flag）；测试不传，走 [NoopScreenWakeLock]，绝不打平台通道。
+  ScreenWakeLock? screenWakeLock,
 }) async {
   final toasts = ToastState();
   final recentStore = RecentStore(prefs);
@@ -157,6 +183,12 @@ Future<AppBootstrap> buildBootstrap({
     recent: recentStore,
     toasts: toasts,
     playlist: playlist,
+  );
+  // 播放期间屏幕常亮：只订阅 view 的 playing 位（进度 tick 不经过这里），
+  // 开关走幂等的平台出口；测试默认 noop，生产由 main() 传安卓实现。
+  final screenAwake = ScreenAwakeKeeper(
+    view: transport.view,
+    lock: screenWakeLock ?? const NoopScreenWakeLock(),
   );
   // 探时长用的是**另一台**内核（不是 [driver]）：回填不许打断正在播的曲目。
   // `MediaKitDurationOpener` 里那台 Player 是懒建 + 复用的，从头到尾只有一台，
@@ -224,7 +256,8 @@ Future<AppBootstrap> buildBootstrap({
   // 去读缓存 / 解码（见 SpectrumState.setVisible）。这里只建对象与接线，
   // 不预填整个曲库：为一首没打开的歌解一整条 FLAC 是纯浪费。
   final spectrum = SpectrumState(
-    source: spectrumSource ??
+    source:
+        spectrumSource ??
         SpectrumPipeline(cacheDirectory: '$dataDirectory/spectrum'),
   );
   // 切歌联动：与歌词 / 封面同一条 view 事件源。语义快照变了才调，
@@ -232,8 +265,7 @@ Future<AppBootstrap> buildBootstrap({
   void syncSpectrumTrack() => spectrum.setCurrent(player.current);
   player.transport.view.addListener(syncSpectrumTrack);
   // 歌词页开合 → 懒启动 / 清表。控制器是 ChangeNotifier，直接挂监听。
-  void syncSpectrumVisibility() =>
-      spectrum.setVisible(lyricsPage.isOpen);
+  void syncSpectrumVisibility() => spectrum.setVisible(lyricsPage.isOpen);
   lyricsPage.addListener(syncSpectrumVisibility);
   syncSpectrumTrack();
   syncSpectrumVisibility();
@@ -294,7 +326,8 @@ Future<AppBootstrap> buildBootstrap({
   //     语义不同：内嵌是「文件里带的」，covers-net 是「联网找回来的」，都可
   //     随时删除重建）；
   //   * 持久索引用 React 版的裸键（cover-cache / artist-image.v1）。
-  final cover = coverState ??
+  final cover =
+      coverState ??
       CoverState(
         json: coverJsonClient ?? httpClient,
         bytes: coverBytesClient ?? ImageBytesClientImpl(),
@@ -387,6 +420,11 @@ Future<AppBootstrap> buildBootstrap({
   // 通知封面与界面走同一套四级兜底：内嵌路径优先，其次在线匹配专辑图、
   // 歌手写真。从前这里只拿 `track.cover`（内嵌封面），在线图 / 写真存在
   // CoverState 内存表、不写回曲目，于是无内嵌封面的歌在通知栏只剩占位圆。
+  //
+  // 第四级（生成卡）不在这里解决：生成卡纯绘制、没有文件路径，得先栅格化
+  // 成文件才谈得上 URI。那一步属于「平台侧把封面交给系统」的活儿，放在
+  // [FlutterMediaSessionBridge] 里（见 flutter_media_session_bridge.dart
+  // 的 `artwork`），所以这里的快照仍然只表达「有没有真封面」。
   final coordinator = MediaSessionCoordinator(
     bridge: bridge,
     transport: transport,
@@ -438,12 +476,15 @@ Future<AppBootstrap> buildBootstrap({
     onSpectrumViewChanged: syncSpectrumTrack,
     onSpectrumVisibilityChanged: syncSpectrumVisibility,
     sleepTimer: sleepTimer,
+    screenAwake: screenAwake,
   );
 }
 
 /// 未注入歌词预取时（既有测试不关心它）的空实现：立即返回 0 条。
-Future<int> Function(List<Track>, {String? currentId}) _noopLyricsPrefetch =
-    (tracks, {currentId}) async => 0;
+Future<int> Function(List<Track>, {String? currentId}) _noopLyricsPrefetch = (
+  tracks, {
+  currentId,
+}) async => 0;
 
 /// 测试装配的默认延时：一个永不完成的 Completer，`await` 它不会创建 Timer。
 /// [LyricsState] 的两个 detached 回调会永远挂起，不会到点改状态、也不会让
@@ -458,8 +499,9 @@ Future<bool> _queryNotificationPermission(
   Future<bool> Function()? query,
 ) async {
   try {
-    return await (query ?? notificationPermissionGranted)()
-        .timeout(kNotificationQueryTimeout);
+    return await (query ?? notificationPermissionGranted)().timeout(
+      kNotificationQueryTimeout,
+    );
   } catch (error) {
     debugPrint('notification permission query failed: $error');
     return false;
@@ -485,9 +527,7 @@ void Function({String? removedId}) _playlistChangeHandler(
   return ({String? removedId}) {
     final playlist = transport.playlist;
     // 校正失效标记：store 的变化回调会把重绘喊到界面那边，这里不用等它。
-    unawaited(
-      recent.refresh(playlist.tracks.map((track) => track.id).toSet()),
-    );
+    unawaited(recent.refresh(playlist.tracks.map((track) => track.id).toSet()));
     if (removedId != null &&
         removedId == transport.player.track?.id &&
         playlist.tracks.isNotEmpty) {

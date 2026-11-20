@@ -71,6 +71,42 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('拖滑杆不弹百分比气泡：两根滑杆都关掉 value indicator', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(600, 600);
+    addTearDown(tester.view.reset);
+    final state = await ThemeState.load(AppPrefs.inMemory());
+    await tester.pumpWidget(wrap(state));
+
+    await tester.tap(find.bySemanticsLabel('卡面透明度与毛玻璃'));
+    await tester.pump();
+
+    // 透明 / 磨砂两根滑杆各自解析出的主题都必须是 never（默认 onlyForDiscrete
+    // 会在拖拽时弹气泡，这条断言就是用来区分旧行为的）。
+    final sliders = tester.widgetList<Slider>(find.byType(Slider)).toList();
+    expect(sliders, hasLength(2));
+    for (final slider in sliders) {
+      final theme = SliderTheme.of(tester.element(find.byWidget(slider)));
+      expect(theme.showValueIndicator, ShowValueIndicator.never);
+    }
+
+    // 关掉气泡不影响拖动本身：拖到中点仍然写 50%。
+    final rect = tester.getRect(find.byType(Slider).first);
+    final gesture = await tester.startGesture(rect.centerLeft);
+    await gesture.moveBy(Offset(rect.width / 2, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    expect(state.transparency, 50);
+    expect(
+      find.text('50%'),
+      findsOneWidget,
+      reason: '拖完之后仍由右侧那格静态文案报数',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test('glassLevel 换算：0→1、100→0、50→0.5', () async {
     final state = await ThemeState.load(AppPrefs.inMemory());
     state.setTransparency(0);

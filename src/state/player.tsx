@@ -16,12 +16,12 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   useSyncExternalStore, type ReactNode,
 } from 'react';
-import { Player } from '../lib/player.js';
+import { Player, DEFAULT_VOLUME } from '../lib/player.js';
 import { Playlist, PLAY_MODES, MODE_LABELS, normalizeTrack } from '../lib/playlist.js';
 import { Storage, readNumber, readBoolean } from '../lib/storage.js';
 import { loadRecent, recordPlay, removeRecent as removeRecentEntry } from '../lib/recent-store.js';
 import { loadAll as loadLocalRecords, recordToTrack, remove as removeLocalRecord, requestPersistentStorage } from '../lib/local-store.js';
-import { createDemoTracks, DEFAULT_COVER } from '../lib/demo-data.js';
+import { DEFAULT_COVER } from '../lib/demo-data.js';
 import { applyAudioTags } from './tagging';
 import { prefetchCovers } from './covers';
 import { prefetchLyrics } from './lyrics-prefetch';
@@ -93,10 +93,21 @@ export function getSharedPlayer(): Player {
 
 const sharedPlaylist = new Playlist({ tracks: [], mode: PLAY_MODES.LIST });
 
-/** 首次运行（完全没有持久化记录）时才塞示例曲目。 */
+/** 列表里是否有用户自己存过的曲库（有就不走「首次运行」这条路径）。 */
 function hasStoredLibrary(): boolean {
   return Storage.read(STORAGE_KEYS.playlist, null) !== null || Storage.read(STORAGE_KEYS.order, null) !== null;
 }
+
+/**
+ * 早先内置的 3 首示例曲目（晨光序曲 / 霓虹夜行 / 海边书店）已整体移除。
+ *
+ * 只「不再预置」是不够的：跑过老版本的用户，localStorage 的 playlist / order
+ * 和最近播放里都已经存下了这几条（id 都是 `demo-` 前缀，且被持久化过）。
+ * 启动时按这个前缀把它们滤掉，并把清干净的结果写回，否则它们会一直留在列表里。
+ */
+const LEGACY_DEMO_PREFIX = 'demo-';
+
+const isLegacyDemoId = (id: unknown): boolean => String(id ?? '').startsWith(LEGACY_DEMO_PREFIX);
 
 // ---------------------------------------------------------------------------
 // Context
@@ -163,7 +174,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [duration, setDuration] = useState(Number.NaN);
-  const [volume, setVolumeState] = useState(0.7);
+  const [volume, setVolumeState] = useState(DEFAULT_VOLUME);
   const [muted, setMutedState] = useState(false);
   const [mode, setMode] = useState<PlayMode>(PLAY_MODES.LIST as PlayMode);
   const [failedIds, setFailedIds] = useState<string[]>([]);
@@ -435,6 +446,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
       }
     });
+    on('canplay', () => {
+      // 真的能播了：此前因一次非致命错误（如外挂 .lrc 读取失败）打上的
+      // 「损坏」角标要摘掉，否则歌在响、列表里还挂着一个假的坏档标记。
+      // 真坏文件走不到这里（加载失败不会发 canplay）。
+      const track = playlist.current as Track | null;
+      if (!track) return;
+      setFailedIds((current) => current.filter((item) => item !== track.id));
+    });
     on('timeupdate', (detail: { currentTime?: number; duration?: number }) => {
       timeStore.set(Number(detail?.currentTime) || 0);
       const total = Number(detail?.duration);
@@ -499,7 +518,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      player.setVolume(readNumber(STORAGE_KEYS.volume, 0.7, 0, 1));
+      player.setVolume(readNumber(STORAGE_KEYS.volume, DEFAULT_VOLUME, 0, 1));
       if (readBoolean(STORAGE_KEYS.muted, false)) {
         player.setMuted(true);
       }
@@ -513,17 +532,23 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         .filter(Boolean) as Track[];
 
       let initial: Track[];
+      /** 老库里是否真的存过示例曲目（存过就要把清完的结果写回去） */
+      let prunedDemo = false;
       if (!hasStoredLibrary()) {
-        initial = [...(createDemoTracks() as Track[]), ...localTracks];
+        // 首次运行也只用真实曲库：早先这里会预置 3 首示例曲目，现已按要求移除，
+        // 没有本地曲目就是空列表，交给界面的空状态引导用户导入。
+        initial = localTracks;
       } else {
         const stored = (Storage.read(STORAGE_KEYS.playlist, []) as Track[]) ?? [];
-        const remote = stored
+        const order = (Storage.read(STORAGE_KEYS.order, []) as string[]) ?? [];
+        const storedClean = stored.filter((item) => !isLegacyDemoId((item as Track | null)?.id));
+        prunedDemo = storedClean.length !== stored.length || order.some(isLegacyDemoId);
+        const remote = storedClean
           .map((item) => normalizeTrack(item) as Track | null)
           .filter((track) => track && !track.src.startsWith('blob:')) as Track[];
         const pool = new Map<string, Track>();
         remote.forEach((track) => pool.set(track.id, track));
         localTracks.forEach((track) => pool.set(track.id, track));
-        const order = (Storage.read(STORAGE_KEYS.order, []) as string[]) ?? [];
         const ordered: Track[] = [];
         order.forEach((id) => {
           const track = pool.get(id);
@@ -584,7 +609,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setMode(playlist.mode as PlayMode);
       setVolumeState(player.volume);
       setMutedState(player.muted);
-      setRecent(loadRecent() as RecentEntry[]);
+      /**
+       * 最近播放里同样会留示例曲目的残影（点开过就会有记录），一并清掉，
+       * 否则「播放列表已经空了、最近播放里还挂着三首没处点的歌」。
+       */
+      const recentRaw = loadRecent() as RecentEntry[];
+      const recentDemoIds = recentRaw.filter((entry) => isLegacyDemoId(entry?.id)).map((entry) => entry.id);
+      recentDemoIds.forEach((id) => removeRecentEntry(id));
+      setRecent(recentRaw.filter((entry) => !isLegacyDemoId(entry?.id)) as RecentEntry[]);
+      if (prunedDemo) {
+        // 把「已经清掉示例曲目」这件事立刻写回本地存储：
+        // 不然每次启动都要再滤一遍，而且 order / currentId 里还留着一串幽灵 id。
+        persist();
+      }
       setVersion((value) => value + 1);
 
       /**
@@ -602,7 +639,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [player, playlist]);
+  }, [player, playlist, persist]);
 
   const tracks = useMemo(() => playlist.tracks as Track[], [playlist, version]);
   const current = (playlist.current as Track | null) ?? null;

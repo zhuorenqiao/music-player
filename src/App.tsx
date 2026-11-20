@@ -20,6 +20,7 @@ import { PlayerProvider, usePlayer, usePlaybackTime, useBufferedEnd } from './st
 import { CoverProvider, coverForDisplay, useCover } from './state/covers';
 import { LyricsProvider, useLyrics, findActiveCue, type Cue } from './state/lyrics';
 import { SleepTimerProvider } from './state/sleep-timer';
+import { RadioProvider } from './state/radio';
 import { WaveStyleProvider } from './state/wave-style';
 import { ThemeProvider } from './state/theme';
 import { GlassProvider } from './state/glass';
@@ -31,6 +32,8 @@ import { LyricColorButton } from './components/LyricColorButton';
 import { SleepTimerButton } from './components/SleepTimerButton';
 import { GlassControl } from './components/GlassControl';
 import { LibraryMenu } from './components/LibraryMenu';
+import { BroadcastIcon, RadioPage } from './components/RadioPage';
+import { MiniRadio } from './components/MiniRadio';
 import { WaveStylePicker } from './components/WaveStylePicker';
 import { clearRecent as clearRecentStore, formatRelativeTime } from './lib/recent-store.js';
 import { remove as removeLocalRecord } from './lib/local-store.js';
@@ -67,12 +70,27 @@ const NextIcon = () => (
   </svg>
 );
 
+/**
+ * 播放模式图标：与 Flutter 端 `transport.dart` 的 `Icons.repeat` /
+ * `Icons.repeat_one` / `Icons.shuffle` 同一套字形。
+ *
+ * 路径不是手绘的 —— 直接从 Flutter SDK 自带的 `MaterialIcons-Regular.otf`
+ * 里取这三颗字形，按 upem 512 → 24 换算、翻转 y 轴后落进 24×24 网格
+ * （字形 bbox 与 Material 官方 SVG 一致：repeat 3–21/2–22、shuffle 4–20/4–20）。
+ * 所以两端是同一几何，只是 web 用 currentColor 填充。
+ */
+const MODE_ICON_PATHS: Record<'list' | 'one' | 'shuffle', string> = {
+  // Icons.repeat
+  list: 'M6.98 6.98H17.02V9.98L21 6L17.02 2.02V5.02H5.02V11.02H6.98V6.98ZM17.02 17.02H6.98V14.02L3 18L6.98 21.98V18.98H18.98V12.98H17.02V17.02Z',
+  // Icons.repeat_one
+  one: 'M6.98 6.98H17.02V9.98L21 6L17.02 2.02V5.02H5.02V11.02H6.98V6.98ZM17.02 17.02H6.98V14.02L3 18L6.98 21.98V18.98H18.98V12.98H17.02V17.02ZM12.98 15V9H12L9.98 9.98V11.02H11.48V15H12.98Z',
+  // Icons.shuffle
+  shuffle: 'M10.59 9.19 5.39 3.98 3.98 5.39 9.19 10.59 10.59 9.19ZM14.48 3.98 16.55 6.05 3.98 18.61 5.39 20.02 17.95 7.45 20.02 9.52V3.98H14.48ZM14.81 13.41 13.41 14.81 16.55 17.95 14.48 20.02H20.02V14.48L17.95 16.55L14.81 13.41Z',
+};
+
 const ModeIcon = ({ name }: { name: 'list' | 'one' | 'shuffle' }) => (
-  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M17 2l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
-    <path d="M7 22l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
-    {name === 'one' && <path d="M11.2 10.4l1.6-1v5.2" />}
-    {name === 'shuffle' && (<><path d="M17 14l4 4-4 4" /><path d="M3 6h4l10 12h4" /><path d="M3 18h4l2.4-2.9" /><path d="M14.6 9.1L17 6h4" /></>)}
+  <svg viewBox="0 0 24 24" className="icon" fill="currentColor" aria-hidden="true">
+    <path d={MODE_ICON_PATHS[name]} />
   </svg>
 );
 
@@ -110,11 +128,14 @@ const CloseIcon = () => (
   </svg>
 );
 
-/** 播放列表入口：三行列表 + 向上箭头，提示「从这里往上弹出」。 */
+/**
+ * 播放列表入口：Material `queue_music` 字形，与 Flutter 端
+ * `transport.dart` 的 `Icons.queue_music` 完全同形（三条列表线 + 一个音符）。
+ * 路径同样取自 MaterialIcons-Regular.otf，bbox 3–22 / 6–20。
+ */
 const QueueIcon = () => (
-  <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M4 6.5h9M4 12h9M4 17.5h6" />
-    <path d="M15 15.5l3-3 3 3" />
+  <svg viewBox="0 0 24 24" className="icon" fill="currentColor" aria-hidden="true">
+    <path d="M15 6H3V8.02H15V6ZM15 9.98H3V12H15V9.98ZM3 15.98H11.02V14.02H3V15.98ZM17.02 6V14.2C16.69 14.06 16.36 14.02 15.98 14.02C14.34 14.02 12.98 15.33 12.98 17.02C12.98 18.66 14.34 20.02 15.98 20.02C17.67 20.02 18.98 18.66 18.98 17.02V8.02H21.98V6H17.02Z" />
   </svg>
 );
 
@@ -168,44 +189,17 @@ function useCompactLayout(): boolean {
 // 顶部栏
 // ---------------------------------------------------------------------------
 
-function Header({ immersive, onSwitchView }: {
+function Header({ immersive, onSwitchView, onOpenRadio, onAdd, onClear }: {
   /** 当前是不是沉浸模式（完整歌词页） */
   immersive: boolean;
   onSwitchView: () => void;
+  /** 「电台」入口：切到电台页 */
+  onOpenRadio: () => void;
+  /** 打开本地文件选择（音频 / .lrc）；input 挂在 Shell 上，两页共用一份 */
+  onAdd: () => void;
+  /** 清空播放列表（内部还有一次确认） */
+  onClear: () => void;
 }) {
-  const { clearList, playlist, refresh, persist } = usePlayer();
-  const { importFiles } = useLibrary();
-  const { show } = useToast();
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const onFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (files && files.length > 0) {
-      void importFiles(files);
-    }
-    event.target.value = '';
-  }, [importFiles]);
-
-  const onClear = useCallback(() => {
-    if (playlist.size === 0) {
-      show('播放列表已经是空的', 'info');
-      return;
-    }
-    if (!window.confirm('确定清空播放列表？本地音频的缓存记录也会一并删除。')) {
-      return;
-    }
-    (playlist.tracks as Track[]).filter((track) => track.isLocal).forEach((track) => {
-      void removeLocalRecord(track.id);
-      if (track.src.startsWith('blob:')) {
-        URL.revokeObjectURL(track.src);
-      }
-    });
-    clearList();
-    show('已清空播放列表', 'success');
-    refresh();
-    persist();
-  }, [clearList, persist, playlist, refresh, show]);
-
   return (
     <header className="app__header">
       <div className="brand">
@@ -231,8 +225,21 @@ function Header({ immersive, onSwitchView }: {
           {immersive ? <DiscIcon /> : <LyricsIcon />}
           <span className="btn__text">{immersive ? '简约模式' : '沉浸模式'}</span>
         </button>
-        <LibraryMenu onAdd={() => inputRef.current?.click()} onClear={onClear} />
-        <input ref={inputRef} type="file" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.opus,.lrc" multiple hidden onChange={onFiles} />
+        {/* 电台入口：在「更多」**左侧**、模式切换右侧。顶栏里唯一带主题色的一颗
+            —— 它是「另一个页面」的入口，不是又一个工具按钮；窄屏与其它按钮一样
+            收成 32×32 图标，但保留 accent 着色（与 Flutter `_RadioChip` 同款）。 */}
+        <button
+          className="btn app__radio"
+          type="button"
+          aria-label="电台"
+          title="电台"
+          onClick={onOpenRadio}
+        >
+          <BroadcastIcon />
+          <span className="btn__text">电台</span>
+          <span className="app__radio-dot" aria-hidden="true" />
+        </button>
+        <LibraryMenu onAdd={onAdd} onClear={onClear} />
       </div>
     </header>
   );
@@ -241,6 +248,24 @@ function Header({ immersive, onSwitchView }: {
 // ---------------------------------------------------------------------------
 // 歌词视图（紧凑预览 / 完整页共用）
 // ---------------------------------------------------------------------------
+
+/**
+ * 把第 [index] 行滚到视图垂直中线；上下夹取交给浏览器的 scrollTo。
+ *
+ * `animate` = false 用于「刚进入这个视图」的首次定位（简约 ⇄ 沉浸切换会重新
+ * 挂载整棵歌词树）：切过去时视图本来就该停在当前行上，从第一行滑过去会让人
+ * 以为高亮没跟上播放。
+ */
+function centerLyricLine(list: HTMLUListElement, index: number, animate: boolean): void {
+  const line = list.children[index] as HTMLElement | undefined;
+  if (!line) {
+    return;
+  }
+  list.scrollTo({
+    top: line.offsetTop - (list.clientHeight - line.clientHeight) / 2,
+    behavior: animate ? 'smooth' : 'auto',
+  });
+}
 
 function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
   const { cues, plain, plainLines, trans } = useLyrics();
@@ -259,6 +284,55 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
    * 真换了才会换身份 —— 同一首歌的译文刷新、进度推进都不会动它。
    */
   const lastContent = useRef<{ cues: Cue[]; plainLines: string[] } | null>(null);
+  /** 当前行号的最新值：首次定位与尺寸变化的回调都是异步的，不能读闭包里的旧值。 */
+  const activeIndexRef = useRef(activeIndex);
+  activeIndexRef.current = activeIndex;
+
+  /**
+   * 首次进入这个视图（简约 ⇄ 沉浸切换会把歌词树重新挂载）：
+   * 不等下一行变化，直接停到当前行上，而且不做滚动动画。
+   *
+   * 必须等一帧：父层 Shell 是在自己的 effect 里才给 <body> 挂
+   * `is-lyrics-page`，而这个类会改 `.app` / `.app__main` 的高度 ——
+   * 在本层 effect 里量到的 clientHeight / offsetTop 还是切换前的布局，
+   * 算出来的位置会偏（多半一路顶到底部），于是「高亮和播放对不上」。
+   */
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => {
+      const list = listRef.current;
+      const index = activeIndexRef.current;
+      if (!list || index < 0) {
+        return;
+      }
+      centerLyricLine(list, index, false);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [listRef]);
+
+  /**
+   * 视图尺寸变了（切模式后布局改写、窗口缩放、字号 / 字体换档）：
+   * 用旧尺寸算出来的位置已经不对了，把当前行重新放回中间。
+   * 手动滚动后的 2.6s 窗口内不动，尊重用户当前看的位置。
+   */
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => {
+        const next = listRef.current;
+        const index = activeIndexRef.current;
+        if (!next || index < 0 || Date.now() < manualUntil.current) {
+          return;
+        }
+        centerLyricLine(next, index, false);
+      });
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [listRef]);
+
   useEffect(() => {
     const list = listRef.current;
     if (!list) {
@@ -267,23 +341,26 @@ function LyricsView({ variant }: { variant: 'compact' | 'full' }) {
     const prev = lastContent.current;
     lastContent.current = { cues, plainLines };
     /**
+     * 第一次进来不做跟随：定位交给上面那个首帧 effect（这里的尺寸还没稳定）。
+     */
+    if (prev === null) {
+      return;
+    }
+    /**
      * 歌词内容换了 → 旧歌的滚动位置不能留给新歌：拨回最上方。
      * <ul> 是同一个 DOM 节点，不拨回去的话新歌会停在旧歌滚到的位置（多半是中间）。
      * 瞬时跳（没有 behavior），从旧歌中段一路滑到新歌顶部显得拖沓。
      * 这一轮不做居中：新歌的当前行会立刻把视图从顶部拉走，「回到最上方」就看不见了。
      */
-    if (prev !== null && (prev.cues !== cues || prev.plainLines !== plainLines)) {
+    if (prev.cues !== cues || prev.plainLines !== plainLines) {
       list.scrollTo({ top: 0 });
       return;
     }
     if (activeIndex < 0 || Date.now() < manualUntil.current) {
       return;
     }
-    const line = list.children[activeIndex] as HTMLElement | undefined;
-    if (line) {
-      list.scrollTo({ top: line.offsetTop - (list.clientHeight - line.clientHeight) / 2, behavior: 'smooth' });
-    }
-  }, [activeIndex, cues, plainLines]);
+    centerLyricLine(list, activeIndex, true);
+  }, [activeIndex, cues, plainLines, listRef]);
 
   if (cues.length === 0 && plain) {
     // 纯文本歌词已在 provider 里按原文换行拆好：直接塞进容器会被 HTML 折叠成一整段
@@ -468,6 +545,46 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
   const compactManualUntil = useRef(0);
   /** 上一次的歌词内容（列表身份）：换了 = 换歌 / 纯文本升级成带时间轴。 */
   const compactLastCues = useRef<Cue[] | null>(null);
+  /** 当前行号的最新值（供首帧定位 / 尺寸变化的异步回调读）。 */
+  const compactActiveRef = useRef(activeIndex);
+  compactActiveRef.current = activeIndex;
+
+  /**
+   * 首次进入简约模式（从沉浸模式切回来会重新挂载整棵歌词树）：
+   * 直接把当前行放到中间，不从第一行滑过去、也不等下一次换行。
+   * 挪到下一帧是为了让父层的布局（body 的 `is-lyrics-page` 已摘掉）先落定。
+   */
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => {
+      const list = compactScroll.ref.current;
+      const index = compactActiveRef.current;
+      if (!list || index < 0) {
+        return;
+      }
+      centerLyricLine(list, index, false);
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [compactScroll.ref]);
+
+  /** 紧凑歌词区尺寸变了（切模式重建卡片、窗口缩放、字号换档）→ 重新对到当前行。 */
+  useEffect(() => {
+    const list = compactScroll.ref.current;
+    if (!list || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => {
+        const next = compactScroll.ref.current;
+        const index = compactActiveRef.current;
+        if (!next || index < 0 || Date.now() < compactManualUntil.current) {
+          return;
+        }
+        centerLyricLine(next, index, false);
+      });
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [compactScroll.ref]);
 
   useEffect(() => {
     const list = compactScroll.ref.current;
@@ -476,11 +593,15 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
     }
     const prevCues = compactLastCues.current;
     compactLastCues.current = cues;
+    // 第一次进来交给上面的首帧定位：这里的尺寸还没稳定。
+    if (prevCues === null) {
+      return;
+    }
     /**
      * 歌词内容换了 → 回到最上方（与完整歌词页同一套判定，见 LyricsView）。
      * 这一轮不做居中：新歌的当前行会立刻把视图从顶部拉走，「回到最上方」就看不见了。
      */
-    if (prevCues !== null && prevCues !== cues) {
+    if (prevCues !== cues) {
       list.scrollTo({ top: 0 });
       return;
     }
@@ -491,10 +612,7 @@ function Stage({ onOpenLightbox, discRef }: { onOpenLightbox: (trigger?: HTMLEle
     if (Date.now() < compactManualUntil.current) {
       return;
     }
-    const line = list.children[activeIndex] as HTMLElement | undefined;
-    if (line) {
-      list.scrollTo({ top: line.offsetTop - (list.clientHeight - line.clientHeight) / 2, behavior: 'smooth' });
-    }
+    centerLyricLine(list, activeIndex, true);
   }, [activeIndex, cues, compactScroll.ref]);
 
   const onStageClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
@@ -1020,6 +1138,51 @@ function ToolButtons({ variant }: { variant?: 'head' }) {
   );
 }
 
+/**
+ * 窄屏（<900）沉浸模式的点击热区判据：除了下面这些控件，点哪儿都算「切回简约模式」。
+ * 两处共用 —— 歌词页本体（[LyricsPage.onBlankClick]）与控制条上的工具行
+ * （[Transport] 的 `transport__lyric-row`，那一行在歌词页子树之外）。
+ */
+const IMMERSIVE_TAP_EXCLUDE =
+  'button, a, input, textarea, select, [role="button"], .lyrics__text, .lyrics-page__status, .wave-style, .lyric-tools';
+
+/**
+ * 窄屏点卡片任意处 → 切回简约模式（封面页）。
+ *
+ * 有意不接管：按钮 / 表单控件（各有自己的交互）、歌词文字（点它是定位到那句）、
+ * 三颗工具按钮与波形下拉（连同它们弹出的面板，里面有滑杆和输入框）。
+ * 频谱条不在此列 —— 它在 `transport__wave` 那一行，纯装饰。
+ */
+function closeImmersiveOnTap(event: React.MouseEvent<HTMLElement>) {
+  if (window.getSelection()?.toString()) {
+    return;
+  }
+  const target = event.target as Element;
+  if (target.closest(IMMERSIVE_TAP_EXCLUDE)) {
+    return;
+  }
+  // 交给 App 层的 close()，它顺手把焦点还给曲目区
+  window.dispatchEvent(new CustomEvent('app:close-lyrics-page'));
+}
+
+/**
+ * 窄屏点简约页（封面页）的空白处 → 进入沉浸模式（歌词页）。
+ *
+ * 与 [closeImmersiveOnTap] 共用同一张排除表：文字、按钮、滑杆、下拉各有自己的
+ * 交互，其余留白都算。曲目区本体由 [Stage] 的整块 `onStageClick` 接管；
+ * 这里补的是控制条上方那排工具右边的空白（那一行在曲目区子树之外）。
+ */
+function openImmersiveOnTap(event: React.MouseEvent<HTMLElement>) {
+  if (window.getSelection()?.toString()) {
+    return;
+  }
+  const target = event.target as Element;
+  if (target.closest(IMMERSIVE_TAP_EXCLUDE)) {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent('app:open-lyrics-page'));
+}
+
 function Transport({ onOpenQueue, queueOpen, immersive }: {
   /** 打开播放列表弹层（只在移动端渲染入口） */
   onOpenQueue: () => void;
@@ -1031,6 +1194,8 @@ function Transport({ onOpenQueue, queueOpen, immersive }: {
   const { importFiles } = useLibrary();
   const time = usePlaybackTime();
   const buffered = useBufferedEnd();
+  // 窄屏歌词页：页头那组控件（T / 毛玻璃 / 睡眠 + 波形下拉）搬到频谱条上方
+  const compact = useCompactLayout();
   /**
    * 拖拽中：本地暂存目标位置，**不 seek**，也不让 timeupdate 把滑块拽回去。
    * 松手（change）才真正跳转，blur 兜底复位 —— 与 vanilla 的 isSeeking 同一套语义。
@@ -1055,9 +1220,24 @@ function Transport({ onOpenQueue, queueOpen, immersive }: {
   return (
     <section className="transport" aria-label="播放控制">
       {/* 进度条上方那条：简约模式左端是「T」（改歌词高亮色）、毛玻璃透明度与睡眠定时器。
-          沉浸模式（完整歌词页）这三颗按钮挪到歌词页右上角了（见 ToolButtons），
-          大屏下方那条频谱也搬到这一行、紧贴进度条上方（间距由 CSS 的 2px padding 控制）。 */}
-      <div className="transport__wave">
+          沉浸模式（完整歌词页）这三颗按钮原本挪到歌词页右上角（见 ToolButtons），
+          大屏下方那条频谱也搬到这一行、紧贴进度条上方（间距由 CSS 的 2px padding 控制）。
+          窄屏（<900）例外：页头那一组下移到频谱条上方单独成行（transport__lyric-row），
+          手指不用够到屏幕顶 —— 桌面仍留在页头。 */}
+      {immersive && compact && (
+        // 窄屏：这一行与上面的歌词页同属「点哪儿都切回简约模式」的热区
+        // （行里的按钮 / 下拉自己会先吃掉点击，见 closeImmersiveOnTap）
+        <div className="transport__lyric-row" onClick={closeImmersiveOnTap}>
+          <ToolButtons />
+          <WaveStylePicker />
+        </div>
+      )}
+      <div
+        className="transport__wave"
+        // 简约模式（窄屏）：三颗按钮右边的空白也是「点一下进沉浸模式」的热区，
+        // 与曲目区整块 onStageClick 连成一片；沉浸模式里这一行是频谱条，不接管。
+        onClick={!immersive && compact ? openImmersiveOnTap : undefined}
+      >
         {!immersive && <ToolButtons />}
         {immersive && <WaveStrip />}
       </div>
@@ -1157,26 +1337,43 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
   /**
    * 右栏封面的两种外观：方图 ⇄ 唱片（把简约模式那套黑胶 + 唱臂直接搬过来）。
    * 点歌词正文那块空白翻一面（再点翻回来），不退出歌词页 ——
-   * 退出仍然靠左上角「返回」或 Esc。
+   * 桌面退出仍然靠左上角「返回」或 Esc（窄屏见下面的 onBlankClick）。
    */
   const [disc, setDisc] = useState(false);
+  /** 窄屏（<900）：同一块空白改成「切回简约模式」，见 onBlankClick */
+  const compact = useCompactLayout();
 
   /**
-   * 点歌词以外的空白处 → 翻转右栏封面（方图 ⇄ 唱片）。
-   * 按钮、输入框、歌词文字、封面本身各有自己的交互，不参与翻转。
+   * 点卡片上的非控件区域。窄屏 → 切回简约模式（封面页）；桌面 → 翻转右栏封面。
+   *
+   * 窄屏为什么要整片热区：手机上没有 Esc / L，页头也不放「返回」（与原版一致），
+   * 退出只剩顶栏那颗模式按钮 —— 手指要够到右上角，还是个小图标。
+   * 于是**歌名那条带 + 正文 + 控制条上的工具行**（`.lyrics-page__head`、
+   * `.lyrics-page__body`、`transport__lyric-row`）整片都算，点哪儿都能切回简约模式；
+   * 这一档右栏封面整块被 `@media (max-width: 899px)` 藏掉了，翻面对用户根本不可见，
+   * 把手势让给退出更划算（与 Flutter 版 `lyrics_page.dart` 的
+   * `_maybeTapToRestore` 同一套语义）。
+   *
+   * 有意不接管的几处（判据见 closeImmersiveOnTap）：
+   *   · 歌词文字 / 译文（`.lyrics__text`）—— 点它是定位到那句；
+   *   · 三颗工具按钮与波形下拉，连同它们弹出的面板；
+   *   · 频谱条 —— 在 `Transport` 的 `transport__wave` 行，不在 `.lyrics-page` 子树里。
+   * 按钮、输入框、封面本身各有自己的交互，也不参与。
    */
   const onBlankClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (compact) {
+      closeImmersiveOnTap(event);
+      return;
+    }
     const target = event.target as Element;
     if (window.getSelection()?.toString()) {
       return;
     }
-    // .lyric-tools 是右上角那三颗小按钮连同它们弹出的面板：
-    // 面板里有滑杆和输入框，点它们都不该被当成「空白处」翻转封面。
-    if (target.closest('button, a, input, textarea, select, .lyrics__text, .lyrics-page__status, .wave-style, .lyric-tools')) {
+    if (target.closest(IMMERSIVE_TAP_EXCLUDE)) {
       return;
     }
     /**
-     * 顶部那条带（歌名 / 工具按钮 / 波形下拉）整片都不翻转 —— 那是最容易误触的一带。
+     * 桌面：顶部那条带（歌名 / 工具按钮 / 波形下拉）整片都不算空白 —— 那是最容易误触的一带。
      * 用坐标判断而不是只靠 `.lyrics-page__head`：
      * 头部行是 flex 布局且左右有页面内边距，点在这条带上但落在头部行的
      * 左右 padding 里时，target 是 section 本身而非 head，只按 closest 会漏。
@@ -1204,10 +1401,12 @@ function LyricsPage({ onOpenLightbox }: { onOpenLightbox: (trigger?: HTMLElement
           </div>
           <p className="lyrics-page__artist">{[current?.artist, current?.album].filter(Boolean).join(' · ') || '未知歌手'}</p>
         </div>
-        {/* 「T」/毛玻璃/睡眠定时器：沉浸模式里从控制条挪到这一格（歌名右边、下拉左边） */}
-        <ToolButtons variant="head" />
-        {/* 右上角只留选下面那条波形的样式 */}
-        <WaveStylePicker />
+        {/* 「T」/毛玻璃/睡眠定时器：桌面沉浸模式里从控制条挪到这一格（歌名右边、下拉左边）；
+            窄屏（<900）这一整组连同下拉搬到控制条的频谱条上方，跟拇指更近，
+            见 Transport 的 transport__lyric-row */}
+        {!compact && <ToolButtons variant="head" />}
+        {/* 右上角只留选下面那条波形的样式；窄屏同样下移 */}
+        {!compact && <WaveStylePicker />}
       </header>
       {/* 左歌词、右封面；封面在这页只是展示用，不参与旋转（没有 is-spinning） */}
       <div className="lyrics-page__body">
@@ -1611,10 +1810,41 @@ function DropOverlay({ visible }: { visible: boolean }) {
 // ---------------------------------------------------------------------------
 
 function Shell() {
-  const { current, togglePlay, seekBy, setVolume, volume, playNext, playPrev, resumeAutoplay } = usePlayer();
+  const { current, togglePlay, seekBy, setVolume, volume, playNext, playPrev, resumeAutoplay, clearList, playlist, refresh, persist } = usePlayer();
   /** 毛玻璃背后的模糊封面：用显示层当前那张，切歌后自动跟着换 */
   const playerCover = useCover(current);
   const { importFiles } = useLibrary();
+  const { show } = useToast();
+  /** 「更多」里的添加 / 清空在音乐页和电台页共用同一份输入与回调。
+      输入框挂在这里而不是 Header 里：电台页整页替换掉音乐页时，它不该跟着卸载。 */
+  const menuInputRef = useRef<HTMLInputElement>(null);
+  const onMenuAdd = useCallback(() => menuInputRef.current?.click(), []);
+  const onMenuFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      void importFiles(files);
+    }
+    event.target.value = '';
+  }, [importFiles]);
+  const onMenuClear = useCallback(() => {
+    if (playlist.size === 0) {
+      show('播放列表已经是空的', 'info');
+      return;
+    }
+    if (!window.confirm('确定清空播放列表？本地音频的缓存记录也会一并删除。')) {
+      return;
+    }
+    (playlist.tracks as Track[]).filter((track) => track.isLocal).forEach((track) => {
+      void removeLocalRecord(track.id);
+      if (track.src.startsWith('blob:')) {
+        URL.revokeObjectURL(track.src);
+      }
+    });
+    clearList();
+    show('已清空播放列表', 'success');
+    refresh();
+    persist();
+  }, [clearList, persist, playlist, refresh, show]);
   const [lyricsPage, setLyricsPage] = useState(false);
   const [lightbox, setLightbox] = useState(false);
   /** 放大层可以用两个入口打开（曲目区封面 / 歌词页右栏），焦点要还给实际的那个 */
@@ -1649,6 +1879,28 @@ function Shell() {
   const returnFocus = useRef<HTMLElement | null>(null);
   const stageDiscRef = useRef<HTMLImageElement>(null);
 
+  /**
+   * 电台页：整页切过去，不是弹层。
+   *
+   * 它是同一棵树里的另一「页」（`.app--radio` 复用外壳的边距与最大宽度），
+   * 所以进页面前音乐页整块不渲染 —— 电台和音乐是两条独立音频链路，两边
+   * 界面同时在屏上只会让人分不清哪个播放键在控制哪条声音。
+   */
+  const [radioPage, setRadioPage] = useState(false);
+  const openRadio = useCallback(() => {
+    // 进电台页等于离开音乐页的沉浸视图：不同步退出的话 body 上的 is-lyrics-page
+    // 会继续锁住整页高度（那边 `body.is-lyrics-page .app { height: 100vh;
+    // overflow: hidden }` 的优先级比 .app--radio 高），电台列表就滚不动了
+    setLyricsPage(false);
+    setRadioPage(true);
+  }, []);
+  /**
+   * 回音乐页：**不停台**。电台继续在后台放，`.player` 卡内那条 MiniRadio
+   * 交代「还在响的是哪一台」；要停只有两条路 —— 条上的暂停 / 关闭，或者
+   * 在音乐页按下播放（音乐一开声，电台自动让位，见 RadioProvider）。
+   */
+  const closeRadio = useCallback(() => setRadioPage(false), []);
+
   // 视图切换：body 上的类决定布局（与 vanilla 同一套 CSS 开关）
   useEffect(() => {
     document.body.classList.toggle('is-lyrics-page', lyricsPage);
@@ -1656,6 +1908,10 @@ function Shell() {
   useEffect(() => {
     document.body.classList.toggle('is-lightbox-open', lightbox);
   }, [lightbox]);
+  useEffect(() => {
+    document.body.classList.toggle('is-radio-page', radioPage);
+    return () => document.body.classList.remove('is-radio-page');
+  }, [radioPage]);
 
   useEffect(() => {
     const open = () => {
@@ -1714,6 +1970,14 @@ function Shell() {
   // 快捷键：放大层 / 弹层开着时只认 Esc
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // 电台页同理：只认 Esc（空格 / 方向键不该在背后改音乐播放状态）
+      if (radioPage) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeRadio();
+        }
+        return;
+      }
       if (lightbox) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -1785,7 +2049,7 @@ function Shell() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [closeLightbox, lightbox, lyricsPage, playNext, playPrev, queueOpen, seekBy, setVolume, togglePlay, volume]);
+  }, [closeLightbox, closeRadio, lightbox, lyricsPage, playNext, playPrev, queueOpen, radioPage, seekBy, setVolume, togglePlay, volume]);
 
   // 整页拖放导入
   useEffect(() => {
@@ -1828,32 +2092,52 @@ function Shell() {
 
   return (
     <>
-      <a className="skip-link" href="#btnPlay">跳到播放控制</a>
-      <div className="app">
-        <Header immersive={lyricsPage} onSwitchView={() => setLyricsPage((value) => !value)} />
-        <main className="app__main">
-          <div className="player">
-            <div className="glass-frost" aria-hidden="true">
-              <img src={playerCover} alt="" />
-            </div>
-            {lyricsPage
-              ? <LyricsPage onOpenLightbox={openLightbox} />
-              : <Stage onOpenLightbox={openLightbox} discRef={stageDiscRef} />}
-            <Transport
-              onOpenQueue={() => setQueueOpen(true)}
-              queueOpen={queueOpen}
+      {radioPage ? (
+        <div className="app app--radio">
+          <RadioPage onBack={closeRadio} />
+        </div>
+      ) : (
+        <>
+          <a className="skip-link" href="#btnPlay">跳到播放控制</a>
+          <div className="app">
+            <Header
               immersive={lyricsPage}
+              onSwitchView={() => setLyricsPage((value) => !value)}
+              onOpenRadio={openRadio}
+              onAdd={onMenuAdd}
+              onClear={onMenuClear}
             />
+            <main className="app__main">
+              <div className="player">
+                <div className="glass-frost" aria-hidden="true">
+                  <img src={playerCover} alt="" />
+                </div>
+                {lyricsPage
+                  ? <LyricsPage onOpenLightbox={openLightbox} />
+                  : <Stage onOpenLightbox={openLightbox} discRef={stageDiscRef} />}
+                {/* 迷你电台条：电台在后台放时贴在控制条正上方（没有当前台时自己返回 null） */}
+                <MiniRadio onOpen={openRadio} />
+                <Transport
+                  onOpenQueue={() => setQueueOpen(true)}
+                  queueOpen={queueOpen}
+                  immersive={lyricsPage}
+                />
+              </div>
+              {!compact && <Panel />}
+            </main>
           </div>
-          {!compact && <Panel />}
-        </main>
-      </div>
-      <Lightbox open={lightbox} onClose={closeLightbox} />
+        </>
+      )}
+      {!radioPage && <Lightbox open={lightbox} onClose={closeLightbox} />}
       {/* 窄屏一直是弹层；桌面只在歌词页（右栏让位）由按钮唤起，所以不做 compact 门限 */}
-      <PlaylistSheet open={queueOpen} onClose={() => setQueueOpen(false)}>
-        <Panel onClose={() => setQueueOpen(false)} onNavigate={() => setQueueOpen(false)} />
-      </PlaylistSheet>
-      <DropOverlay visible={dragging} />
+      {!radioPage && (
+        <PlaylistSheet open={queueOpen} onClose={() => setQueueOpen(false)}>
+          <Panel onClose={() => setQueueOpen(false)} onNavigate={() => setQueueOpen(false)} />
+        </PlaylistSheet>
+      )}
+      {!radioPage && <DropOverlay visible={dragging} />}
+      {/* 两页共用的文件选择器：抽屉从哪一页打开都落到同一份「添加音乐」 */}
+      <input ref={menuInputRef} type="file" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.opus,.lrc" multiple hidden onChange={onMenuFiles} />
       <Toasts />
     </>
   );
@@ -1883,7 +2167,10 @@ export default function App() {
                 {/* 睡眠定时器要能暂停播放（usePlayer）并弹提示（useToast），
                     所以挂在 PlayerProvider / ToastProvider 里面 */}
                 <SleepTimerProvider>
-                  <WithLyrics />
+                  {/* 电台要能暂停音乐（usePlayer），所以挂在 PlayerProvider 里面 */}
+                  <RadioProvider>
+                    <WithLyrics />
+                  </RadioProvider>
                 </SleepTimerProvider>
               </CoverProvider>
             </PlayerProvider>

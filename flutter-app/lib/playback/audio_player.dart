@@ -86,8 +86,8 @@ const int kSeekGuardVerifyMs = 900;
 const int kSeekGuardAfterPlayMs = 400;
 const double kSeekGuardTolerance = 0.75;
 
-/// 默认音量（原版 `#lastVolume = 0.7`，player.js:55）。
-const double kDefaultVolume = 0.7;
+/// 默认音量：全新安装 / 没有存档时按 100% 起步（原版 `#lastVolume = 1`）。
+const double kDefaultVolume = 1.0;
 
 /// 一次待复核的跳转。
 ///
@@ -221,7 +221,7 @@ class AudioPlayer {
     _emit(VolumeEvent(volume, _muted));
   }
 
-  /// 设置静音。取消静音而音量停在 0 时恢复记忆值（默认 0.7）。
+  /// 设置静音。取消静音而音量停在 0 时恢复记忆值（默认 100%）。
   Future<void> setMuted(bool muted) async {
     _muted = muted;
     if (!muted && _volume == 0) {

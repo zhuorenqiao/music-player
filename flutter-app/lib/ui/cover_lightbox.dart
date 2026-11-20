@@ -281,6 +281,9 @@ class _CoverLightboxState extends State<CoverLightbox> {
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     final player = context.watch<PlayerState>();
+    // edge-to-edge 之后这层铺到屏幕四边（含状态栏 / 手势条底下），两颗
+    // 贴着边角的东西（关闭钮、caption）要自己让出系统栏。
+    final insets = MediaQuery.paddingOf(context);
     final cover = context.watch<CoverState>();
     final track = player.current;
     final displayPath = track == null
@@ -383,8 +386,8 @@ class _CoverLightboxState extends State<CoverLightbox> {
                 ),
                 // 关闭按钮：右上 (18,18)，40×40 圆形（app.css:3716-3733）。
                 Positioned(
-                  top: 18,
-                  right: 18,
+                  top: 18 + insets.top,
+                  right: 18 + insets.right,
                   child: Semantics(
                     button: true,
                     label: '关闭大图（Esc）',
@@ -400,7 +403,7 @@ class _CoverLightboxState extends State<CoverLightbox> {
                 Positioned(
                   left: 20,
                   right: 20,
-                  bottom: 32,
+                  bottom: 32 + insets.bottom,
                   child: Text(
                     caption,
                     maxLines: 1,

@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/ui/fused_card.dart';
 import 'package:light_music/ui/glass_frost.dart';
+import 'package:light_music/ui/player_card.dart';
 import 'package:light_music/ui/shell.dart';
 
 HomeLayout buildLayout() => const HomeLayout(
@@ -111,9 +112,82 @@ void main() {
     expect(find.byKey(const Key('panel')), findsNothing);
     // stage 在上、控制条在卡内底部，两者不重叠。
     expect(stage.bottom, lessThanOrEqualTo(transport.top));
-    // 卡底边离窗口底边留 `.app { padding: … 14px }` 的 14px（app.css:419-420：
-    // 「底部留白：整张播放卡浮在页面里，底边圆角与边距都要露出来」）。
-    expect(transport.bottom, closeTo(800 - 14, 1));
+    // 页面铺满（`.app { padding: 0 }`，app.css 的 `@media (max-width: 899px)`）：
+    // 卡底边直接落在窗口底边，不再有原来的 14px 外层留白。
+    expect(transport.bottom, closeTo(800, 1));
+    expect(stage.top, closeTo(0, 0.5));
+  });
+
+  testWidgets('窄屏简约模式：顶栏浮在卡片右上角内侧 16px / 10px', (tester) async {
+    await pumpAt(tester, 420, 800);
+
+    final header = tester.getRect(find.byKey(const Key('header')));
+    final stage = tester.getRect(find.byKey(const Key('stage')));
+
+    // `body:not(.is-lyrics-page) .app__header,
+    //  body.is-lyrics-page .app__header { position: absolute;
+    //  top: 28px; right: 0; padding: 0 10px }`：
+    // 测试视口没有安全区，顶栏 top = 安全区 + 16 = 16（与电台页右上角两颗
+    // 同一条水平线，那边也是 16）；右侧 10px 由顶栏自己的左右内边距给出 ——
+    // 不占流、叠在卡片右上角。
+    expect(header.top, closeTo(16, 0.5));
+    expect(header.right, closeTo(420 - 10, 0.5));
+    // 卡片已经跟着铺满，从视口左上角开始
+    expect(stage.top, closeTo(0, 0.5));
+  });
+
+  testWidgets('窄屏歌词页：顶栏与简约模式同一处（也浮在卡片右上角）', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 800);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme(),
+        home: Scaffold(
+          body: HomeLayout(
+            header: const Text('HEADER', key: Key('header')),
+            stage: const Text('STAGE', key: Key('stage')),
+            panel: const Text('PANEL', key: Key('panel')),
+            transport: const Text('TRANSPORT', key: Key('transport')),
+            overlay: const Text('LYRICS', key: Key('overlay')),
+          ),
+        ),
+      ),
+    );
+
+    final header = tester.getRect(find.byKey(const Key('header')));
+    final overlay = tester.getRect(find.byKey(const Key('overlay')));
+
+    // 两种模式共用同一条 `Positioned(top: 安全区 + 16, right: 10)`：切模式时
+    // 「电台 / 更多」不再上下跳（从前歌词页顶栏在流内，位置是 10 + 32 + 14 间距）。
+    expect(header.top, closeTo(16, 0.5));
+    expect(header.right, closeTo(420 - 10, 0.5));
+    // 顶栏不再占流：歌词卡直接铺到屏幕顶边
+    expect(overlay.top, closeTo(0, 0.5));
+  });
+
+  testWidgets('窄屏铺满：卡面铺到屏幕四边，内容按系统栏 insets 内缩', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 800);
+    // 刘海机：状态栏 32、手势条 20（edge-to-edge 之后 Flutter 视图铺到这两条底下）
+    tester.view.padding = const FakeViewPadding(top: 32, bottom: 20);
+    await tester.pumpWidget(wrap());
+
+    final card = tester.getRect(find.byType(PlayerCard));
+    final stage = tester.getRect(find.byKey(const Key('stage')));
+    final transport = tester.getRect(find.byKey(const Key('transport')));
+    final header = tester.getRect(find.byKey(const Key('header')));
+
+    // 卡面自己铺满整屏（含状态栏 / 手势条底下）—— 这条黑边就是这么没的
+    expect(card.top, closeTo(0, 0.5));
+    expect(card.bottom, closeTo(800, 0.5));
+    expect(card.height, closeTo(800, 0.5));
+    // 内容按 insets 内缩，不钻到系统栏下面
+    expect(stage.top, closeTo(32, 0.5));
+    expect(transport.bottom, closeTo(800 - 20, 0.5));
+    // 顶栏 = 安全区 + 16（与电台页右上角两颗同一条水平线）
+    expect(header.top, closeTo(48, 0.5));
   });
 
   testWidgets('900 断点两侧列数不同', (tester) async {

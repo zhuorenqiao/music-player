@@ -131,6 +131,8 @@ class Stage extends StatelessWidget {
               title: track.title,
               trackId: track.id,
             ),
+      // 生成卡种子用曲目原文（空串 = 标签里没歌手，灯箱同款）；展示文案另走 artist。
+      coverArtist: track?.artist,
       broken: track?.broken ?? false,
       // 点曲目区任意留白进歌词页（原版 `App.tsx:410-421` 的 onStageClick）。
       // 没有控制器时给 null，`StagePreview` 退回 M1 的空实现。
@@ -254,6 +256,7 @@ class StagePreview extends StatelessWidget {
     this.position,
     this.totalFromKernel,
     this.coverPath = '',
+    this.coverArtist,
     this.broken = false,
     this.lyrics,
     this.titleTrailing,
@@ -283,6 +286,18 @@ class StagePreview extends StatelessWidget {
   final ValueListenable<double>? position;
 
   final String coverPath;
+
+  /// 生成卡的派生歌手（原曲目的 `track.artist` 原文，**空串是有效值**）。
+  ///
+  /// 只影响碟面的生成卡种子，不影响展示 —— 展示走 [artist]（空歌手会被
+  /// 替换成「未知歌手」）。灯箱（cover_lightbox.dart）与歌词页都用
+  /// `track.artist` 现算生成卡；这里必须给同一个入参，否则同一首歌的碟面
+  /// 与放大图会是两张不同的生成卡。
+  ///
+  /// null = 调用点没给（纯展示用例）→ 退回 [artist]；空态由
+  /// [kIdleStageArtist] 判定，与本字段无关。
+  final String? coverArtist;
+
   final bool broken;
 
   /// 歌词区整块（T18 由 [Stage] 传进来：状态行 + 紧凑歌词视图）。
@@ -297,7 +312,10 @@ class StagePreview extends StatelessWidget {
   /// 这一行只有歌名，居中位置不变」）。
   final Widget? titleTrailing;
 
-  /// 点曲目区进歌词页。null 时保持 M1 的空实现（点了不抛、也不做事）。
+  /// 点曲目区进歌词页（原版 `App.tsx` 的 `onStageClick`）。整块曲目区都算热区 ——
+  /// 封面四周的留白、歌名与歌词之间的空隙同样能点（见 [build] 的
+  /// `stage-tap-to-lyrics`）；封面 / 双语开关 / 歌词行各有自己的识别器，先入先赢。
+  /// null 时保持 M1 的空实现（点了不抛、也不做事）。
   final VoidCallback? onOpenLyrics;
 
   /// 卡面 alpha 缩放系数（M3 T7，--glass-level）。null = 主题原样（1）——
@@ -323,6 +341,13 @@ class StagePreview extends StatelessWidget {
     // transport 的进度条两端（App.tsx:979/:1004），所以一并隐藏。
     final inPlayerCard = PlayerCardScope.maybeOf(context) != null;
     final desktop = isDesktop(viewport.width);
+    // 空态判定：歌手是占位文案 [kIdleStageArtist]（只有 Stage 在没有曲目时这么传）。
+    // 空态没有可派生的歌手 → 音符占位碟；其余一律画生成卡。
+    final idle = artist == kIdleStageArtist;
+    // 生成卡种子用**原曲目的 raw artist**（[coverArtist]，空串是有效值），
+    // 不能用展示文案：空歌手会被替换成「未知歌手」，灯箱 / 歌词页却拿空串
+    // 现算（'unknown' 种子），两边会画出两张不同的卡。
+    final generatedArtist = idle ? null : (coverArtist ?? artist);
 
     final cover = Semantics(
       key: const Key('cover-disc'),
@@ -344,12 +369,10 @@ class StagePreview extends StatelessWidget {
               // M3 T13：播放中旋转（暂停冻角）；空态不转。
               spinning: playing && title != kIdleStageTitle,
               // M2b T10：无封面文件时碟面画生成卡（resolver 第 4 级）。
-              // 空态（曲名/歌手都是占位文案）没有派生源，保留音符占位碟 ——
-              // 生成卡是「属于这位歌手的图」，空态没有歌手。
-              fallbackArtist:
-                  artist == kUnknownStageArtist || artist == kIdleStageArtist
-                      ? ''
-                      : artist,
+              // 只有空态（没有曲目，歌手是占位文案）才没有派生源、保留音符占位碟；
+              // 有曲目就一律画 —— 歌手为空的曲目同样画 'unknown' 种子那张，
+              // 与灯箱 / 歌词页同图（见 [coverArtist] 的注释）。
+              fallbackArtist: generatedArtist,
               fallbackTitle: title == kIdleStageTitle ? '' : title,
             ),
             // 唱臂（M3 T13）：覆盖在碟面之上（原版 .stage__tonearm
@@ -418,6 +441,14 @@ class StagePreview extends StatelessWidget {
       ),
     );
 
+    // 简约模式（封面页）的点击热区在**整块曲目区**上（见下面的 [tapZone]）：
+    // 封面四周的留白、封面与信息区之间的那道间距、信息区与歌词条之外的空白
+    // 都算（红框那一圈）。里层各有自己的识别器，先入先赢：
+    //   * 封面 → 封面灯箱（[cover] 那颗 GestureDetector）；
+    //   * 「双语」开关 / 重试按钮 → 各自按钮；
+    //   * 歌词行 → 定位到那一句（`LyricsView` 里每行的 GestureDetector）。
+    // 从前只有 [info]（歌名 + 歌词）那一片能点，封面旁边那一圈点了没反应。
+    // 与 Web 的 `.stage` 整块 `onStageClick`（App.tsx）同一套语义。
     final content = Column(
       mainAxisSize: inPlayerCard ? MainAxisSize.max : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -428,6 +459,15 @@ class StagePreview extends StatelessWidget {
         // 在合成卡里，info（含铺满的歌词）吃掉封面以外的全部高度。
         inPlayerCard ? Expanded(child: info) : info,
       ],
+    );
+
+    /// 把整块曲目区（含卡片内边距那一圈）包成「点空白进歌词页」的热区。
+    /// `opaque`：没有子组件落点的留白像素同样要能点到。
+    Widget tapZone(Widget child) => GestureDetector(
+      key: const Key('stage-tap-to-lyrics'),
+      behavior: HitTestBehavior.opaque,
+      onTap: onOpenLyrics,
+      child: child,
     );
 
     final timeLine = _TimeLine(
@@ -441,20 +481,22 @@ class StagePreview extends StatelessWidget {
     // padding（`.stage` 窄屏 `clamp(20,4vh,36) 14 16`，app.css:3945）。
     // 时间行也省掉 —— React 的 Stage 没有它，时间在 transport 进度条两端。
     if (inPlayerCard) {
-      return Padding(
-        // 桌面：`.stage { padding: 26px 24px }`（≥900，app.css:4944-4949）；
-        // 窄屏：`padding: clamp(20px, 4vh, 36px) 14px 16px`（app.css:4631-4634）。
-        // 从前这里写死 14/20/14/0，桌面左右只剩 14、窄屏底边也少了 16 ——
-        // 卡片一大，左右留白和「歌词到控制区」的那截距离都不对。
-        padding: desktop
-            ? const EdgeInsets.fromLTRB(24, 26, 24, 26)
-            : EdgeInsets.fromLTRB(
-                14,
-                (viewport.height * 0.04).clamp(20.0, 36.0),
-                14,
-                16,
-              ),
-        child: content,
+      return tapZone(
+        Padding(
+          // 桌面：`.stage { padding: 26px 24px }`（≥900，app.css:4944-4949）；
+          // 窄屏：`padding: clamp(20px, 4vh, 36px) 14px 16px`（app.css:4631-4634）。
+          // 从前这里写死 14/20/14/0，桌面左右只剩 14、窄屏底边也少了 16 ——
+          // 卡片一大，左右留白和「歌词到控制区」的那截距离都不对。
+          padding: desktop
+              ? const EdgeInsets.fromLTRB(24, 26, 24, 26)
+              : EdgeInsets.fromLTRB(
+                  14,
+                  (viewport.height * 0.04).clamp(20.0, 36.0),
+                  14,
+                  16,
+                ),
+          child: content,
+        ),
       );
     }
 
@@ -508,17 +550,19 @@ class StagePreview extends StatelessWidget {
     // M3 T7：磨砂层包住整卡（frost==0 时 GlassFrostLayer 原样返回）。
     // frostLevel 从 Stage 的 ThemeState 读取（可空容错），经参数注入。
     final frost = context.watch<ThemeState?>()?.frostLevel ?? 0.0;
-    return GlassFrostLayer(
-      coverPath: coverPath,
-      frostLevel: frost,
-      glassLevel: glass,
-      colorA: tokens.cardA,
-      colorB: tokens.cardB,
-      // `.player { background: linear-gradient(165deg, …) }`（app.css:444）
-      gradientDegrees: 165,
-      // 卡外投影也归玻璃层（画在卡面之下；留在装饰里会盖在卡面上）
-      shadow: glass > 0 ? tokens.shadowCard : null,
-      child: card,
+    return tapZone(
+      GlassFrostLayer(
+        coverPath: coverPath,
+        frostLevel: frost,
+        glassLevel: glass,
+        colorA: tokens.cardA,
+        colorB: tokens.cardB,
+        // `.player { background: linear-gradient(165deg, …) }`（app.css:444）
+        gradientDegrees: 165,
+        // 卡外投影也归玻璃层（画在卡面之下；留在装饰里会盖在卡面上）
+        shadow: glass > 0 ? tokens.shadowCard : null,
+        child: card,
+      ),
     );
   }
 

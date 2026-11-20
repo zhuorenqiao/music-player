@@ -3,6 +3,9 @@
 // 歌词页右上角的波形样式下拉（M3 D.4）：对译 React
 // `src/components/WaveStylePicker.tsx` 与 `app.css:2101-2317`。
 //
+// 两个落点：桌面留在歌词页页头（面板向下弹）；窄屏（<900）跟着「T/水滴/闹钟」
+// 一起下移到频谱条上方那一行（`side: ToolPanelSide.above`，面板向上弹）。
+//
 // 结构逐块对齐：
 //   * 触发按钮：波形图标 + 当前样式名 + 下拉箭头，读屏名「波形样式：X」；
 //   * 面板常驻 Overlay、靠显示/隐藏切换 —— 与原版「面板常驻 DOM、用 hidden
@@ -29,6 +32,7 @@ import '../theme/app_tokens.dart';
 import '../theme/theme_state.dart';
 import '../wave/wave_styles.dart';
 import '../wave/wave_thumb.dart';
+import 'tool_panel.dart' show ToolPanelSide;
 
 /// 面板宽度（`.wave-style__panel { width: 219px }`，app.css:2160）。
 const double kWaveStylePanelWidth = 219;
@@ -47,9 +51,15 @@ const double _kListTopPad = 4;
 const double _kThumbW = kThumbWidth;
 const double _kThumbH = kThumbHeight;
 
-/// 歌词页右上角的波形样式下拉入口。
+/// 波形样式下拉入口。
 class WaveStylePicker extends StatefulWidget {
-  const WaveStylePicker({super.key});
+  const WaveStylePicker({super.key, this.side = ToolPanelSide.below});
+
+  /// 面板从触发按钮的哪一侧展开。
+  ///
+  /// 页头那版向下（默认）；挪到频谱条上方那行后必须向上 —— 下面只剩进度条和
+  /// 屏幕底，向下弹会整块跑出可视区。
+  final ToolPanelSide side;
 
   @override
   State<WaveStylePicker> createState() => _WaveStylePickerState();
@@ -87,11 +97,17 @@ class _WaveStylePickerState extends State<WaveStylePicker> {
     final anchorSize = box.size;
     // 面板右对齐触发按钮、贴在其下方 8px（app.css:2153-2155）。
     final screenW = MediaQuery.sizeOf(context).width;
+    final screenH = MediaQuery.sizeOf(context).height;
     final left = math.max(
       8.0,
       math.min(screenW - kWaveStylePanelWidth - 8, pos.dx + anchorSize.width - kWaveStylePanelWidth),
     );
-    final top = pos.dy + anchorSize.height + 8;
+    // 页头那版向下弹（`top: calc(100% + 8px)`）；频谱条上方那版向上弹
+    // （`.transport__lyric-row .wave-style__panel { bottom: calc(100% + 8px) }`）。
+    // 向上弹用 bottom 定位：面板底边贴着触发按钮上沿 8px，高度由内容决定。
+    final above = widget.side == ToolPanelSide.above;
+    final top = above ? null : pos.dy + anchorSize.height + 8;
+    final bottom = above ? math.max(8.0, screenH - pos.dy + 8) : null;
     _entry = OverlayEntry(
       builder: (context) => Stack(
         children: [
@@ -106,6 +122,7 @@ class _WaveStylePickerState extends State<WaveStylePicker> {
           Positioned(
             left: left,
             top: top,
+            bottom: bottom,
             child: Material(
               color: Colors.transparent,
               child: _WaveStylePanel(

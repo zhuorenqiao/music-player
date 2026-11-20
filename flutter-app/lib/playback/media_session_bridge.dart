@@ -204,6 +204,15 @@ class MediaSessionCoordinator {
   /// 缺省直接用 `track.cover`。
   final String Function(Track)? artUriFor;
 
+  /// 系统侧「播放 / 上一首 / 下一首」是否该被压住（返回 true = 不理）。
+  ///
+  /// 电台在响的时候，通知栏里还挂着的是**音乐**那份已暂停的快照（电台不走
+  /// 媒体会话）。此时 Android 的媒体按键 / 通知栏 / 蓝牙耳机按 Play，落的都是
+  /// 音乐的 `resume()` —— 用户听到的就是「电台播着播着，突然开始放歌」。装配层
+  /// 把这条接到「电台正在响」，电台掌着声音的时候音乐侧的播放指令一律丢弃：
+  /// 想听歌请回音乐页按播放（那条会按互斥规则把电台让位）。
+  bool Function()? suppressTransportCommands;
+
   final int Function() _nowMs;
 
   StreamSubscription<MediaSessionCommand>? _commandSub;
@@ -243,6 +252,22 @@ class MediaSessionCoordinator {
   /// [TransportController.stopPlayback]（暂停 + 清当前曲目 → 空态）：
   /// 锁屏按钮与界面按钮的听觉与数据结果必须一致，不能给系统留第二条路径。
   void _onCommand(MediaSessionCommand command) {
+    // 电台在响：音乐侧的播放类按键**一概不理**（见
+    // [suppressTransportCommands]）。暂停 / 停止仍然放行 —— 它们只是让音乐
+    // 更安静，不会把电台挤停。
+    final suppressed = suppressTransportCommands?.call() ?? false;
+    if (suppressed) {
+      switch (command) {
+        case PlayCommand():
+        case NextCommand():
+        case PreviousCommand():
+          return;
+        case PauseCommand():
+        case StopCommand():
+        case SeekCommand():
+          break;
+      }
+    }
     switch (command) {
       case PlayCommand():
         unawaited(transport.resume());
