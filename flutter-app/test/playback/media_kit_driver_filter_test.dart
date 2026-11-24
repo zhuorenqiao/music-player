@@ -91,4 +91,71 @@ void main() {
       expect(errors, isEmpty, reason: '噪音被过滤，播放层收不到任何失败');
     });
   });
+
+  // 2026-11-23：用户报「按上一曲 / 下一曲切歌时，有时不换歌、而是当前这首
+  // 从头开始播」。真实内核复现（tool/repro_race.dart + repro4.log）抓到换源
+  // 瞬间会收到一条属于**上一首**的 completed —— media_kit 的 completed 是
+  // mpv `eof-reached` 的电平残留，open() 不复位它（real.dart:1943-1957 /
+  // 719-724 / 1468-1479）。规则钉在 isSettledCompletion 上。
+  group('换源残留 completed 的判定', () {
+    test('刚换源 2ms 的 completed 是上一首的残留，不认', () {
+      expect(
+        MediaKitDriver.isSettledCompletion(
+          completed: true,
+          progressed: true,
+          msSinceOpen: 2,
+        ),
+        isFalse,
+      );
+    });
+
+    test('静默窗口之后的 completed 才算「这一首播完」', () {
+      expect(
+        MediaKitDriver.isSettledCompletion(
+          completed: true,
+          progressed: true,
+          msSinceOpen: kCompletedOpenSettleMs,
+        ),
+        isTrue,
+      );
+      expect(
+        MediaKitDriver.isSettledCompletion(
+          completed: true,
+          progressed: true,
+          msSinceOpen: 60000,
+        ),
+        isTrue,
+      );
+    });
+
+    test('本次 open 从没推进过位置：不是「播完」（坏文件另有错误链）', () {
+      expect(
+        MediaKitDriver.isSettledCompletion(
+          completed: true,
+          progressed: false,
+          msSinceOpen: 5000,
+        ),
+        isFalse,
+      );
+    });
+
+    test('还没 open 过 / 非完成态一律不认', () {
+      expect(
+        MediaKitDriver.isSettledCompletion(
+          completed: true,
+          progressed: true,
+          msSinceOpen: -1,
+        ),
+        isFalse,
+      );
+      expect(
+        MediaKitDriver.isSettledCompletion(
+          completed: false,
+          progressed: true,
+          msSinceOpen: 60000,
+        ),
+        isFalse,
+      );
+    });
+  });
 }

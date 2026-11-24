@@ -11,6 +11,10 @@ import 'package:light_music/playback/play_mode.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
 import 'package:light_music/playback/transport_controller.dart';
+import 'package:light_music/radio/radio_engine.dart';
+import 'package:light_music/radio/radio_media_session.dart';
+import 'package:light_music/radio/radio_state.dart';
+import 'package:light_music/radio/radio_station.dart';
 
 class _NoRecent implements RecentRecorder {
   @override
@@ -260,5 +264,163 @@ void main() {
     ).attach();
     expect(bridge.published.last.title, isEmpty);
     expect(bridge.stopCount, greaterThanOrEqualTo(1));
+  });
+
+  test('电台开始出声后卡片切到电台：台名 / 分类 / 直播，没有进度', () async {
+    final bridge = FakeMediaSessionBridge();
+    final driver = FakeAudioDriver();
+    final transport = TransportController(
+      player: AudioPlayer(driver, scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1')]),
+    );
+    final coordinator = MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+    );
+    await coordinator.attach();
+    await transport.playTrack('1');
+    expect(bridge.published.last.kind, MediaKind.music, reason: '先放音乐');
+
+    final engine = FakeRadioEngine();
+    final radio = RadioState(
+      engine: engine,
+      // 与 App 的互斥钩子一致：电台开播先让音乐暂停。
+      onTuned: (_) async => transport.player.pause(),
+    );
+    final binding = RadioMediaSessionBinding(
+      session: coordinator,
+      radio: radio,
+    )..attach();
+    addTearDown(() {
+      binding.dispose();
+      radio.dispose();
+    });
+
+    final station = kRadioStations.firstWhere((s) => s.id == 'net-intl-news');
+    await radio.tune(station);
+    await settle();
+
+    expect(coordinator.radioOwnsCard, isTrue);
+    final snapshot = bridge.published.last;
+    expect(snapshot.kind, MediaKind.radio);
+    expect(snapshot.title, '国际新闻');
+    expect(snapshot.artist, '资讯 · 网络台 · 直播');
+    expect(snapshot.album, '流光音乐 · 电台');
+    expect(snapshot.live, isTrue);
+    expect(snapshot.duration, isNull, reason: '直播不画进度条');
+    expect(snapshot.playing, isTrue);
+    expect(snapshot.position, Duration.zero);
+  });
+
+  test('电台接管时系统按键走电台；关闭后卡片交还暂停的音乐', () async {
+    final bridge = FakeMediaSessionBridge();
+    final driver = FakeAudioDriver();
+    final transport = TransportController(
+      player: AudioPlayer(driver, scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1')]),
+    );
+    final coordinator = MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+    );
+    await coordinator.attach();
+    await transport.playTrack('1');
+    final engine = FakeRadioEngine();
+    final radio = RadioState(
+      engine: engine,
+      onTuned: (_) async => transport.player.pause(),
+    );
+    final binding = RadioMediaSessionBinding(
+      session: coordinator,
+      radio: radio,
+    )..attach();
+    addTearDown(() {
+      binding.dispose();
+      radio.dispose();
+    });
+    await radio.tune(kRadioStations.firstWhere((s) => s.id == 'net-intl-news'));
+    await settle();
+    expect(coordinator.radioOwnsCard, isTrue);
+
+    engine.calls.clear();
+    bridge.emit(const PauseCommand());
+    await settle();
+    expect(engine.calls, contains('pause'));
+    expect(bridge.published.last.kind, MediaKind.radio);
+    expect(bridge.published.last.playing, isFalse);
+
+    driver.calls.clear();
+    bridge.emit(const PlayCommand());
+    await settle();
+    expect(engine.calls, contains('play'), reason: 'Play 续播的是电台');
+    expect(driver.calls, isNot(contains('play')), reason: '不能把音乐拉起来');
+
+    bridge.emit(const NextCommand());
+    await settle();
+    expect(transport.current!.id, '1', reason: '直播没有下一台，不该换歌');
+
+    bridge.emit(const StopCommand());
+    await settle();
+    expect(radio.current, isNull);
+    expect(bridge.published.last.kind, MediaKind.music);
+    expect(bridge.published.last.title, '歌1');
+    expect(bridge.published.last.playing, isFalse);
+  });
+
+  test('音乐开声抢回卡片；都没响时卡片留在电台（最后响过的是它）', () async {
+    final bridge = FakeMediaSessionBridge();
+    final driver = FakeAudioDriver();
+    final transport = TransportController(
+      player: AudioPlayer(driver, scheduler: (d, cb) => cb()),
+      recent: _NoRecent(),
+      toasts: _NoToast(),
+      playlist: Playlist.fromTracks([t('1')]),
+    );
+    final coordinator = MediaSessionCoordinator(
+      bridge: bridge,
+      transport: transport,
+    );
+    await coordinator.attach();
+    await transport.playTrack('1');
+    await transport.pause();
+    await settle();
+
+    final engine = FakeRadioEngine();
+    final radio = RadioState(
+      engine: engine,
+      onTuned: (_) async => transport.player.pause(),
+    );
+    final binding = RadioMediaSessionBinding(
+      session: coordinator,
+      radio: radio,
+    )..attach();
+    addTearDown(() {
+      binding.dispose();
+      radio.dispose();
+    });
+    await radio.tune(kRadioStations.firstWhere((s) => s.id == 'net-intl-news'));
+    await settle();
+    expect(bridge.published.last.kind, MediaKind.radio);
+
+    // 用户暂停电台：卡片留在这一台上（不是切回同样暂停的音乐）。
+    await radio.pause();
+    await settle();
+    expect(bridge.published.last.kind, MediaKind.radio);
+    expect(bridge.published.last.playing, isFalse);
+
+    // 音乐开声：卡片立刻切回音乐。
+    await transport.resume();
+    await settle();
+    expect(bridge.published.last.kind, MediaKind.music);
+    expect(bridge.published.last.title, '歌1');
+
+    // 音乐再暂停：最后响过的是音乐，卡片留在音乐。
+    await transport.pause();
+    await settle();
+    expect(bridge.published.last.kind, MediaKind.music);
   });
 }

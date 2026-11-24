@@ -61,8 +61,14 @@ fms.PlaybackStatus statusFor(PublishedSnapshot snapshot) =>
 ///
 /// 没有当前曲目就谈不上上下曲；时长未知时不给 seek —— 系统侧画不出可拖的
 /// 进度条，给了也只会收到 0 秒的跳转请求。
+///
+/// 电台是直播：只有播放 / 暂停 / 关闭。上下曲与 seek 一律不给，
+/// Android 的快捷卡片上自然也就不会出现「下一台」和进度条。
 List<String> actionsFor(PublishedSnapshot snapshot) {
   if (snapshot.title.isEmpty) return const [];
+  if (snapshot.kind == MediaKind.radio || snapshot.live) {
+    return const ['play', 'pause', 'stop'];
+  }
   return [
     'play',
     'pause',
@@ -215,11 +221,14 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
     _lastSnapshot = snapshot;
     final artworkUri = _artworkUriOf(snapshot);
     final metadataKey = [
+      snapshot.kind.name,
+      snapshot.live ? 'live' : 'linear',
       snapshot.title,
       snapshot.artist,
       snapshot.album,
       artworkUri ?? '',
       '${snapshot.duration?.inMilliseconds ?? ''}',
+      '${snapshot.artworkHue ?? ''}',
     ].join('\u0001');
     if (metadataKey != _metadataKey) {
       _metadataKey = metadataKey;
@@ -229,7 +238,9 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
           artist: snapshot.artist,
           album: snapshot.album,
           artworkUri: artworkUri,
-          duration: snapshot.duration,
+          // 直播不传时长：包内 0 / null 都会落成 C.TIME_UNSET，系统据此
+          // 不画进度条、也不发 seekTo（双保险）。
+          duration: snapshot.live ? null : snapshot.duration,
         ),
       );
     }
@@ -305,9 +316,16 @@ class FlutterMediaSessionBridge implements MediaSessionBridge {
     final generated = cache.pathFor(
       artist: snapshot.artist,
       title: snapshot.title,
+      hue: snapshot.artworkHue,
     );
     if (generated != null) return toArtUri(generated);
-    unawaited(cache.prime(artist: snapshot.artist, title: snapshot.title));
+    unawaited(
+      cache.prime(
+        artist: snapshot.artist,
+        title: snapshot.title,
+        hue: snapshot.artworkHue,
+      ),
+    );
     return null;
   }
 

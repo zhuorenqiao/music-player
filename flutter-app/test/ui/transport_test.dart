@@ -18,6 +18,7 @@ import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/state/cover_state.dart';
 import 'package:light_music/state/library_state.dart';
 import 'package:light_music/state/lyrics_page_controller.dart';
+import 'package:light_music/state/media_refresh_state.dart';
 import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
@@ -68,9 +69,7 @@ Future<void> pump(
     ),
   );
   await tester.pumpWidget(
-    providers.isEmpty
-        ? app
-        : MultiProvider(providers: providers, child: app),
+    providers.isEmpty ? app : MultiProvider(providers: providers, child: app),
   );
 }
 
@@ -155,9 +154,7 @@ void main() {
     expect(find.byKey(const Key('btn-queue')), findsNothing);
   });
 
-  testWidgets('播放按钮语义在播放/暂停间切换，模式文案跟着 cycleMode 走', (
-    tester,
-  ) async {
+  testWidgets('播放按钮语义在播放/暂停间切换，模式文案跟着 cycleMode 走', (tester) async {
     final semantics = tester.ensureSemantics();
     try {
       await pump(
@@ -305,9 +302,15 @@ void main() {
 
       expect(find.bySemanticsLabel('静音'), findsOneWidget);
       expect(find.bySemanticsLabel('音量'), findsOneWidget);
-      expect(tester.getSemantics(find.byKey(const Key('volume-input'))).value, '50%');
+      expect(
+        tester.getSemantics(find.byKey(const Key('volume-input'))).value,
+        '50%',
+      );
 
-      await tester.drag(find.byKey(const Key('volume-input')), const Offset(60, 0));
+      await tester.drag(
+        find.byKey(const Key('volume-input')),
+        const Offset(60, 0),
+      );
       await tester.pump();
       expect(values, isNotEmpty);
       expect(values.last, greaterThan(0.5));
@@ -357,9 +360,11 @@ void main() {
     await pumpLoading(false);
     await tester.pump();
     expect(
-      tester.widget<CircularProgressIndicator>(
-        find.byType(CircularProgressIndicator),
-      ).value,
+      tester
+          .widget<CircularProgressIndicator>(
+            find.byType(CircularProgressIndicator),
+          )
+          .value,
       isNull,
     );
     expect(tester.binding.transientCallbackCount, greaterThan(0));
@@ -370,9 +375,11 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
     expect(
-      tester.widget<CircularProgressIndicator>(
-        find.byType(CircularProgressIndicator),
-      ).value,
+      tester
+          .widget<CircularProgressIndicator>(
+            find.byType(CircularProgressIndicator),
+          )
+          .value,
       isNotNull,
     );
     expect(tester.binding.transientCallbackCount, 0);
@@ -393,9 +400,15 @@ void main() {
         ChangeNotifierProvider<RecentState>.value(value: harness.recent),
         // M2b T10：面板的封面 resolver 也要在位（弹层里的 Panel 会 watch）。
         ChangeNotifierProvider<CoverState>.value(value: harness.cover),
+        // 表头「重新获取封面与歌词」的状态机（弹层里的 Panel 会 read）。
+        ChangeNotifierProvider<MediaRefreshState>.value(
+          value: harness.mediaRefresh,
+        ),
         // M3 T7：面板的 glassLevel 走 ThemeState。
         ChangeNotifierProvider<ThemeState>.value(value: harness.theme),
-        ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
+        ChangeNotifierProvider<PanelController>(
+          create: (_) => PanelController(),
+        ),
       ],
     );
 
@@ -463,7 +476,10 @@ void main() {
       height: 900,
       providers: providers(),
     );
-    expect(tester.getSize(find.byType(WaveStrip)).height, kWaveStripHeightUltra);
+    expect(
+      tester.getSize(find.byType(WaveStrip)).height,
+      kWaveStripHeightUltra,
+    );
   });
 
   testWidgets('窄屏歌词页：那组控件下移到频谱条上方，左端与简约模式对齐', (tester) async {
@@ -520,7 +536,11 @@ void main() {
     expect(tools.left, closeTo(simpleLeft, 0.5), reason: '左边距要和简约模式那三颗一致');
     expect(tools.bottom, lessThan(wave.top), reason: '整组在频谱条上方');
     final picker = tester.getRect(find.byType(WaveStylePicker));
-    expect(picker.center.dy, closeTo(tools.center.dy, 0.5), reason: '下拉与三颗按钮同一行');
+    expect(
+      picker.center.dy,
+      closeTo(tools.center.dy, 0.5),
+      reason: '下拉与三颗按钮同一行',
+    );
     expect(picker.right, greaterThan(tools.right), reason: '下拉贴右');
 
     // 频谱条底边到进度条顶边：Web 是 2px（`row-gap: 0` +
@@ -529,10 +549,53 @@ void main() {
     expect(progress.top - wave.bottom, closeTo(2, 0.1), reason: '频谱与进度条之间 2px');
 
     // 这一行里控件之外的空白也是热区：点三颗按钮与下拉之间的空处应切回简约模式
-    final zone = tester.getRect(find.byKey(const Key('transport-tap-to-simple')));
+    final zone = tester.getRect(
+      find.byKey(const Key('transport-tap-to-simple')),
+    );
     await tester.tapAt(zone.center);
     await tester.pump();
     expect(lyricsPage.isOpen, isFalse, reason: '点工具行空白应切回简约模式');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('桌面歌词页：三颗按钮在频谱上方且与简约模式左对齐', (tester) async {
+    final harness = PanelHarness(titles: <String>['十年']);
+    addTearDown(harness.dispose);
+    final lyricsPage = LyricsPageController();
+    addTearDown(lyricsPage.dispose);
+
+    List<SingleChildWidget> providers() => <SingleChildWidget>[
+      ChangeNotifierProvider<LibraryState>.value(value: harness.library),
+      ChangeNotifierProvider<PlayerState>.value(value: harness.player),
+      ChangeNotifierProvider<RecentState>.value(value: harness.recent),
+      ChangeNotifierProvider<CoverState>.value(value: harness.cover),
+      ChangeNotifierProvider<ThemeState>.value(value: harness.theme),
+      ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
+      ChangeNotifierProvider<LyricsPageController>.value(value: lyricsPage),
+    ];
+
+    await pump(
+      tester,
+      const TransportBar(),
+      width: 1440,
+      height: 900,
+      providers: providers(),
+    );
+    final simpleTools = tester.getRect(find.byType(ToolButtons));
+    expect(find.byType(WaveStrip), findsNothing);
+
+    lyricsPage.open();
+    await tester.pump();
+
+    expect(find.byType(ToolButtons), findsOneWidget);
+    final tools = tester.getRect(find.byType(ToolButtons));
+    final wave = tester.getRect(find.byType(WaveStrip));
+    expect(tools.left, closeTo(simpleTools.left, 0.5));
+    expect(tools.size, simpleTools.size);
+    expect(tools.bottom, lessThan(wave.top));
+    expect(
+      tester.getRect(find.byKey(const Key('progress-slider'))).top - wave.bottom,
+      closeTo(2, 0.1),
+    );
   });
 }

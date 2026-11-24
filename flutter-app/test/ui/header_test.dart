@@ -1,8 +1,9 @@
 // test/ui/header_test.dart
 //
 // 顶栏与一级抽屉（T25）：品牌区、右侧唯一的「更多」按钮（视觉文案与读屏名
-// 都是「更多」，对译 React `LibraryMenu.tsx` 的 `btn__text`）、抽屉里的三条
-// 一级入口、清空前的二次确认、抽屉宽度。
+// 都是「更多」，对译 React `LibraryMenu.tsx` 的 `btn__text`）、一级抽屉里的
+// 「添加音乐 / 清空播放列表 / 换肤」三条入口、「添加音乐」的二级筛选
+// （音频文件 / 整个文件夹）、清空前的二次确认、抽屉宽度。
 //
 // 三个回调全部由测试注入 —— 测试绝不碰 file_picker（真实选择器在
 // `core/file_picking.dart` 里，由 `HomePage` 接线）。
@@ -32,6 +33,8 @@ Future<Calls> pumpHeader(
   double width, {
   VoidCallback? onSwitchView,
   bool immersive = false,
+  VoidCallback? onOpenSleep,
+  VoidCallback? onOpenRadio,
 }) async {
   addTearDown(tester.view.reset);
   tester.view.devicePixelRatio = 1;
@@ -50,6 +53,8 @@ Future<Calls> pumpHeader(
           onClearPlaylist: () async => calls.cleared++,
           onSwitchView: onSwitchView,
           immersive: immersive,
+          onOpenSleep: onOpenSleep,
+          onOpenRadio: onOpenRadio,
         ),
       ),
     ),
@@ -113,6 +118,35 @@ void main() {
     );
   });
 
+  headerTest('所有尺寸「助眠 / 电台」图标与「更多」同用中性 token', (tester) async {
+    for (final width in [390.0, 899.0, 900.0, 1200.0]) {
+      await pumpHeader(tester, width, onOpenSleep: () {}, onOpenRadio: () {});
+
+      final tokens = tester.element(find.byType(AppHeader)).tokens;
+      final menuPaint = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byKey(const Key('menu-button')),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      final expected = (menuPaint.painter! as dynamic).color as Color;
+      expect(expected, isNot(tokens.accent));
+      for (final key in ['sleep-button', 'radio-button']) {
+        final paint = tester.widget<CustomPaint>(
+          find.descendant(
+            of: find.byKey(Key(key)),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        expect(
+          (paint.painter! as dynamic).color,
+          expected,
+          reason: '$width px: $key',
+        );
+      }
+    }
+  });
+
   headerTest('窄屏不渲染「模式切换」：简约模式与歌词页都没有', (tester) async {
     // 简约模式：点曲目区就能进歌词页，这颗按钮是重复的
     await pumpHeader(tester, 420, onSwitchView: () {});
@@ -161,12 +195,33 @@ void main() {
     await openMenu(tester);
 
     expect(find.text('添加音乐'), findsOneWidget);
-    expect(find.text('添加整个文件夹'), findsOneWidget);
+    // 文件夹入口收进「添加音乐」二级抽屉，一级不再单列。
+    expect(find.text('添加整个文件夹'), findsNothing);
     expect(find.text('清空播放列表'), findsOneWidget);
-    // parity 校正（M3 T6）：换肤二级抽屉落地，一级菜单现在有第四个入口
-    //（LibraryMenu.tsx:104 的「换肤」对译）。
     expect(find.text('换肤'), findsOneWidget);
     expect(find.textContaining('把音频文件'), findsNothing); // 一级行不带说明
+  });
+
+  headerTest('「添加音乐」二级抽屉：音频文件与整个文件夹各一个入口', (tester) async {
+    await pumpHeader(tester, 1200);
+    await openMenu(tester);
+
+    await tester.tap(find.text('添加音乐'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AddDrawer), findsOneWidget);
+    expect(find.byType(DrawerMenu), findsNothing);
+    expect(find.text('选择音频文件'), findsOneWidget);
+    expect(find.text('选择整个文件夹'), findsOneWidget);
+    // 二级抽屉也保持窄档、54px 行高，与一级菜单同一套小卡。
+    final panel = tester.getRect(find.byType(AddDrawer));
+    expect(panel.width, AddDrawer.width);
+    final row = tester.getRect(
+      find
+          .ancestor(of: find.text('选择音频文件'), matching: find.byType(InkWell))
+          .first,
+    );
+    expect(row.height, 54);
   });
 
   headerTest('清空是二次确认，不在菜单里直接执行', (tester) async {
@@ -200,20 +255,28 @@ void main() {
     expect(find.byType(DrawerMenu), findsNothing);
   });
 
-  headerTest('添加类入口先收抽屉再回调', (tester) async {
+  headerTest('添加类入口先收一级抽屉，二级选完再回调', (tester) async {
     final calls = await pumpHeader(tester, 1200);
 
     await openMenu(tester);
     await tester.tap(find.text('添加音乐'));
     await tester.pumpAndSettle();
-    expect(calls.addFiles, 1);
+    expect(calls.addFiles, 0, reason: '一级入口只负责进二级，不直接选文件');
     expect(find.byType(DrawerMenu), findsNothing);
+    expect(find.byType(AddDrawer), findsOneWidget);
+
+    await tester.tap(find.text('选择音频文件'));
+    await tester.pumpAndSettle();
+    expect(calls.addFiles, 1);
+    expect(find.byType(AddDrawer), findsNothing);
 
     await openMenu(tester);
-    await tester.tap(find.text('添加整个文件夹'));
+    await tester.tap(find.text('添加音乐'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('选择整个文件夹'));
     await tester.pumpAndSettle();
     expect(calls.addFolder, 1);
-    expect(find.byType(DrawerMenu), findsNothing);
+    expect(find.byType(AddDrawer), findsNothing);
   });
 
   headerTest('抽屉宽度收窄', (tester) async {
@@ -246,7 +309,7 @@ void main() {
     // 行与行之间留 8px，左右各 12px（外加 1px 面板描边）。旧实现行是贴在一起的。
     final row2 = tester.getRect(
       find
-          .ancestor(of: find.text('添加整个文件夹'), matching: find.byType(InkWell))
+          .ancestor(of: find.text('清空播放列表'), matching: find.byType(InkWell))
           .first,
     );
     expect(row2.top - row.bottom, 8, reason: '行间距 8px');

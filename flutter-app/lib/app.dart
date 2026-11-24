@@ -23,13 +23,16 @@ import 'playback/media_session_bridge.dart' show MediaSessionCoordinator;
 import 'playback/playlist.dart';
 import 'playback/screen_awake_keeper.dart';
 import 'playback/transport_controller.dart';
+import 'radio/radio_media_session.dart';
 import 'radio/radio_state.dart';
+import 'sleep/sleep_state.dart';
 import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
 import 'state/cover_state.dart';
 import 'state/lightbox_controller.dart';
 import 'state/lyrics_page_controller.dart';
 import 'state/lyrics_state.dart';
+import 'state/media_refresh_state.dart';
 import 'state/panel_controller.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
@@ -61,6 +64,7 @@ class AppBootstrap {
     this.durationProbe,
     required this.lyrics,
     required this.bilingual,
+    required this.mediaRefresh,
     required this.onLyricsViewChanged,
     this.onCoverStateChanged,
     LyricsPageController? lyricsPage,
@@ -128,6 +132,10 @@ class AppBootstrap {
   /// 界面层只持有引用，不需要再启动它。
   final MediaSessionCoordinator mediaSession;
 
+  /// 电台 → 系统卡片的绑定。由 RadioState 的 provider 创建（组合根里还没有
+  /// 电台实例），[dispose] 负责摘掉监听，避免退出时还把已 dispose 的状态推给会话。
+  RadioMediaSessionBinding? radioMediaSession;
+
   /// 通知权限是否可用。false 只影响通知栏 / 锁屏控件的可见性，不影响播放。
   ///
   /// 这是**首帧时**的快照：Android 上 `activate()` 的弹窗在 attach 里已经弹完，
@@ -151,6 +159,9 @@ class AppBootstrap {
 
   /// 双语状态机（T14）。转发 `lyrics.translatable`，自己管译文与三条生命周期规则。
   final BilingualState bilingual;
+
+  /// 「重新获取全部封面与歌词」状态机（播放列表面板表头那颗按钮）。
+  final MediaRefreshState mediaRefresh;
 
   /// `buildBootstrap` 挂在 `player.transport.view` 上的那个回调引用。
   /// [dispose] 要用**同一个函数对象**才能 `removeListener` 掉，不能另写一份闭包。
@@ -216,6 +227,9 @@ class AppBootstrap {
   /// 这里不越权去 dispose 它们，否则应用退出时会出现「先关掉播放器再关掉监听
   /// 它的界面」这种顺序问题。
   Future<void> dispose() async {
+    // 先摘电台监听：它会往媒体会话推快照，不能等会话都收尾了还在写。
+    radioMediaSession?.dispose();
+    radioMediaSession = null;
     player.transport.view.removeListener(onLyricsViewChanged);
     player.transport.view.removeListener(onCoverViewChanged);
     player.transport.view.removeListener(onSpectrumViewChanged);
@@ -336,11 +350,36 @@ class _LightMusicAppState extends State<LightMusicApp>
               musicPlaying: player,
               isMusicPlaying: () => player.playing,
             );
-            // 电台在响时，系统侧（通知栏 / 蓝牙耳机 / 锁屏）按「播放」落到的
-            // 是音乐那份已暂停的快照 —— 不拦的话用户听到的就是「电台播着播着
+            // 电台 → 系统媒体卡片：谁在响谁接管。电台快照带台名 / 分类 / 直播，
+            // 音乐开声时协调器自动切回曲目；卡片上的播放 / 暂停 / 关闭回到
+            // RadioState 的 resume / pause / stop。
+            bootstrap.radioMediaSession = RadioMediaSessionBinding(
+              session: bootstrap.mediaSession,
+              radio: radio,
+            )..attach();
+            // 电台还没接管卡片时（起播中 / 音乐刚被让位），系统侧按「播放」仍可能
+            // 落到音乐那份已暂停的快照 —— 不拦的话用户听到的就是「电台播着播着
             // 突然开始放歌」。见 `MediaSessionCoordinator.suppressTransportCommands`。
-            bootstrap.mediaSession.suppressTransportCommands = () => radio.playing;
+            bootstrap.mediaSession.suppressTransportCommands = () =>
+                radio.playing;
             return radio;
+          },
+        ),
+        // T32：休眠链路。与电台一样由 provider 建、也由 provider 关；
+        // 内核是 media_kit 的**第三台** Player，懒建到第一次 open。
+        //   · 开播 / 续播前先暂停音乐与电台（SleepState.tune / resume 自己做）；
+        //   · 音乐或电台一开声，休眠自动让位（SleepState 监听两个状态）；
+        //   · 睡眠定时器到点：音乐由它自己停，这里把电台与休眠也停掉。
+        ChangeNotifierProvider<SleepState>(
+          create: (context) {
+            final player = context.read<PlayerState>();
+            final radio = context.read<RadioState>();
+            final sleep = SleepState(player: player, radio: radio);
+            bootstrap.sleepTimer.onExpire = () async {
+              await radio.pause();
+              await sleep.pause();
+            };
+            return sleep;
           },
         ),
         ChangeNotifierProvider<RecentState>.value(value: bootstrap.recent),
@@ -352,6 +391,11 @@ class _LightMusicAppState extends State<LightMusicApp>
         ),
         // 封面显示层（M2b T8）：Stage / Panel / 灯箱的 resolver 共读这一份。
         ChangeNotifierProvider<CoverState>.value(value: bootstrap.cover),
+        // 「重新获取全部封面与歌词」：播放列表面板表头按钮读 busy，动作本身
+        // 由状态机串行去重（连点 / 两个入口共用同一批）。
+        ChangeNotifierProvider<MediaRefreshState>.value(
+          value: bootstrap.mediaRefresh,
+        ),
         // 全屏歌词页的开合开关（T18）：播放卡的点击与 T19 的页面本体 / overlay
         // 槽 / 快捷键读同一份，登记在路由之上。
         ChangeNotifierProvider<LyricsPageController>.value(
@@ -372,7 +416,8 @@ class _LightMusicAppState extends State<LightMusicApp>
         // D.3：实时频谱帧表调度。歌词页的 WaveStrip 从这里取表；
         // ChangeNotifier 只在「表到货 / 被清掉」时通知，不随进度 tick 重建。
         ChangeNotifierProvider<SpectrumState>.value(value: bootstrap.spectrum),
-        // 睡眠定时器：控制条上的闹钟按钮读这一份；到点由它暂停播放。
+        // 睡眠定时器：控制条、电台页与休眠页页头的闹钟按钮读这一份；到点暂停音乐，
+        // 并通过 `onExpire` 把电台与休眠也停下来（接线见上面的 SleepState provider）。
         ChangeNotifierProvider<SleepTimerState>.value(
           value: bootstrap.sleepTimer,
         ),

@@ -3,10 +3,13 @@
 // 睡眠定时器：设定一个时长，倒计时归零时**暂停播放**（保留当前进度，再按播放
 // 即可继续）。
 //
+// 电台走的是另一条音频链路：[onExpire] 由装配层注入「把电台也暂停」——
+// 到点时用户可能正在听电台（音乐早已让位），只暂停音乐的话电台会一直响。
+//
 // 状态只有一个：**截止时刻（deadline，墙钟）**。没有 deadline = 未启用。
 // 剩余时间由 1s 的 tick 现算（deadline - now），不另存一个会漂移的倒计时器。
 //
-// 定时器按墙钟走：切歌不重置、暂停 / 播放歌曲都不影响它 —— 它只认时间。
+// 定时器按墙钟走：切歌、换台都不重置，暂停 / 播放也不影响它 —— 它只认时间。
 // deadline 写进 prefs：重启应用后倒计时接着走；否则用户重启一下定时器就凭空
 // 失效，太意外。
 //
@@ -40,11 +43,18 @@ class SleepTimerState extends ChangeNotifier {
     required this._player,
     required this._toasts,
     DateTime Function()? now,
+    this.onExpire,
   }) : _now = now ?? DateTime.now;
 
   final AppPrefs _prefs;
   final PlayerState _player;
   final ToastState _toasts;
+
+  /// 到点后除「暂停音乐」之外的附加动作（装配层注入：电台也停下来）。
+  ///
+  /// 做成可写字段：组合根里电台（RadioState）由 provider 懒建、晚于定时器，
+  /// app.dart 在电台建好后把这条线接上；测试也可以直接替换。
+  FutureOr<void> Function()? onExpire;
 
   /// 取当前时刻的接缝（测试里注入假时钟）。
   final DateTime Function() _now;
@@ -150,7 +160,22 @@ class SleepTimerState extends ChangeNotifier {
     notifyListeners();
     unawaited(_prefs.remove(StorageKeys.sleepTimer));
     unawaited(_player.pause());
+    unawaited(_runExpire());
     _toasts.show('定时结束，已暂停播放');
+  }
+
+  /// 执行装配层接上的附加动作（把电台也暂停）。
+  ///
+  /// 自己吸收异常：到点这一刻 deadline 已经清掉了，不该因为「停电台」失败
+  /// 留一条未处理的 rejection。
+  Future<void> _runExpire() async {
+    final expire = onExpire;
+    if (expire == null) return;
+    try {
+      await expire();
+    } catch (_) {
+      // 电台停不下来也不影响定时器已经结束这一事实。
+    }
   }
 
   @override

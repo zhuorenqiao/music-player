@@ -69,16 +69,22 @@ const Duration _kDefaultAutoRetryDelay = Duration(seconds: 25);
 /// 首次查询的慢提示延迟（lyrics.tsx:407 的 4000ms）。
 const Duration _kDefaultSlowHintDelay = Duration(seconds: 4);
 
-// 状态行文案，逐字对译 lyrics.tsx（不要顺手改标点 / 空格：「LRCLIB线上库」中间
-// 没有空格、「…」是全角省略号，都是原版的字面量）。
+// 状态行文案，逐字对译 lyrics.tsx（不要顺手改标点 / 空格：「线上曲库」那几句
+// 与来源名称之间有一个半角空格、「…」是全角省略号，都是原版的字面量）。
 const String _kStatusManual = '已使用手动指定的歌词';
-const String _kStatusSynced = '歌词自动匹配自 LRCLIB线上库';
-const String _kStatusPlain = '歌词匹配自 LRCLIB线上库 · 原文无时间轴，仅静态显示';
 const String _kStatusOffline = '当前离线，且这首歌还没有歌词';
 const String _kStatusReadingMeta = '正在读取音频信息…';
 const String _kStatusMatching = '正在按曲名与歌手匹配歌词…';
 const String _kStatusSlow = '正在匹配歌词…首次查询较慢，成功后会缓存在本地';
 const String _kStatusFailed = '歌词匹配失败';
+
+/// 自动匹配的状态行：来源按 Track 里持久化的 lyricsOrigin 显示。
+/// 老档案没有来源字段时是「线上歌词库」泛称。
+String _statusSynced(Track track) =>
+    '歌词自动匹配自 ${lyricsOriginLabel(track.lyricsOrigin)}';
+
+String _statusPlain(Track track) =>
+    '歌词匹配自 ${lyricsOriginLabel(track.lyricsOrigin)} · 原文无时间轴，仅静态显示';
 
 /// 自动重试的追加后缀；秒数从注入的间隔现算（lyrics.tsx:450 的
 /// `Math.round(AUTO_RETRY_DELAY / 1000)`）。
@@ -306,7 +312,7 @@ class LyricsState extends ChangeNotifier {
         state: LyricsLoad.ready,
         status: track.lyricsSource == 'manual'
             ? _kStatusManual
-            : (track.lyrics.isNotEmpty ? _kStatusSynced : _kStatusPlain),
+            : (track.lyrics.isNotEmpty ? _statusSynced(track) : _statusPlain(track)),
         showRetry: false,
       );
       // 纯文本后台升级（文件头第 4 条）。
@@ -438,6 +444,7 @@ class LyricsState extends ChangeNotifier {
           track.lyricsPlain = result.plain;
         }
         track.lyricsSource = 'auto';
+        track.lyricsOrigin = lyricsOriginOf(result.source);
         // 写入活对象后立刻重算 + 落库 + 通知（差异 2）。_syncKey 必须同步刷新，
         // 否则下一次 attach 会把这次写回当成「歌词变了」再匹配一遍。
         _syncKey(track);
@@ -456,7 +463,7 @@ class LyricsState extends ChangeNotifier {
       _apply(
         state: LyricsLoad.ready,
         // 原版这一行读的是**写回之后**的 track.lyrics（lyrics.tsx:428）。
-        status: track.lyrics.isNotEmpty ? _kStatusSynced : _kStatusPlain,
+        status: track.lyrics.isNotEmpty ? _statusSynced(track) : _statusPlain(track),
         showRetry: false,
       );
       return upgrade;
@@ -582,9 +589,10 @@ class LyricsState extends ChangeNotifier {
     track.lyrics = result.synced;
     track.lyricsPlain = '';
     track.lyricsSource = 'auto';
+    track.lyricsOrigin = lyricsOriginOf(result.source);
     _syncKey(track);
     _recomputeLyrics();
-    _apply(state: LyricsLoad.ready, status: _kStatusSynced, showRetry: false);
+    _apply(state: LyricsLoad.ready, status: _statusSynced(track), showRetry: false);
     _notifyChanged();
     return true;
   }

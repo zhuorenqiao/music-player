@@ -6,8 +6,8 @@
 //
 // 结构与原版逐块对齐：
 //   * 头部 `.lyrics-page__head`：左侧 `.lyrics-page__meta`（歌名 + 双语开关一行、
-//     `artist · album` 一行），**紧跟着三颗工具按钮**（「T」/毛玻璃/睡眠定时器，
-//     沉浸模式里从控制条搬上来的），**右上角是 `WaveStylePicker`**（M3 D.4 补上）；
+//     `artist · album` 一行），**右上角是 `WaveStylePicker`**；三颗工具按钮
+//     （「T」/毛玻璃/睡眠定时器）在控制条里、音谱条上方；
 //   * 正文 `.lyrics-page__body`：宽 ≥900 两列 `minmax(0, 560px) clamp(240px, 26vw,
 //     360px)`、gap 32、顶上一道 `border-top`；窄屏单列且**整块封面不出现**
 //     （原版靠 `@media` 把 `.lyrics-page__art` 藏掉）；
@@ -21,7 +21,7 @@
 //    `Escape`、`:1603` 的 `KeyL`，Flutter 侧在 `core/shortcuts.dart` 的
 //    `CloseOverlayIntent` / `ToggleLyricsPageIntent`），以及顶栏那颗开合按钮本身。
 //    **手机上没有键盘**，所以窄屏（<900）另加一条手势：点整页任意空白处
-//    （歌名那条带、歌词周围的留白，以及控制条上那行工具周围的空白）即切回
+//    （歌名那条带、歌词周围的留白，以及控制条工具行周围的空白）即切回
 //    简约模式（[_maybeTapToRestore]）；点歌词行仍是定位播放、点频谱条不触发。
 //
 // 2. **状态行用 T16 的 `LyricsStatusLine`，位置从右栏脚注挪到左列顶部**。
@@ -59,8 +59,6 @@ import 'generated_cover_view.dart';
 import 'lyrics_status.dart';
 import 'lyrics_view.dart';
 import 'player_card.dart';
-import 'tool_buttons.dart';
-import 'tool_panel.dart';
 import 'wave_style_picker.dart';
 
 // -- 规格常量（逐字取自 app.css，不要顺手改） ------------------------------
@@ -228,31 +226,9 @@ class _LyricsPageState extends State<LyricsPage> {
               // （Web 的 `body.is-lyrics-page .lyrics-page__head { padding-right: 42px }`）。
               padding: EdgeInsets.only(right: desktop ? 0 : 42),
               child: Row(
-                // 富余空间全落在「左组」与下拉之间 —— 这就是 React 那道
-                // `margin-left: auto`（app.css 的 .wave-style）：按钮紧跟歌名，
-                // 下拉贴最右。
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // 左组：歌名块 + 三颗工具按钮（原版 `header.lyrics-page__head`
-                  // 就是 meta → ToolButtons → WaveStylePicker 三个孩子，没有返回按钮）。
-                  // 组内用 mainAxisSize.min —— 组不撑开，宽度由内容决定。
-                  // 窄屏（<900）：这一组连同右边的下拉一起下移到频谱条上方
-                  // （见 `transport.dart` 的 `_WaveRow`，对译 app.css 的
-                  // `.transport__lyric-row`），页头只剩歌名 —— 手机上一只手够不到顶端。
-                  Flexible(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(child: meta),
-                        if (desktop) ...[
-                          const SizedBox(width: _kHeadGap),
-                          // 「T」/毛玻璃/睡眠定时器：桌面沉浸模式里从控制条挪到这一格
-                          // （歌名右边、下拉左边），面板随之改向下弹。
-                          const ToolButtons(side: ToolPanelSide.below),
-                        ],
-                      ],
-                    ),
-                  ),
+                  Flexible(child: meta),
                   if (desktop) ...[
                     // M3 D.4：右上角是波形样式下拉（原版 App.tsx:1100 的
                     // WaveStylePicker）。面板用 Overlay 挂在更上层，不会被歌词页的

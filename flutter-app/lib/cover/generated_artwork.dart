@@ -53,9 +53,15 @@ class GeneratedArtworkCache extends ChangeNotifier {
   /// 同步查询：这张生成卡已经有文件了吗？没有就返回 null。
   ///
   /// 磁盘上已存在（上一轮启动画过的）会就地记进 [_ready]，第二次起不再碰盘。
-  String? pathFor({required String artist, required String title}) {
+  /// [hue] 非空时按指定色相出图（电台卡的品牌绿），曲目仍走歌手名哈希。
+  String? pathFor({
+    required String artist,
+    required String title,
+    int? hue,
+  }) {
     if (kIsWeb) return null;
-    final path = _pathForSpec(generatedCoverSpec(artist, title));
+    final spec = generatedCoverSpec(artist, title, hueOverride: hue);
+    final path = _pathForSpec(spec, hue);
     final ready = _ready[path];
     if (ready != null) return ready;
     try {
@@ -73,10 +79,14 @@ class GeneratedArtworkCache extends ChangeNotifier {
   ///
   /// 绝不抛：画不出来顶多是系统卡片继续用占位图标，界面与播放不受影响。
   /// 返回的 Future 只给测试用（生产是「发出去就不管」的补推前置动作）。
-  Future<void> prime({required String artist, required String title}) {
+  Future<void> prime({
+    required String artist,
+    required String title,
+    int? hue,
+  }) {
     if (kIsWeb) return Future<void>.value();
-    final spec = generatedCoverSpec(artist, title);
-    final path = _pathForSpec(spec);
+    final spec = generatedCoverSpec(artist, title, hueOverride: hue);
+    final path = _pathForSpec(spec, hue);
     if (_ready.containsKey(path)) return Future<void>.value();
     final inFlight = _inFlight[path];
     if (inFlight != null) return inFlight;
@@ -110,9 +120,11 @@ class GeneratedArtworkCache extends ChangeNotifier {
   }
 
   /// 文件名：派生量哈希 + 边长。同歌同曲恒等，重启不重画。
-  String _pathForSpec(GeneratedCoverSpec spec) {
+  /// 指定色相时把色相也带进哈希，否则同一歌手的两张不同色卡片会撞名。
+  String _pathForSpec(GeneratedCoverSpec spec, int? hue) {
     final hash = fnv1aHash(
-      '${spec.key}\u0001${spec.label}\u0001${spec.sub}\u0001$size',
+      '${spec.key}\u0001${spec.label}\u0001${spec.sub}\u0001$size'
+      '${hue == null ? '' : '\u0001hue$hue'}',
     );
     return '$directory/gen-$hash-$size.png';
   }

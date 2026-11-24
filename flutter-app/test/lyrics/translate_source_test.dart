@@ -115,6 +115,34 @@ void main() {
     expect(search.queryParameters['limit'], '20');
   });
 
+  test('繁体曲名/歌手先折到简体再搜（网易云同样不认繁简）', () async {
+    final client = FakeNetEase(
+      search: {
+        '周杰伦 完美主义': [
+          songJson(
+            id: 2,
+            name: '完美主义',
+            duration: 245000,
+            artists: const ['周杰伦'],
+          ),
+        ],
+      },
+      lyric: {
+        2: {
+          'lrc': {'lyric': ''},
+          'tlyric': {'lyric': '[00:29]如果說懷疑可以造句'},
+        },
+      },
+    );
+    final result = await sourceWith(client)
+        .fetch(title: '完美主義', artist: '周杰倫', duration: 244);
+    expect(result.status, 'ok');
+    final search = client.calls.firstWhere(
+      (u) => u.path.endsWith('/search/get'),
+    );
+    expect(search.queryParameters['s'], '周杰伦 完美主义');
+  });
+
   test('占位歌手（含大小写差异）不参与关键词', () async {
     // brief 原写只给 search、不给 lyric，那样只会拿到空 tlyric → not-found，
     // 「status 是 ok」这条断言在正确实现上必红。补上译文响应，其余一字不动。

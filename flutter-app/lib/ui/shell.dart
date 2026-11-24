@@ -189,10 +189,10 @@ class HomeLayout extends StatelessWidget {
                   children: [
                     // 窄屏的顶栏不再占一行：简约 / 沉浸两种模式都只有「电台 / 更多」
                     // 两颗图标，位置由下面 Stack 里那一条 `Positioned` 统一给 ——
-                    // 贴卡片（= 视口）右上角、右侧内缩 10px，纵向 = 安全区 + 16
-                    // （与电台页右上角那两颗同一条水平线；对译 app.css 小屏媒体块的
+                    // 贴卡片（= 视口）右上角、右侧内缩 10px，纵向 = 安全区 + 12
+                    // （三页同一口径：按钮上缘 12、图标中心 28；对译 app.css 小屏媒体块的
                     //  `body:not(.is-lyrics-page) .app__header,
-                    //   body.is-lyrics-page .app__header { top: 28px;
+                    //   body.is-lyrics-page .app__header { top: 12px;
                     //   right: 0; padding: 0 10px }`）。
                     // 从前沉浸模式的顶栏在流内（10 + 32 + 14 间距）：切模式时那颗 ⋯
                     // 会跟着上下跳一截，卡片也被推下去；现在两处都浮在卡上、同源落位。
@@ -254,14 +254,14 @@ class HomeLayout extends StatelessWidget {
                                 contentInsets: insets,
                               ),
                             ),
-                            // 顶栏贴视口右上角、右侧内侧 10px，纵向 = 安全区 + 16
-                            // （与电台页右上角那两颗同一条水平线；对译 app.css
-                            //  小屏媒体块的
+                            // 顶栏贴视口右上角、右侧内侧 10px，纵向 = 安全区 + 12
+                            // （三页同一口径：按钮上缘 12、图标中心 28，与电台 / 休眠
+                            //   两页右上角那几颗同一条水平线；对译 app.css 小屏媒体块的
                             //  `body:not(.is-lyrics-page) .app__header,
-                            //   body.is-lyrics-page .app__header { top: 28px;
+                            //   body.is-lyrics-page .app__header { top: 12px;
                             //   right: 0; padding: 0 10px }`）。
                             Positioned(
-                              top: insets.top + 16,
+                              top: insets.top + 12,
                               right: insets.right + 10,
                               child: header,
                             ),

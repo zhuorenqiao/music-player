@@ -1,26 +1,72 @@
 /**
  * lyrics-source.js —— 按曲目信息自动匹配歌词
  *
- * 数据源：LRCLIB（https://lrclib.net，免密钥、开源、返回标准 LRC）
+ * 2026-11-23 起是四源链路：**LRCLIB → 汽水 → 酷狗 → 网易云**。
+ * LRCLIB 有 CORS，先由客户端直连；线上静态站再通过 CloudBase 中转
+ * 访问汽水、酷狗（它们没有 CORS 头），中转没词时才继续直连网易云。
  *
  * 两级通道：
- * 1) 同源代理 `api/lyrics`（tools/serve.py 提供）——服务端拉取 + 磁盘缓存，
- *    能绕开浏览器侧的代理/CORS 问题，本地开发时最快；
- * 2) 直连 `https://lrclib.net/api/*`——静态部署（没有本地服务）时使用，
- *    该接口返回 `access-control-allow-origin: *`，浏览器可直接跨域。
+ * 1) 直连 LRCLIB：线上 / 静态部署的第一优先；本地开发由 Vite 中间件统一编排四源，
+ *    因此相对代理模式下不重复预检；
+ * 2) 代理 `api/lyrics`——线上指向 CloudBase 中转（只跑汽水、酷狗），本地开发
+ *    由 Vite 中间件实现；代理没词时再直连网易云。
+ *
+ * 缓存换到 v4 纪元（`light-music.lyrics-cache.v4`）：旧 v3 / v2 / v1 表仍读，但只当兜底 ——
+ * 命中后先问一遍新源，新源没词才拿旧结果。这样「LRCLIB 优先」对已经缓存过的歌也生效，
+ * 离线时又不会因为换源丢掉手里的歌词；旧的「未找到」缓存不再挡路。
  *
  * 结果（含「没找到」）都会写进 localStorage 缓存，重复听同一首歌不再联网。
  * 本模块不碰 DOM，也不持有播放器，只做「查询 + 归一化」。
  */
 
+import { toSimplified } from './chinese';
+import {
+  candidateKeyword,
+  looksSynced,
+  neteaseCandidates,
+  parseNetEaseSongs,
+  pickNetEaseSong,
+  stripLeadingCredits,
+} from './netease-match';
+
 /** 直连地址。 */
 const DIRECT_BASE = 'https://lrclib.net/api';
 
-/** 同源代理地址（由 tools/serve.py 实现，缺失时自动跳过）。 */
-const LOCAL_PROXY = 'api/lyrics';
+/** 网易云端点：搜索认歌 + 取词（与 server/music-api.ts 同源同路径）。 */
+const NETEASE_SEARCH = 'https://music.163.com/api/search/get';
+const NETEASE_LYRIC = 'https://music.163.com/api/song/lyric';
+
+/**
+ * 歌词查询代理地址。
+ *
+ * - 本地开发：走 Vite 中间件 `/api/lyrics`，同源、无 CORS；
+ * - 线上静态站：汽水/酷狗没有 CORS 头，必须走 CloudBase 中转（绝对地址）；
+ * - 测试/脚本：没有 `import.meta.env` 时保持相对地址，便于 mock。
+ *
+ * 需要临时切换时，可在页面加载前设 `window.__LIGHT_MUSIC_LYRICS_PROXY__`。
+ */
+const REMOTE_PROXY = 'https://caidan-1-d9glqugbu5be15778-1316655607.ap-shanghai.app.tcloudbase.com/api/lyrics';
+const LOCAL_PROXY = (
+  typeof window !== 'undefined' && typeof window.__LIGHT_MUSIC_LYRICS_PROXY__ === 'string'
+    ? window.__LIGHT_MUSIC_LYRICS_PROXY__
+    : (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LYRICS_PROXY_URL)
+) || (
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.PROD
+    ? REMOTE_PROXY
+    : 'api/lyrics'
+);
 
 /** localStorage 缓存键与容量。 */
-const CACHE_KEY = 'light-music.lyrics-cache.v1';
+const CACHE_KEY = 'light-music.lyrics-cache.v4';
+/**
+ * 换源前的老表：只读，只作兜底。v3 是四源时代（汽水 → 酷狗 → 网易云 → LRCLIB），
+ * v2 是网易云时代，v1 是 LRCLIB 时代，各留一份当作离线时的最后一手（v3 优先）。
+ */
+const LEGACY_CACHE_KEYS = [
+  'light-music.lyrics-cache.v3',
+  'light-music.lyrics-cache.v2',
+  'light-music.lyrics-cache.v1',
+];
 const MAX_CACHE_ENTRIES = 120;
 
 /** 缓存有效期：命中 30 天，未命中 3 天（避免坏结果长期占位）。 */
@@ -37,6 +83,8 @@ const TTL_MISS = 3 * 24 * 60 * 60 * 1000;
  */
 const TIMEOUT_PROXY = 60000;
 const TIMEOUT_DIRECT = 15000;
+/** 网易云单程 6s：它排在最后补位，不能把整次匹配的时间预算吃光。 */
+const TIMEOUT_NETEASE = 6000;
 
 /** 值得重试的 HTTP 状态码（429 限流 / 5xx 网关与服务端抖动）。 */
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -88,6 +136,17 @@ function sleep(ms) {
 }
 
 /**
+ * 标题末尾、不带括号的噪声标签：`飞机场的10:30伴奏`、`Catherine - 伴奏`、
+ * `Catherine_伴奏版`、`十年 完整版`……下载站与本地文件很常见。
+ *
+ * 只认**中文**标记，且要求剥完还剩内容（`伴奏` 本身不会被剥成空串）；
+ * `Live` / `Remix` 这类英文词不在这里裸剥 —— `Live Forever` 是真歌名，
+ * 只在括号里（`(Live)`）才当噪声。多轮剥是为了 `Catherine 伴奏 完整版`
+ * 这种叠加尾巴，最多三轮足够。
+ */
+const TITLE_TAIL_NOISE = /(?:[\s\-_·|/–—－]+)?(?:伴奏音乐|伴奏版|纯伴奏|消音伴奏|伴奏|纯音乐版|纯音乐|高音质|无损|完整版|超清|动态歌词|原唱|翻唱|官方版|正式版|试听版)$/i;
+
+/**
  * 去掉标题里的常见噪声（音质、官方版、伴奏等标记）。
  * @param {string} title 原始标题
  * @returns {string}
@@ -98,6 +157,17 @@ function cleanTitle(title) {
   value = value.replace(/^\s*[[(]?\d{1,3}[)\]]?\s*[.\-、_]\s*/, '');
   // 去掉括号/方括号里的噪声说明
   value = value.replace(/[（(【[][^）)】\]]*(?:official|mv|hd|hq|live|remix|伴奏|纯音乐|高音质|无损|完整版|超清|动态歌词|原唱|翻唱)[^）)】\]]*[）)】\]]/gi, '');
+  // 去掉尾部不带括号的噪声标签（可叠加，最多三轮）
+  for (let i = 0; i < 3; i += 1) {
+    const next = value
+      .replace(TITLE_TAIL_NOISE, '')
+      .replace(/[-_·|/–—－\s]+$/, '')
+      .trim();
+    if (next === value || next === '') {
+      break;
+    }
+    value = next;
+  }
   // 去掉尾部多余符号
   return value.replace(/\s{2,}/g, ' ').replace(/[-_\s]+$/, '').trim();
 }
@@ -168,17 +238,57 @@ export function normalizeQuery(track) {
   return { trackName, artistName: artist, duration, key };
 }
 
+/**
+ * 把查询参数折到简体。
+ *
+ * LRCLIB 的 `/get` 是「曲名 + 歌手」逐字匹配：标签写成繁体（周杰倫 / 完美主義）时，
+ * 上游那条简体记录一条都对不上（实测 get 404、search 0 条，见 2026-11-21 的
+ * 《完美主义》案例）。`/search` 同样按词面切词，也不认繁简。
+ *
+ * 所以查询前统一折到简体，缓存键也跟着折 —— 键变了，之前按繁体查出来的
+ * 「未找到」不会再挡在缓存里。只折查询参数，不动歌词正文（正文的繁→简由
+ * 显示层的 `toSimplified` 负责，缓存里保持原文）。
+ *
+ * 返回对象里额外带上原字形（`rawTrackName` / `rawArtistName`），供「简体也没命中」
+ * 时补一次原字形搜索：只有繁体条目的冷门歌不至于因此回归。
+ * @param {{trackName: string, artistName: string, duration: number, key: string}} query
+ * @returns {{trackName: string, artistName: string, duration: number, key: string, rawTrackName: string, rawArtistName: string}}
+ */
+export function foldQuery(query) {
+  const trackName = toSimplified(query.trackName);
+  const artistName = toSimplified(query.artistName);
+  return {
+    ...query,
+    trackName,
+    artistName,
+    key: `${trackName}|${artistName}|${query.duration}`.toLowerCase(),
+    rawTrackName: query.trackName,
+    rawArtistName: query.artistName,
+  };
+}
+
+/**
+ * 折叠是否真的改动了查询（决定要不要补原字形回退）。
+ * @param {{trackName: string, artistName: string, rawTrackName?: string, rawArtistName?: string}} query
+ * @returns {boolean}
+ */
+function hasScriptVariant(query) {
+  return Boolean(query.rawTrackName || query.rawArtistName)
+    && (query.rawTrackName !== query.trackName || query.rawArtistName !== query.artistName);
+}
+
 // ---------------------------------------------------------------------------
 // localStorage 缓存
 // ---------------------------------------------------------------------------
 
 /**
  * 读缓存表（损坏时返回空表）。
+ * @param {string} [key] localStorage 键，默认当前纪元
  * @returns {Record<string, {s?: string, p?: string, miss?: boolean, at: number}>}
  */
-function readCache() {
+function readCache(key = CACHE_KEY) {
   try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) {
       return {};
     }
@@ -238,6 +348,31 @@ function readCached(key) {
     plainLyrics: typeof entry.p === 'string' ? entry.p : '',
     source: entry.src || 'LRCLIB',
   };
+}
+
+/**
+ * 查旧纪元缓存（v3 → v2 → v1）：只作兜底，而且**不返回「未找到」** ——
+ * 那是换源前的负结论，会挡住新源翻案。
+ * @param {string} key 查询键
+ * @returns {{status: string, syncedLyrics?: string, plainLyrics?: string, source?: string}|null}
+ */
+function readLegacyCached(key) {
+  for (const cacheKey of LEGACY_CACHE_KEYS) {
+    const entry = readCache(cacheKey)[key];
+    if (!entry || entry.miss || typeof entry.at !== 'number') {
+      continue;
+    }
+    if (Date.now() - entry.at > TTL_HIT) {
+      continue;
+    }
+    return {
+      status: 'ok',
+      syncedLyrics: typeof entry.s === 'string' ? entry.s : '',
+      plainLyrics: typeof entry.p === 'string' ? entry.p : '',
+      source: entry.src || 'LRCLIB',
+    };
+  }
+  return null;
 }
 
 /**
@@ -412,21 +547,21 @@ function pickBest(list, query) {
   if (!Array.isArray(list) || list.length === 0) {
     return null;
   }
-  const wantTitle = query.trackName.toLowerCase();
-  const wantArtist = query.artistName.toLowerCase();
+  const wantTitle = toSimplified(query.trackName).toLowerCase();
+  const wantArtist = toSimplified(query.artistName).toLowerCase();
 
   const scored = list.map((item) => {
     let score = 0;
     if (typeof item.syncedLyrics === 'string' && item.syncedLyrics.trim()) {
       score += 50;
     }
-    const name = String(item.trackName ?? item.name ?? '').toLowerCase();
+    const name = toSimplified(String(item.trackName ?? item.name ?? '')).toLowerCase();
     if (name === wantTitle) {
       score += 30;
     } else if (name.includes(wantTitle) || wantTitle.includes(name)) {
       score += 12;
     }
-    const artist = String(item.artistName ?? '').toLowerCase();
+    const artist = toSimplified(String(item.artistName ?? '')).toLowerCase();
     if (wantArtist && artist === wantArtist) {
       score += 25;
     } else if (wantArtist && artist.includes(wantArtist)) {
@@ -450,13 +585,207 @@ function pickBest(list, query) {
 }
 
 /**
- * 先走同源代理，再走直连（带重试）；失败以结构化结果返回。
+ * 直连网易云：认歌（与译文链路同一套候选 / 门槛）→ 取 `lrc.lyric` → 归一。
+ *
+ * 只有「没有同源代理」的静态部署才会走到这里：`music.163.com` 不带 CORS 头，
+ * 浏览器里通常第一条请求就快速失败。整家连不上时立刻收手，
+ * 不再拿三个候选挨个撞墙。它是四源里的最后一手，前面已经试过 LRCLIB、汽水、酷狗。
+ * @param {{trackName: string, artistName: string, duration: number}} query 查询（已折简体）
+ * @param {AbortSignal} [signal] 取消信号
+ * @returns {Promise<{status: string, syncedLyrics: string, plainLyrics: string, source: string}|null>}
+ */
+async function requestNetEaseLyrics(query, signal) {
+  const candidates = neteaseCandidates(query.trackName, query.artistName);
+  if (query.artistName) {
+    candidates.push({ name: query.trackName, artist: '', strict: false });
+  }
+  const tried = new Set();
+  for (const candidate of candidates) {
+    const keyword = candidateKeyword(candidate);
+    if (!keyword) {
+      continue;
+    }
+    try {
+      const params = new URLSearchParams({ s: keyword, type: '1', limit: '20' });
+      const found = await requestJson(`${NETEASE_SEARCH}?${params.toString()}`, {
+        timeout: TIMEOUT_NETEASE,
+        signal,
+      });
+      if (!found.ok) {
+        // 连不上 / 超时是「整家」的问题，换候选只会把同样的墙再撞一遍。
+        if (found.network || found.timeout) {
+          return null;
+        }
+        continue;
+      }
+      const songs = parseNetEaseSongs(found.data);
+      const song = pickNetEaseSong(songs, {
+        trackName: candidate.name,
+        artistName: candidate.artist,
+        duration: query.duration,
+        strict: candidate.strict,
+      });
+      if (!song || tried.has(song.id)) {
+        continue;
+      }
+      tried.add(song.id);
+      const lyricParams = new URLSearchParams({ id: String(song.id), lv: '1' });
+      const lyric = await requestJson(`${NETEASE_LYRIC}?${lyricParams.toString()}`, {
+        timeout: TIMEOUT_NETEASE,
+        signal,
+      });
+      if (!lyric.ok || !lyric.data || lyric.data.nolyric || lyric.data.uncollected) {
+        continue;
+      }
+      const text = typeof lyric.data?.lrc?.lyric === 'string' ? lyric.data.lrc.lyric : '';
+      if (!text.trim()) {
+        continue;
+      }
+      // 网易云开头常带一串带时间轴的制作署名，解析器只清前 4 行，这里先剥干净。
+      const body = stripLeadingCredits(text);
+      if (!body.trim()) {
+        continue;
+      }
+      const synced = looksSynced(body);
+      return {
+        status: 'ok',
+        syncedLyrics: synced ? body : '',
+        plainLyrics: synced ? '' : body,
+        source: '网易云音乐',
+      };
+    } catch (error) {
+      if (error?.name === 'AbortError' && signal?.aborted) {
+        throw error;
+      }
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * 直连 LRCLIB：带时长的精确 get、不带时长的 get、search 三路并行，全部等完再裁决。
+ *
+ * 线上 / 静态部署的第一优先就是它；本地相对代理模式下由服务端统一跑四源，
+ * 客户端不再重复预检。三路并行是为了不让「LRCLIB 优先」变成串行等待：
+ * 最坏情况只等最慢的一路，而不是三路超时相加。首次预检不重试（attempts: 1），
+ * 一次网络抖动就交给汽水 / 酷狗补位，别把整次匹配拖到几十秒。
+ * 裁决与 music-api.ts 一致：synced get → synced search → 任意 get → get 失败
+ * → 任意 search → 其它失败 → not-found。
+ * @param {{trackName: string, artistName: string, duration: number}} query 查询
+ * @param {URLSearchParams} params 带时长的查询参数
+ * @param {URLSearchParams} baseParams 不带时长的查询参数
+ * @param {AbortSignal} [signal] 取消信号
+ * @returns {Promise<{status: string, syncedLyrics?: string, plainLyrics?: string, source?: string, message?: string}>}
+ */
+async function requestLrclibDirect(query, params, baseParams, signal) {
+  const jobs = [];
+  const runGet = async (url) => {
+    const response = await requestJsonRetry(url, {
+      timeout: TIMEOUT_DIRECT,
+      signal,
+      attempts: 1,
+    });
+    if (response.ok) {
+      const result = toResult(response.data);
+      if (!result.syncedLyrics.trim() && !result.plainLyrics.trim()) {
+        return { status: 'not-found' };
+      }
+      return result;
+    }
+    if (response.status === 404) {
+      return { status: 'not-found' };
+    }
+    throw new Error(describeFailure(response));
+  };
+
+  if (query.duration > 0) {
+    jobs.push({ kind: 'get', run: () => runGet(`${DIRECT_BASE}/get?${params.toString()}`) });
+  }
+  jobs.push({ kind: 'get', run: () => runGet(`${DIRECT_BASE}/get?${baseParams.toString()}`) });
+  jobs.push({
+    kind: 'search',
+    run: async () => {
+      const response = await requestJsonRetry(`${DIRECT_BASE}/search?${baseParams.toString()}`, {
+        timeout: TIMEOUT_DIRECT,
+        signal,
+        attempts: 1,
+      });
+      if (!response.ok) {
+        if (response.status === 404) {
+          return { status: 'not-found' };
+        }
+        throw new Error(describeFailure(response));
+      }
+      return best ? toResult(best) : { status: 'not-found' };
+    },
+  });
+
+  const settled = await Promise.allSettled(jobs.map((job) => job.run()));
+  const getHits = [];
+  const searchHits = [];
+  const getErrors = [];
+  const errors = [];
+
+  settled.forEach((entry, index) => {
+    const kind = jobs[index].kind;
+    if (entry.status === 'fulfilled') {
+      if (entry.value.status !== 'ok') {
+        return;
+      }
+      if (kind === 'get') {
+        getHits.push(entry.value);
+      } else {
+        searchHits.push(entry.value);
+      }
+      return;
+    }
+    if (signal?.aborted) {
+      throw entry.reason;
+    }
+    const failure = {
+      status: 'error',
+      message: entry.reason?.message || '歌词匹配失败，请稍后点「重试」',
+    };
+    errors.push(failure);
+    if (kind === 'get') {
+      getErrors.push(failure);
+    }
+  });
+
+  const hasSynced = (result) => Boolean(result && result.syncedLyrics && result.syncedLyrics.trim());
+  const syncedGet = getHits.find(hasSynced);
+  if (syncedGet) {
+    return syncedGet;
+  }
+  const syncedSearch = searchHits.find(hasSynced);
+  if (syncedSearch) {
+    return syncedSearch;
+  }
+  if (getHits.length > 0) {
+    return getHits[0];
+  }
+  if (getErrors.length > 0) {
+    return getErrors[0];
+  }
+  if (searchHits.length > 0) {
+    return searchHits[0];
+  }
+  if (errors.length > 0) {
+    return errors[0];
+  }
+  return { status: 'not-found' };
+}
+
+/**
+ * 先走 LRCLIB（仅线上 / 静态代理），再走同源代理，再走直连网易云。
+ * query 必须已折到简体（matchLyrics 用 foldQuery 折过）。
  * @param {{trackName: string, artistName: string, duration: number}} query 查询
  * @param {AbortSignal} [signal] 取消信号
  * @param {{refresh?: boolean}} [options] refresh=true 时让同源代理绕过自己的缓存
  * @returns {Promise<{status: string, syncedLyrics?: string, plainLyrics?: string, source?: string, message?: string}>}
  */
-async function requestFromNetwork(query, signal, { refresh = false } = {}) {
+async function requestFoldedNetwork(query, signal, { refresh = false } = {}) {
   const params = new URLSearchParams();
   params.set('track_name', query.trackName);
   if (query.artistName) {
@@ -477,7 +806,22 @@ async function requestFromNetwork(query, signal, { refresh = false } = {}) {
     baseParams.set('artist_name', query.artistName);
   }
 
-  // 1) 同源代理（tools/serve.py）。服务端自己会重试并缓存，这里不重试。
+  /**
+   * 绝对地址 = 线上 / 静态部署：中转只跑汽水、酷狗，LRCLIB 必须由客户端先直连。
+   * 相对地址 = 本地 Vite 中间件，服务端已经按「LRCLIB → 汽水 → 酷狗 → 网易云」
+   * 完整编排过四源，客户端不再重复预检。
+   */
+  const hasRemoteProxy = /^https?:\/\//i.test(LOCAL_PROXY);
+  let lrclibFirst = null;
+  if (hasRemoteProxy) {
+    lrclibFirst = await requestLrclibDirect(query, params, baseParams, signal);
+    if (lrclibFirst.status === 'ok') {
+      clearRateLimit();
+      return lrclibFirst;
+    }
+  }
+
+  // 1) 代理（线上是 CloudBase 中转，本地开发是 Vite 中间件）。服务端会重试并缓存，这里不重试。
   try {
     const proxied = await requestJson(`${LOCAL_PROXY}?${proxyParams.toString()}`, {
       timeout: TIMEOUT_PROXY,
@@ -490,21 +834,33 @@ async function requestFromNetwork(query, signal, { refresh = false } = {}) {
         return { ...toResult(payload), source: payload.source || 'LRCLIB' };
       }
       if (payload.status === 'not-found') {
+        // 线上中转只负责汽水、酷狗两家（它们没有 CORS 头）。这两家没词时
+        // 会带 fallback 标记，客户端继续直连网易云；不能在这里截断。
+        if (payload.fallback !== true) {
+          return { status: 'not-found' };
+        }
+      }
+      // 线上中转只负责汽水、酷狗两家（它们没有 CORS 头）。这两家没词时
+      // 会带 fallback 标记，客户端继续直连网易云；不能在这里截断。
+      const canFallback = payload.status === 'not-found' && payload.fallback === true;
+      if (payload.status === 'not-found' && !canFallback) {
         return { status: 'not-found' };
       }
-      // 代理明确报告上游失败：直接把原因交给界面，不再走浏览器直连（那条路通常更慢）。
-      // reason 要一路带到界面：是限流、超时还是连不上，用户的处理方式完全不同。
-      if (payload.reason === 'rate-limit') {
-        noteRateLimit(payload.retryAfter);
+      if (!canFallback) {
+        // 代理明确报告上游失败：直接把原因交给界面，不再走浏览器直连（那条路通常更慢）。
+        // reason 要一路带到界面：是限流、超时还是连不上，用户的处理方式完全不同。
+        if (payload.reason === 'rate-limit') {
+          noteRateLimit(payload.retryAfter);
+        }
+        return {
+          status: 'error',
+          reason: payload.reason || 'upstream',
+          rateLimited: payload.reason === 'rate-limit',
+          message: payload.message || '歌词服务暂时不可用，请稍后重试',
+        };
       }
-      return {
-        status: 'error',
-        reason: payload.reason || 'upstream',
-        rateLimited: payload.reason === 'rate-limit',
-        message: payload.message || '歌词服务暂时不可用，请稍后重试',
-      };
     }
-    // 404 / 非 JSON：说明没有这个代理端点（纯静态部署），继续走直连
+    // 404 / 非 JSON：说明没有这个代理端点，继续走直连
   } catch (error) {
     if (error?.name === 'AbortError' && signal?.aborted) {
       throw error;
@@ -512,65 +868,76 @@ async function requestFromNetwork(query, signal, { refresh = false } = {}) {
     // 代理不可用，静默降级到直连
   }
 
-  // 2) 直连公共 API：带时长的精确匹配（可重试）
-  /** get 命中可能只有纯文本；先留着，等搜索里的带时间轴版本把它们比下去 */
-  let plainFallback = null;
-  const preferSynced = (result) => Boolean(result && result.syncedLyrics && result.syncedLyrics.trim());
+  // 2) 直连网易云（代理未命中 / 不可用时才走到这里；CORS 不通时快速失败）
+  const netEase = await requestNetEaseLyrics(query, signal);
+  if (netEase) {
+    clearRateLimit();
+    return netEase;
+  }
 
-  if (query.duration > 0) {
-    const exact = await requestJsonRetry(`${DIRECT_BASE}/get?${params.toString()}`, {
+  /**
+   * 线上 / 静态部署：LRCLIB 已经在本函数最前面直连过，这里不再重复请求；
+   * 若它当时是明确失败（限流 / 超时），把那条原因带回去，别改写成「未找到」。
+   */
+  if (hasRemoteProxy) {
+    if (lrclibFirst?.status === 'error') {
+      return lrclibFirst;
+    }
+    return { status: 'not-found' };
+  }
+
+  // 3) 本地相对代理：服务端没词 / 代理不可用时，再由客户端直连 LRCLIB
+  return requestLrclibDirect(query, params, baseParams, signal);
+}
+
+/**
+ * 简体那几路都没命中时，用原字形再搜一次。
+ *
+ * 只补一次 search（不回补 get）：LRCLIB 的条目大多有简繁两份，折叠后一般直接命中；
+ * 只有「上游只收了繁体条目」的冷门歌会走到这里，一次搜索足以确认。
+ * @param {{trackName: string, artistName: string, rawTrackName: string, rawArtistName: string, duration: number}} query 折叠后的查询（带原字形）
+ * @param {AbortSignal} [signal] 取消信号
+ * @returns {Promise<object|null>} 命中结果；没命中 / 请求失败都返回 null
+ */
+async function searchRawScript(query, signal) {
+  const loose = [query.rawTrackName, query.rawArtistName].filter(Boolean).join(' ');
+  if (!loose) {
+    return null;
+  }
+  try {
+    const params = new URLSearchParams({ q: loose });
+    const found = await requestJsonRetry(`${DIRECT_BASE}/search?${params.toString()}`, {
       timeout: TIMEOUT_DIRECT,
       signal,
-      attempts: 2,
+      attempts: 1,
     });
-    if (exact.ok) {
-      const result = toResult(exact.data);
-      if (preferSynced(result)) {
-        return result;
-      }
-      plainFallback = result;
-    } else if (exact.status !== 404) {
-      return { status: 'error', message: describeFailure(exact) };
+    if (!found.ok) {
+      return null;
     }
-  }
-
-  // 3) 不带时长的 get 也能命中，体积小得多，比搜索快一个数量级
-  const loose = await requestJsonRetry(`${DIRECT_BASE}/get?${baseParams.toString()}`, {
-    timeout: TIMEOUT_DIRECT,
-    signal,
-    attempts: 2,
-  });
-  if (loose.ok) {
-    const result = toResult(loose.data);
-    if (preferSynced(result)) {
-      return result;
-    }
-    plainFallback = plainFallback ?? result;
-  } else if (loose.status !== 404) {
-    return { status: 'error', message: describeFailure(loose) };
-  }
-
-  // 4) 没有带时间轴的版本时，用搜索接口再找一次（同步歌词常只出现在搜索结果里）
-  const found = await requestJsonRetry(`${DIRECT_BASE}/search?${baseParams.toString()}`, {
-    timeout: TIMEOUT_DIRECT,
-    signal,
-    attempts: 1,
-  });
-  if (found.ok) {
     const best = pickBest(found.data, query);
-    if (best) {
-      const result = toResult(best);
-      if (preferSynced(result) || !plainFallback) {
-        return result;
-      }
-      return plainFallback;
+    return best ? toResult(best) : null;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw error;
     }
-    return plainFallback ?? { status: 'not-found' };
+    // 回退那一路失败不改写结论：主路径已经判定 not-found，这只是一次补救
+    return null;
   }
-  if (found.status === 404) {
-    return plainFallback ?? { status: 'not-found' };
+}
+
+/**
+ * 先查简体，未命中且原字形不同再补一次原字形搜索。
+ * @param {{trackName: string, artistName: string, duration: number, rawTrackName: string, rawArtistName: string}} query 折叠后的查询
+ * @param {AbortSignal} [signal] 取消信号
+ * @param {{refresh?: boolean}} [options] refresh=true 时让同源代理绕过自己的缓存
+ * @returns {Promise<object>} 与 requestFoldedNetwork 同构
+ */
+async function requestFromNetwork(query, signal, options = {}) {
+  const primary = await requestFoldedNetwork(query, signal, options);
+  if (primary.status !== 'not-found' || !hasScriptVariant(query)) {
+    return primary;
   }
-  return plainFallback ?? { status: 'error', message: describeFailure(found) };
+  return await searchRawScript(query, signal) ?? primary;
 }
 
 /**
@@ -588,16 +955,21 @@ export function isOnline() {
  * @returns {Promise<{status: 'ok'|'not-found'|'error'|'aborted'|'empty-query', syncedLyrics?: string, plainLyrics?: string, source?: string, message?: string}>}
  */
 export async function matchLyrics(track, { signal, useCache = true } = {}) {
-  const query = normalizeQuery(track);
-  if (!query.trackName) {
+  const rawQuery = normalizeQuery(track);
+  if (!rawQuery.trackName) {
     return { status: 'empty-query', message: '曲目信息不足，无法匹配歌词' };
   }
+  // 曲名/歌手先折到简体再查（繁体标签对不上 LRCLIB 的简体记录，见 foldQuery）
+  const query = foldQuery(rawQuery);
 
+  // v4 命中（含「未找到」）直接返回；旧纪元的命中只当兜底，先让新源说话。
+  let legacy = null;
   if (useCache) {
     const cached = readCached(query.key);
     if (cached) {
       return cached;
     }
+    legacy = readLegacyCached(query.key);
   }
 
   if (!isOnline()) {
@@ -611,6 +983,16 @@ export async function matchLyrics(track, { signal, useCache = true } = {}) {
 
   try {
     const result = await requestFromNetwork(query, signal, { refresh: !useCache });
+    if (result.status === 'ok') {
+      writeCached(query.key, result);
+      return result;
+    }
+    // 所有源都没词：旧纪元的词总比没有强，顺手写进 v4，
+    // 免得每次播放都为同一首歌再问一遍上游。
+    if (result.status === 'not-found' && legacy) {
+      writeCached(query.key, legacy);
+      return legacy;
+    }
     writeCached(query.key, result);
     return result;
   } catch (error) {
@@ -623,12 +1005,61 @@ export async function matchLyrics(track, { signal, useCache = true } = {}) {
 }
 
 /**
+ * 结果 source → 持久化的来源 id（`qishui` / `kugou` / `netease` / `lrclib` / 空串）。
+ * 缓存里的 source 是给人看的字面量，落进 Track 的是稳定 id。
+ * @param {string} [source] 匹配结果的 source
+ * @returns {'qishui'|'kugou'|'netease'|'lrclib'|''}
+ */
+export function lyricsOriginOf(source) {
+  const text = String(source ?? '');
+  if (text.includes('汽水')) {
+    return 'qishui';
+  }
+  if (text.includes('酷狗')) {
+    return 'kugou';
+  }
+  if (text.includes('网易云')) {
+    return 'netease';
+  }
+  if (text.includes('LRCLIB')) {
+    return 'lrclib';
+  }
+  return '';
+}
+
+/**
+ * 来源 id → 状态行里的名称。
+ * @param {string} [origin] Track.lyricsOrigin
+ * @returns {string}
+ */
+export function lyricsOriginLabel(origin) {
+  if (origin === 'qishui') {
+    return '汽水音乐';
+  }
+  if (origin === 'kugou') {
+    return '酷狗音乐';
+  }
+  if (origin === 'netease') {
+    return '网易云音乐';
+  }
+  if (origin === 'lrclib') {
+    return 'LRCLIB线上库';
+  }
+  // 老档案没有来源字段：只敢说「线上歌词库」，不冒充某一家。
+  return '线上歌词库';
+}
+
+/**
  * 清空歌词缓存（调试 / 设置里用）。
  * @returns {void}
  */
 export function clearLyricsCache() {
   try {
     window.localStorage.removeItem(CACHE_KEY);
+    // 换源前的旧表也清掉，否则「强制刷新」还会从旧表里兜回老词。
+    for (const legacyKey of LEGACY_CACHE_KEYS) {
+      window.localStorage.removeItem(legacyKey);
+    }
   } catch (error) {
     console.error('[lyrics-source] 清空歌词缓存失败：', error);
   }

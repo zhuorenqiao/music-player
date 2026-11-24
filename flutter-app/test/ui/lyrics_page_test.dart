@@ -41,6 +41,12 @@ class _Fetcher implements TranslationFetcher {
   );
 }
 
+class _PlainMatcher implements LyricsMatcher {
+  @override
+  Future<LyricsMatch> match(LyricsQuery query, {CancelToken? cancel, bool useCache = true}) async =>
+      const LyricsMatch(status: 'ok', synced: '', plain: '第一句\n第二句');
+}
+
 class _NotFoundMatcher implements LyricsMatcher {
   @override
   Future<LyricsMatch> match(LyricsQuery query, {CancelToken? cancel, bool useCache = true}) async =>
@@ -87,9 +93,9 @@ Widget harness({
   ),
 );
 
-PlayerState makePlayer() {
+PlayerState makePlayer({FakeAudioDriver? driver}) {
   final transport = TransportController(
-    player: AudioPlayer(FakeAudioDriver()),
+    player: AudioPlayer(driver ?? FakeAudioDriver()),
     recent: const _NoRecent(),
     toasts: const _NoToasts(),
     playlist: Playlist.fromTracks(const <Track>[]),
@@ -111,6 +117,7 @@ void main() {
   late LyricsState lyrics;
   late BilingualState bilingual;
   late PlayerState player;
+  late FakeAudioDriver driver;
 
   /// 状态机注入一个**永不到点**的延时：T13 的慢提示 / 自动重试都是
   /// `Future.delayed`，在 widget 测试的 fake-async 里会留下一个 pending Timer，
@@ -125,7 +132,8 @@ void main() {
 
   setUp(() {
     useLyrics(_Matcher());
-    player = makePlayer();
+    driver = FakeAudioDriver();
+    player = makePlayer(driver: driver);
   });
 
   tearDown(() {
@@ -275,16 +283,48 @@ void main() {
 
     expect(find.byKey(const Key('lyrics-tap-to-simple')), findsOneWidget);
 
-    // 点歌词行：里层那颗「定位播放」的识别器先入先赢，页面不退出
-    await tester.tap(find.text('Hello'));
+    driver.emitDuration(60);
+    await tester.pump();
+    await tester.tap(find.text('Darkness'));
     await tester.pumpAndSettle();
+    expect(driver.calls, contains('seek:5.0'));
     expect(page.isOpen, isTrue, reason: '点歌词文字仍是定位，不该切回简约模式');
+    await tester.pump(const Duration(seconds: 1));
 
     // 点正文底部留白（最后一行歌词之下）：切回简约模式
     final zone = tester.getRect(find.byKey(const Key('lyrics-tap-to-simple')));
     await tester.tapAt(Offset(zone.left + 4, zone.bottom - 4));
     await tester.pumpAndSettle();
     expect(page.isOpen, isFalse, reason: '点空白应切回简约模式');
+  });
+
+  testWidgets('小屏：点无时间轴的歌词不退出，只有点空白才切回简约模式', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(430, 900);
+    useLyrics(_PlainMatcher());
+    lyrics.attach(Track(
+      id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true,
+    ));
+    await bilingual.settle();
+    final page = LyricsPageController()..open();
+    addTearDown(page.dispose);
+
+    await tester.pumpWidget(harness(
+      lyrics: lyrics, bilingual: bilingual, player: player, page: page,
+      child: const LyricsPage(),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('第一句'));
+    await tester.pumpAndSettle();
+    expect(page.isOpen, isTrue);
+    expect(player.position.value, 0);
+
+    final zone = tester.getRect(find.byKey(const Key('lyrics-tap-to-simple')));
+    await tester.tapAt(Offset(zone.left + 4, zone.bottom - 4));
+    await tester.pumpAndSettle();
+    expect(page.isOpen, isFalse);
   });
 
   testWidgets('小屏：点歌名那条带（页头）也能切回简约模式', (tester) async {
@@ -345,7 +385,7 @@ void main() {
     expect(find.byType(WaveStylePicker), findsNothing);
   });
 
-  testWidgets('桌面（≥900）页头仍带那三颗按钮与波形下拉', (tester) async {
+  testWidgets('桌面页头只留波形下拉，三颗按钮下移到控制条', (tester) async {
     useDesktopViewport(tester);
     lyrics.attach(Track(id: 't', src: '/m/t.flac', title: 'A', artist: 'B', duration: 60, isLocal: true));
     await bilingual.settle();
@@ -358,7 +398,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.byType(ToolButtons), findsOneWidget);
+    expect(find.byType(ToolButtons), findsNothing);
     expect(find.byType(WaveStylePicker), findsOneWidget);
   });
 }

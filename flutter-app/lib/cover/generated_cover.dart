@@ -144,10 +144,18 @@ class GeneratedCoverSpec {
 }
 
 /// 生成派生结构（generated-cover.js:87-113）。
-GeneratedCoverSpec generatedCoverSpec(String artist, String title) {
+///
+/// [hueOverride] 只给电台卡的封面色相用：电台没有「歌手名」可哈希，
+/// 又必须和 App 内的绿卡同族，于是由调用方指定 0~360 的色相；
+/// 曲目封面不传，仍按歌手名哈希取色，与 React 端逐位一致。
+GeneratedCoverSpec generatedCoverSpec(
+  String artist,
+  String title, {
+  int? hueOverride,
+}) {
   final key = normalizeArtistForCover(artist);
   final seed = fnv1aHash(key.isEmpty ? 'unknown' : key);
-  final hue = seed % 360;
+  final hue = ((hueOverride ?? (seed % 360)) % 360 + 360) % 360;
   final hue2 = (hue + 32 + seed % 26) % 360;
   final rotation = seed % 4;
   final initials = initialsOfArtist(artist);

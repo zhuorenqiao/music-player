@@ -5,7 +5,7 @@
  * 所以前端那几个图源模块（lyrics-source / cover-source / artist-image）可以原样复用；
  * `/api/translate` 是后加的，serve.py 里没有对应实现：
  *
- *   GET /api/lyrics?track_name&artist_name&duration   → LRCLIB
+ *   GET /api/lyrics?track_name&artist_name&duration   → LRCLIB → 汽水 → 酷狗 → 网易云
  *   GET /api/translate?track_name&artist_name&duration → 网易云中文译文库（人工翻译）
  *   GET /api/cover?title&artist&duration              → iTunes Search + 图片落盘
  *   GET /api/cover/img?id=<40hex>                     → 已缓存的封面字节
@@ -24,12 +24,27 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ViteDevServer } from 'vite';
 import type { ServerResponse } from 'node:http';
+import { toSimplified } from '../lib/chinese';
+import {
+  candidateKeyword,
+  looksSynced,
+  neteaseCandidates,
+  parseNetEaseSongs,
+  pickNetEaseSong,
+  stripLeadingCredits,
+  type NetEaseSong,
+} from '../lib/netease-match';
+import { fetchKugouLyrics, fetchQishuiLyrics } from './lyrics-providers';
 
 // -- 常量（与 serve.py 同源同值）---------------------------------------------
 
 /** 缓存根目录；想用绝对路径就设环境变量 MUSIC_CACHE_ROOT。 */
 const CACHE_ROOT = resolve(process.env.MUSIC_CACHE_ROOT ?? '.cache');
-const LYRICS_DIR = join(CACHE_ROOT, 'lyrics');
+/**
+ * 2026-11-23 起 LRCLIB 是第一优先（链路：LRCLIB → 汽水 → 酷狗 → 网易云），
+ * 换目录 = 换缓存纪元，旧 lyrics-v3/v2/v1 原样留在原地当孤儿（不再读、不再写）。
+ */
+const LYRICS_DIR = join(CACHE_ROOT, 'lyrics-v4');
 const TRANSLATE_DIR = join(CACHE_ROOT, 'translate');
 const COVER_META_DIR = join(CACHE_ROOT, 'covers', 'meta');
 const COVER_IMG_DIR = join(CACHE_ROOT, 'covers', 'img');
@@ -254,8 +269,9 @@ function pickBestLyrics(items: unknown, trackName: string, artistName: string, d
   if (!Array.isArray(items) || items.length === 0) {
     return null;
   }
-  const wantTitle = trackName.toLowerCase();
-  const wantArtist = artistName.toLowerCase();
+  // 曲名/歌手折到简体再比：上游候选可能写成繁体，逐字比会白丢分
+  const wantTitle = toSimplified(trackName).toLowerCase();
+  const wantArtist = toSimplified(artistName).toLowerCase();
   const wantDuration = Number(duration) > 0 ? Number(duration) : 0;
 
   let best: LyricsRecord | null = null;
@@ -264,10 +280,10 @@ function pickBestLyrics(items: unknown, trackName: string, artistName: string, d
     const item = raw as LyricsRecord;
     let score = 0;
     if ((item.syncedLyrics ?? '').trim()) score += 50;
-    const name = (item.trackName ?? item.name ?? '').toLowerCase();
+    const name = toSimplified(item.trackName ?? item.name ?? '').toLowerCase();
     if (name && name === wantTitle) score += 30;
     else if (name && (name.includes(wantTitle) || wantTitle.includes(name))) score += 12;
-    const artist = (item.artistName ?? '').toLowerCase();
+    const artist = toSimplified(item.artistName ?? '').toLowerCase();
     if (wantArtist && artist === wantArtist) score += 25;
     else if (wantArtist && artist.includes(wantArtist)) score += 10;
     const itemDuration = Number(item.duration);
@@ -299,7 +315,68 @@ function lyricsPairs(trackName: string, artistName: string): Array<[string, stri
   return pairs;
 }
 
-async function fetchLyrics(trackName: string, artistName: string, duration: string): Promise<LyricsResult> {
+/**
+ * 查询参数的原字形（折叠前）——只用于「简体那几路全没命中」时补一次原字形搜索。
+ */
+interface RawQuery {
+  trackName: string;
+  artistName: string;
+}
+
+/**
+ * 歌词主链（2026-11-23）：LRCLIB → 汽水 → 酷狗 → 网易云。
+ *
+ * LRCLIB 先跑完整的多路 get / search；它没词或上游失败时才静默落到下一家。
+ * 后三家同样只当「补位」：没词、认不到、上游失败都继续往下，不能把结果改写成网络错误。
+ * 如果 LRCLIB 是**失败**（不是 not-found）且三家补位也没词，最终把那条例外的
+ * 错误抛出去 —— 限流 / 超时不该被说成「未找到」。
+ */
+async function fetchLyrics(trackName: string, artistName: string, duration: string, raw?: RawQuery): Promise<LyricsResult> {
+  const seconds = Number(duration) || 0;
+
+  let lrclibFailure: UpstreamError | null = null;
+  try {
+    const lrclib = await fetchLrclibLyrics(trackName, artistName, duration, raw);
+    if (lrclib.status === 'ok') {
+      return lrclib;
+    }
+  } catch (error) {
+    lrclibFailure = classifyError(error);
+  }
+
+  try {
+    const qishui = await fetchQishuiLyrics(trackName, artistName.trim(), seconds);
+    if (qishui) {
+      return qishui;
+    }
+  } catch {
+    // 静默：汽水的问题不影响后面的源。
+  }
+  try {
+    const kugou = await fetchKugouLyrics(trackName, artistName.trim(), seconds);
+    if (kugou) {
+      return kugou;
+    }
+  } catch {
+    // 同上。
+  }
+  try {
+    const netease = await fetchNetEaseLyrics(trackName, artistName, seconds);
+    if (netease) {
+      return netease;
+    }
+  } catch {
+    // 同上：吞掉，别让上游的问题冒充最终结论。
+  }
+
+  if (lrclibFailure) {
+    throw lrclibFailure;
+  }
+  return { status: 'not-found' };
+}
+
+/** LRCLIB 的多路并行取词：原方向 / 对调方向的 get，加一条 search，全部等完再裁决。 */
+async function fetchLrclibLyrics(trackName: string, artistName: string, duration: string, raw?: RawQuery): Promise<LyricsResult> {
   const jobs: Array<{ kind: 'get' | 'search'; run: () => Promise<LyricsResult> }> = [];
 
   for (const [name, artist] of lyricsPairs(trackName, artistName)) {
@@ -387,21 +464,33 @@ async function fetchLyrics(trackName: string, artistName: string, duration: stri
   if (errors.length > 0) {
     throw worstError(errors);
   }
+  /**
+   * 简体那几路都没命中，而标签本来是繁体时，再按原字形搜一次：
+   * 上游偶尔只收了繁体条目（折叠后 get 404、search 也是 0 条）。
+   * 只补 search，失败不改写结论 —— 主路径已经正常判定 not-found。
+   */
+  if (raw && (raw.trackName !== trackName || raw.artistName !== artistName)) {
+    const loose = [raw.trackName, raw.artistName].filter(Boolean).join(' ');
+    if (loose) {
+      try {
+        const items = await fetchJsonWithRetry(
+          `${LYRICS_UPSTREAM}/search?${new URLSearchParams({ q: loose })}`,
+          LYRICS_GET_TIMEOUT,
+          1,
+        );
+        const hit = toLyricsResult(pickBestLyrics(items, trackName, artistName, duration));
+        if (hit.status === 'ok') {
+          return hit;
+        }
+      } catch {
+        // 补救失败不影响「未找到」
+      }
+    }
+  }
   return { status: 'not-found' };
 }
 
 // -- 中文译文 ---------------------------------------------------------------
-
-interface NetEaseArtist { name?: string }
-
-interface NetEaseSong {
-  id?: number;
-  name?: string;
-  /** 毫秒 */
-  duration?: number;
-  artists?: NetEaseArtist[];
-  alias?: string[];
-}
 
 interface TranslateResult extends CacheEntry {
   status: 'ok' | 'not-found';
@@ -414,173 +503,105 @@ interface TranslateResult extends CacheEntry {
   songArtist?: string;
 }
 
-/** 匹配用的归一化：小写、去空白与常见标点，括号说明留着（靠前缀判断）。 */
-const normText = (value: unknown): string => String(value ?? '')
-  .toLowerCase()
-  .replace(/[\s　]/g, '')
-  .replace(/[,.;:!?·、。，．：；！？"'«»『』「」]/g, '');
-
-const artistNames = (song: NetEaseSong): string[] => (song.artists ?? [])
-  .map((artist) => String(artist?.name ?? ''))
-  .filter(Boolean);
-
-/** 去掉尾部的括号说明与分隔符，得到「歌名本体」：《Old Town Road (feat. X)》→《Old Town Road》。 */
-function coreTitle(value: string): string {
-  let text = String(value ?? '');
-  let before = '';
-  while (before !== text) {
-    before = text;
-    text = text.replace(/\s*[(（【[][^()（）【】\[\]]*[)）】\]]\s*$/, '').trimEnd();
-  }
-  return text.replace(/\s*[-–—:,;]\s*$/, '').trim();
-}
-
-/**
- * 歌手证据。
- *
- * 只按「整串包含」判会误配：对调出来的候选里「Zzzx Nope」能把网易的「N.O.P.E」包含进去
- * （点号被归一化吃掉了），于是配上同名不相干的歌，整页译文都是错的。
- * 所以先按 `/ , 、 & feat.` 拆成一个个歌手名，再要求全等或前缀关系。
- */
-function artistHitSong(song: NetEaseSong, wantArtist: string): boolean {
-  if (!wantArtist) {
-    return false;
-  }
-  const tokens = artistNames(song)
-    .flatMap((value) => value.split(/[/、,，&；;]|\bfeat\.?\b/i))
-    .map(normText)
-    .filter(Boolean);
-  return tokens.some((token) => token === wantArtist
-    || (token.length >= 3 && (token.startsWith(wantArtist) || wantArtist.startsWith(token))));
-}
-
-/**
- * 从搜索结果里挑唯一可信的一条。
- *
- * 译文库错配比歌词错配更糟——整页中文都是别的歌的，用户很难当场发现。
- * 所以门槛收紧：歌名必须一致（含去掉版本后缀的本体），且歌手对得上或时长差在 6 秒内。
- * @param strict 派生出来的候选（对调、从曲名里拆出来的）必须另有歌手证据：
- *   这类候选里「歌手」本身是猜的，只靠时长很容易配上同名不相干的歌。
- */
-function pickTranslatableSong(
-  songs: NetEaseSong[],
-  trackName: string,
-  artistName: string,
-  duration: number,
-  { strict = false }: { strict?: boolean } = {},
-): NetEaseSong | null {
-  const wantTitle = normText(trackName);
-  const wantCore = normText(coreTitle(trackName));
-  const wantArtist = normText(artistName);
-  if (!wantTitle) {
-    return null;
-  }
-  /** 既没有歌手也没有时长可比：只剩歌名这一个证据，歌名全等就认 */
-  const onlyTitle = !wantArtist && !(duration > 0);
-
-  let best: NetEaseSong | null = null;
-  let bestScore = 0;
-  for (const song of songs) {
-    const name = normText(song.name);
-    if (!name || !song.id) {
-      continue;
-    }
-    const core = normText(coreTitle(song.name ?? ''));
-    const titleExact = name === wantTitle
-      || (song.alias ?? []).some((alias) => normText(alias) === wantTitle)
-      || (wantCore.length >= 3 && core === wantCore);
-    // 「Yellow (Acoustic)」「Yellow (Live)」这类带后缀的版本
-    const titlePrefix = !titleExact && wantTitle.length >= 3 && name.startsWith(wantTitle);
-    if (!titleExact && !titlePrefix) {
-      continue;
-    }
-    const artistHit = artistHitSong(song, wantArtist);
-    const seconds = Number(song.duration);
-    const diff = duration > 0 && Number.isFinite(seconds) && seconds > 0 ? Math.abs(seconds / 1000 - duration) : Number.POSITIVE_INFINITY;
-    const durHit = diff <= 6;
-    if (!titleExact) {
-      // 前缀命中必须靠时长或歌手背书，否则「Yellow」会配上「Yellow (Live)」那种 6 分钟版本
-      if (!artistHit && !durHit) {
-        continue;
-      }
-      if (diff > 20) {
-        continue;
-      }
-    } else if (!artistHit && !durHit && !onlyTitle) {
-      continue;
-    }
-    if (strict && !artistHit) {
-      continue;
-    }
-    const score = (titleExact ? 40 : 18) + (artistHit ? 25 : 0) + (durHit ? 25 : 0);
-    if (score > bestScore) {
-      best = song;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
-async function searchNetEaseSongs(keyword: string): Promise<NetEaseSong[]> {
-  const url = `${NETEASE_SEARCH}?${new URLSearchParams({ s: keyword, type: '1', limit: '20' })}`;
-  const data = await fetchJsonWithRetry(url, TRANSLATE_TIMEOUT, 2);
-  const songs = (data as { result?: { songs?: unknown } })?.result?.songs;
-  return Array.isArray(songs) ? songs as NetEaseSong[] : [];
-}
+/** 匹配用的归一化 / 歌名本体 / 歌手证据 / 认歌规则都在 lib/netease-match.ts（三处共用）。 */
 
 /** 本地文件没标签时的占位歌手，拿去当搜索词只会污染结果。 */
 const PLACEHOLDER_ARTISTS = new Set(['本地文件', '未知歌手', '未知', 'unknown', 'various artists']);
 
+/** 网易云搜索：一次 20 条（与译文链路同参）。 */
+async function searchNetEaseSongs(keyword: string): Promise<ReturnType<typeof parseNetEaseSongs>> {
+  const url = `${NETEASE_SEARCH}?${new URLSearchParams({ s: keyword, type: '1', limit: '20' })}`;
+  return parseNetEaseSongs(await fetchJsonWithRetry(url, TRANSLATE_TIMEOUT, 2));
+}
+
 /**
- * （曲名, 歌手）候选。
+ * 网易云歌词：认歌 → 取 `lrc.lyric` → 归一成 LyricsResult；没词 / 认不到返回 null。
  *
- * 本地导入的曲名/歌手有三种拆法：正拆、「歌手 - 歌名」反拆、以及标签里曲名本身就写着
- * 「歌名 - 歌手」。歌词代理有对调重试，译文这边要是没有，表现就是
- * 「歌词有、双语开关也在，但永远查不到译文」——三种写法都试一遍才追平。
+ * 与译文链路同一套候选与认歌门槛：错配一首歌的歌词和错配整页译文一样糟，
+ * 宁可返回 null 交给 LRCLIB，也不给一首错的词。
+ * 单个候选失败不放弃整次尝试；全部失败也只是 null —— 网易云只是「优先」。
  */
-function translatePairs(trackName: string, artistName: string): Array<{ name: string; artist: string; strict: boolean }> {
-  const pairs = [{ name: trackName, artist: artistName, strict: false }];
-  if (artistName && artistName !== trackName) {
-    pairs.push({ name: artistName, artist: trackName, strict: true });
+async function fetchNetEaseLyrics(trackName: string, artistName: string, duration: number): Promise<LyricsResult | null> {
+  const artist = PLACEHOLDER_ARTISTS.has(artistName.trim().toLowerCase()) ? '' : artistName.trim();
+  const candidates = neteaseCandidates(trackName, artist);
+  /** 歌手字段写得花哨（「Coldplay / Beyoncé」「feat. X」）时，只搜歌名常常才是对的 */
+  if (artist) {
+    candidates.push({ name: trackName, artist: '', strict: false });
   }
-  const split = trackName.match(/^(.{2,60}?)\s+[-–—]\s+(.{2,60})$/);
-  if (split) {
-    const [, head, tail] = split;
-    pairs.push({ name: head.trim(), artist: tail.trim(), strict: true });
-    pairs.push({ name: tail.trim(), artist: head.trim(), strict: true });
-  }
-  const seen = new Set<string>();
-  return pairs.filter((pair) => {
-    const key = `${pair.name}|${pair.artist}`.toLowerCase();
-    if (seen.has(key)) {
-      return false;
+  const tried = new Set<number>();
+  for (const candidate of candidates) {
+    const keyword = candidateKeyword(candidate);
+    if (!keyword) {
+      continue;
     }
-    seen.add(key);
-    return true;
-  });
+    try {
+      const songs = await searchNetEaseSongs(keyword);
+      const song = pickNetEaseSong(songs, {
+        trackName: candidate.name,
+        artistName: candidate.artist,
+        duration,
+        strict: candidate.strict,
+      });
+      if (!song || tried.has(song.id)) {
+        continue;
+      }
+      // 同一首歌被多个候选认出来时只取一次词（纯音乐 / 未收录会被反复认到）。
+      tried.add(song.id);
+      const data = await fetchJsonWithRetry(
+        `${NETEASE_LYRIC}?${new URLSearchParams({ id: String(song.id), lv: '1' })}`,
+        TRANSLATE_TIMEOUT,
+        1,
+      ) as { lrc?: { lyric?: string }; nolyric?: boolean; uncollected?: boolean } | null;
+      if (data?.nolyric || data?.uncollected) {
+        continue;
+      }
+      const lyric = typeof data?.lrc?.lyric === 'string' ? data.lrc.lyric : '';
+      if (!lyric.trim()) {
+        continue;
+      }
+      // 网易云带一串带时间轴的制作署名：解析器只清前 4 行，这里先剥干净开头。
+      const body = stripLeadingCredits(lyric);
+      if (!body.trim()) {
+        continue;
+      }
+      const synced = looksSynced(body);
+      return {
+        status: 'ok',
+        syncedLyrics: synced ? body : '',
+        plainLyrics: synced ? '' : body,
+        source: '网易云音乐',
+        trackName: song.name,
+        artistName: song.artists.join(' / '),
+        duration: Math.round(song.durationMs / 1000),
+      };
+    } catch {
+      // 单个候选搜挂了（超时 / 连不上 / 限流）不放弃整次尝试，试下一个。
+      continue;
+    }
+  }
+  return null;
 }
 
 async function fetchTranslation(trackName: string, artistName: string, duration: number): Promise<TranslateResult> {
   const artist = PLACEHOLDER_ARTISTS.has(artistName.trim().toLowerCase()) ? '' : artistName.trim();
-  const candidates = translatePairs(trackName, artist);
+  const candidates = neteaseCandidates(trackName, artist);
   /** 歌手字段写得花哨（「Coldplay / Beyoncé」「feat. X」）时，只搜歌名常常才是对的 */
   candidates.push({ name: trackName, artist: '', strict: false });
 
   const errors: UpstreamError[] = [];
   let matched: NetEaseSong | null = null;
   for (const candidate of candidates) {
-    const keyword = [candidate.artist, candidate.name].filter(Boolean).join(' ');
+    const keyword = candidateKeyword(candidate);
     if (!keyword) {
       continue;
     }
     try {
-      matched = pickTranslatableSong(
-        await searchNetEaseSongs(keyword),
-        candidate.name,
-        candidate.artist,
+      matched = pickNetEaseSong(await searchNetEaseSongs(keyword), {
+        trackName: candidate.name,
+        artistName: candidate.artist,
         duration,
-        { strict: candidate.strict },
-      );
+        strict: candidate.strict,
+      });
     } catch (error) {
       errors.push(classifyError(error, '译文库'));
       continue;
@@ -617,8 +638,8 @@ async function fetchTranslation(trackName: string, artistName: string, duration:
     originalLyrics: original,
     source: '网易云译文库（人工翻译）',
     songId: song.id,
-    songName: song.name ?? '',
-    songArtist: artistNames(song).join(' / '),
+    songName: song.name,
+    songArtist: song.artists.join(' / '),
   };
 }
 
@@ -791,13 +812,20 @@ async function serveCachedImage(res: ServerResponse, dir: string, rawId: string,
 const param = (url: URL, key: string): string => (url.searchParams.get(key) ?? '').trim();
 
 async function handleLyrics(url: URL, res: ServerResponse): Promise<void> {
-  const trackName = param(url, 'track_name');
-  const artistName = param(url, 'artist_name');
+  const rawTrackName = param(url, 'track_name');
+  const rawArtistName = param(url, 'artist_name');
   const duration = param(url, 'duration');
-  if (!trackName) {
+  if (!rawTrackName) {
     sendJson(res, 400, { status: 'error', message: '缺少 track_name' });
     return;
   }
+  /**
+   * 查询参数折到简体：LRCLIB 的 get 是逐字匹配，标签里的繁体（周杰倫）会让
+   * 上游那条简体记录一条都对不上（2026-11-21《完美主义》案例）。
+   * 新前端已经自己折过一遍，这里再折一次是幂等的，同时兜住旧链接/旧缓存。
+   */
+  const trackName = toSimplified(rawTrackName);
+  const artistName = toSimplified(rawArtistName);
   const key = sha1(`${trackName}|${artistName}|${duration}`);
   // refresh=1：绕过缓存重新问上游（前端发现只有纯文本歌词、想升级成带时间轴版本时用）
   const refresh = param(url, 'refresh') === '1';
@@ -810,11 +838,14 @@ async function handleLyrics(url: URL, res: ServerResponse): Promise<void> {
   }
   let result: LyricsResult;
   try {
-    result = await fetchLyrics(trackName, artistName, duration);
+    result = await fetchLyrics(trackName, artistName, duration, {
+      trackName: rawTrackName,
+      artistName: rawArtistName,
+    });
   } catch (error) {
     const stale = await readCache(LYRICS_DIR, key, { allowStale: true });
     if (stale) {
-      sendJson(res, 200, { ...stale, source: 'LRCLIB（离线缓存）' });
+      sendJson(res, 200, { ...stale, source: `${String(stale.source ?? '')}（离线缓存）` });
       return;
     }
     const classified = classifyError(error);
@@ -831,8 +862,9 @@ async function handleLyrics(url: URL, res: ServerResponse): Promise<void> {
 }
 
 async function handleTranslate(url: URL, res: ServerResponse): Promise<void> {
-  const trackName = param(url, 'track_name');
-  const artistName = param(url, 'artist_name');
+  // 网易云同样不认繁简：标签里的繁体歌手会直接搜不到
+  const trackName = toSimplified(param(url, 'track_name'));
+  const artistName = toSimplified(param(url, 'artist_name'));
   const duration = Number(param(url, 'duration')) || 0;
   if (!trackName) {
     sendJson(res, 400, { status: 'error', message: '缺少 track_name' });

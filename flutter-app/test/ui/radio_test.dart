@@ -17,8 +17,11 @@ import 'package:light_music/theme/app_tokens.dart';
 import 'package:light_music/theme/theme_state.dart';
 import 'package:light_music/ui/drawer_menu.dart';
 import 'package:light_music/ui/header.dart';
+import 'package:light_music/ui/page_link_chip.dart';
 import 'package:light_music/ui/radio_bar.dart';
 import 'package:light_music/ui/radio_page.dart';
+import 'package:light_music/ui/scroll_physics.dart';
+import 'package:light_music/ui/sleep_moon.dart';
 import 'package:light_music/ui/theme_drawer.dart';
 import 'package:provider/provider.dart';
 
@@ -245,6 +248,37 @@ void main() {
       expect(radio.playing, isFalse);
     });
 
+    test('pause：没在响也把待重连取消（定时结束后不许自己接回来）', () async {
+      final engine = FakeRadioEngine();
+      final radio = RadioState(
+        engine: engine,
+        // 给一个很长的退避：暂停必须在计时器到点之前把这一轮重连按掉
+        reconnectDelay: (_) => const Duration(hours: 1),
+      );
+      addTearDown(radio.dispose);
+      final station = _station('fm-beijing-traffic');
+
+      await radio.tune(station);
+      await Future<void>.delayed(Duration.zero);
+      // 断流：playing 掉 false，重连接下来才出声
+      engine.emitPlaying(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(radio.reconnecting, isTrue);
+
+      // 睡眠定时器到点 / 音乐开声走的就是这个入口
+      await radio.pause();
+
+      expect(radio.reconnecting, isFalse, reason: '待重连必须被取消');
+      expect(radio.playing, isFalse);
+      expect(radio.current?.id, station.id, reason: '暂停保留当前台');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(
+        engine.calls.where((call) => call.startsWith('open:')).length,
+        1,
+        reason: '暂停之后不许再开流',
+      );
+    });
+
     test('重连次数用尽落回「连不上」，不再无限重试', () async {
       final engine = FakeRadioEngine();
       var attempts = 0;
@@ -320,11 +354,7 @@ void main() {
       // mpv 的 core-idle 在正常出声时也会报 buffering=true
       engine.emitLoading(true);
       await Future<void>.delayed(Duration.zero);
-      expect(
-        radio.loading,
-        isFalse,
-        reason: '声音还在往前走，播放键必须保持暂停图形，不能转圈',
-      );
+      expect(radio.loading, isFalse, reason: '声音还在往前走，播放键必须保持暂停图形，不能转圈');
 
       // 再抖一下也一样，直到真的没在响
       engine.emitLoading(false);
@@ -657,6 +687,133 @@ void main() {
       expect(find.text('北京交通广播'), findsOneWidget);
     });
 
+    testWidgets('左右滑页签：左滑翻到下一页，右滑退回，到头不动', (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final radio = RadioState(engine: FakeRadioEngine());
+      addTearDown(radio.dispose);
+      await tester.pumpWidget(
+        _themed(
+          ChangeNotifierProvider<RadioState>.value(
+            value: radio,
+            child: RadioPage(onBack: () {}),
+          ),
+        ),
+      );
+
+      // 音乐台是最左一页：右滑没有上一页，原地不动
+      await tester.drag(
+        find.byKey(const Key('radio-tab-music')),
+        const Offset(80, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('radio-row-fm-beijing-music')),
+        findsOneWidget,
+      );
+
+      // 左滑 → 交通台
+      await tester.drag(
+        find.byKey(const Key('radio-tab-music')),
+        const Offset(-80, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('radio-row-fm-beijing-traffic')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('radio-row-fm-beijing-music')), findsNothing);
+
+      // 右滑 → 回音乐台
+      await tester.drag(
+        find.byKey(const Key('radio-tab-traffic')),
+        const Offset(80, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('radio-row-fm-beijing-music')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('radio-row-fm-beijing-traffic')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('竖滑只滚页面，不切页签', (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final radio = RadioState(engine: FakeRadioEngine());
+      addTearDown(radio.dispose);
+      await tester.pumpWidget(
+        _themed(
+          ChangeNotifierProvider<RadioState>.value(
+            value: radio,
+            child: RadioPage(onBack: () {}),
+          ),
+        ),
+      );
+
+      await tester.drag(
+        find.byKey(const Key('radio-row-fm-beijing-music')),
+        const Offset(0, 160),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('radio-row-fm-beijing-music')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('radio-row-fm-beijing-traffic')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('页面上下滚动，右上角三颗跟着页头进出视口', (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final radio = RadioState(engine: FakeRadioEngine());
+      addTearDown(radio.dispose);
+      await tester.pumpWidget(
+        _themed(
+          ChangeNotifierProvider<RadioState>.value(
+            value: radio,
+            child: RadioPage(onBack: () {}),
+          ),
+        ),
+      );
+
+      final actions = find.byKey(const Key('radio-head-actions'));
+      final back = find.byKey(const Key('radio-back-button'));
+      expect(actions, findsOneWidget);
+      expect(back.hitTestable(), findsOneWidget);
+
+      // 页面滚动条走软回弹：触底那一跳被压浅、放慢（见 scroll_physics.dart）。
+      expect(
+        tester
+            .widget<SingleChildScrollView>(
+              find.byKey(const Key('radio-scroll')),
+            )
+            .physics,
+        isA<SoftBouncingScrollPhysics>(),
+      );
+
+      // 往上滑：页头整行滚出视口，三颗跟着走 —— 它们是页头里的普通内容，
+      // 不是浮在视口右上角的常驻工具条，也不做「上滑隐藏 / 下滑显示」。
+      await tester.drag(
+        find.byKey(const Key('radio-scroll')),
+        const Offset(0, -260),
+      );
+      await tester.pumpAndSettle();
+      expect(actions, findsOneWidget);
+      expect(back.hitTestable(), findsNothing);
+
+      // 往下滑：页头滚回来，三颗重新看得见
+      await tester.drag(
+        find.byKey(const Key('radio-scroll')),
+        const Offset(0, 300),
+      );
+      await tester.pumpAndSettle();
+      expect(back.hitTestable(), findsOneWidget);
+    });
+
     testWidgets('点一行开播：卡片换成这台，所属分类跟着换', (tester) async {
       _setViewport(tester, const Size(1200, 900));
       final radio = RadioState(engine: FakeRadioEngine());
@@ -741,9 +898,10 @@ void main() {
         ),
       );
 
-      // 先切到交通台并等页签的水波收掉：等下在播的是音乐台，
+      // 先切到交通台并等换页动画（240ms）走完：等下在播的是音乐台，
       // 那一行被筛掉，页面上就只剩大卡的扩散环还在跑。
       await tester.tap(find.byKey(const Key('radio-tab-traffic')));
+      await tester.pump();
       await tester.pump(const Duration(milliseconds: 1200));
       expect(tester.binding.transientCallbackCount, 0);
 
@@ -764,7 +922,8 @@ void main() {
       );
     });
 
-    testWidgets('窄屏：版式不溢出，切页签照常', (tester) async {      _setViewport(tester, const Size(390, 844));
+    testWidgets('窄屏：版式不溢出，切页签照常', (tester) async {
+      _setViewport(tester, const Size(390, 844));
       final radio = RadioState(engine: FakeRadioEngine());
       addTearDown(radio.dispose);
       await tester.pumpWidget(
@@ -787,7 +946,95 @@ void main() {
       expect(find.byKey(const Key('radio-row-net-classical')), findsOneWidget);
     });
 
-    testWidgets('窄屏：右上角两颗跟页头品牌块居中对齐', (tester) async {
+    testWidgets('右上角「休眠」互跳：挨着「音乐」，点它去休眠页', (tester) async {
+      _setViewport(tester, const Size(1200, 900));
+      final radio = RadioState(engine: FakeRadioEngine());
+      addTearDown(radio.dispose);
+      var opened = 0;
+
+      await tester.pumpWidget(
+        _themed(
+          ChangeNotifierProvider<RadioState>.value(
+            value: radio,
+            child: RadioPage(onBack: () {}, onOpenSleep: () => opened++),
+          ),
+        ),
+      );
+
+      final sleepChip = find.byKey(const Key('radio-sleep-button'));
+      expect(sleepChip, findsOneWidget);
+      expect(find.text('助眠'), findsOneWidget);
+      // 桌面：与「音乐」回退同一档 36px 胶囊，排它在左边
+      expect(tester.getSize(sleepChip).height, 36);
+      final tokens = tester.element(sleepChip).tokens;
+      expect(tester.widget<Text>(find.text('助眠')).style?.color, tokens.text);
+      expect(tester.widget<Text>(find.text('音乐')).style?.color, tokens.text);
+      expect(
+        tester.widget<SleepMoonIcon>(find.byType(SleepMoonIcon).first).color,
+        tokens.text,
+      );
+      final note = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byKey(const Key('radio-back-button')),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect((note.painter! as MusicNotePainter).color, tokens.text);
+      expect(
+        tester.getCenter(sleepChip).dx,
+        lessThan(
+          tester.getCenter(find.byKey(const Key('radio-back-button'))).dx,
+        ),
+      );
+
+      await tester.tap(sleepChip);
+      expect(opened, 1);
+    });
+
+    testWidgets('窄屏：休眠 / 音乐 / 更多三颗各 32×32，按 8px 自右向左排', (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final radio = RadioState(engine: FakeRadioEngine());
+      addTearDown(radio.dispose);
+
+      await tester.pumpWidget(
+        _themed(
+          ChangeNotifierProvider<RadioState>.value(
+            value: radio,
+            child: RadioPage(onBack: () {}, onOpenSleep: () {}),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      // 与 Web 的 right: 90 / 50 / 10 同构（390 - 16 内缩 + 6 只挪绘制）
+      // 纵向 = 三页统一口径：按钮上缘 12（图标中心 28）
+      expect(
+        tester.getRect(find.byKey(const Key('radio-sleep-button'))),
+        const Rect.fromLTWH(268, 12, 32, 32),
+      );
+      expect(
+        tester.getRect(find.byKey(const Key('radio-back-button'))),
+        const Rect.fromLTWH(308, 12, 32, 32),
+      );
+      expect(
+        tester.getRect(find.byKey(const Key('menu-button'))),
+        const Rect.fromLTWH(348, 12, 32, 32),
+      );
+      final tokens = tester.element(find.byType(RadioPage)).tokens;
+      expect(
+        tester.widget<SleepMoonIcon>(find.byType(SleepMoonIcon).first).color,
+        tokens.textDim,
+      );
+      final note = tester.widget<CustomPaint>(
+        find.descendant(
+          of: find.byKey(const Key('radio-back-button')),
+          matching: find.byType(CustomPaint),
+        ),
+      );
+      expect((note.painter! as MusicNotePainter).color, tokens.textDim);
+    });
+
+    testWidgets('窄屏：右上角三颗与音乐页顶栏同一条水平线（上缘 12、图标中心 28）', (tester) async {
       _setViewport(tester, const Size(390, 844));
       final radio = RadioState(engine: FakeRadioEngine());
       addTearDown(radio.dispose);
@@ -802,15 +1049,19 @@ void main() {
 
       // 横向落位仍与音乐页顶栏同源：右内缩 10、点击区 32、两颗之间 8
       // （「音乐」落在 308，「更多」落在 348）。
-      // 竖直方向跟左侧品牌居中对齐：品牌行从 safe-top（测试里 0）+ 12 起、40 高，
-      // 中心 = 32；按钮 32 高，所以 top = 16（上下各留 4px）。
+      // 竖直方向不再跟品牌块居中（品牌中心 32），而是与音乐页、休眠页一样
+      // 钉在**按钮上缘 12、图标中心 28** —— 三页切来切去这一排图标不上下跳。
       expect(
         tester.getRect(find.byKey(const Key('radio-back-button'))),
-        const Rect.fromLTWH(308, 16, 32, 32),
+        const Rect.fromLTWH(308, 12, 32, 32),
       );
       expect(
         tester.getRect(find.byKey(const Key('menu-button'))),
-        const Rect.fromLTWH(348, 16, 32, 32),
+        const Rect.fromLTWH(348, 12, 32, 32),
+      );
+      expect(
+        tester.getCenter(find.byKey(const Key('radio-back-button'))).dy,
+        28,
       );
     });
 

@@ -27,11 +27,31 @@ import 'play_error.dart';
 import 'track.dart';
 import 'track_handle.dart';
 
+/// 换源之后的静默窗口（毫秒）：这之前内核报来的 completed 一律丢弃。
+///
+/// media_kit 的 `completed` 不是「边沿」而是 mpv **`eof-reached` 电平**的影子
+/// （real.dart:1943-1957 只在属性为真时写 `completed: true`，为假时**什么都不做**）。
+/// 而 `open()` 也不复位它 —— 只有 `seek()`（real.dart:719-724）与 `MPV_EVENT_START_FILE`
+/// （real.dart:1468-1479，还要求 `isPlayingStateChangeAllowed`）会写 `completed: false`。
+/// 播放层用的是 `open(play: false)`，那道闸常常不成立，于是：
+///
+///   「上一首刚播到结尾就被切走」→ 新开的这一首在 **1~2ms** 后收到一条属于上一首
+///   的 completed → 编排层 `next(auto: true)` 再跳一次。
+///
+/// 真实内核复现（Windows + media_kit 1.2.6 + 用户真曲库）：`tool/repro_race.dart`，
+/// 日志 `repro4.log` —— 每一次 `OPEN #n` 紧跟一条 `EV COMPLETED`，还伴随一条
+/// 「「X」音频播放失败」的假提示。列表模式下表现是「按下一曲却连跳两首 / 没切到
+/// 要的那首」，单曲循环下就是「刚切过去又从头重播」。
+const int kCompletedOpenSettleMs = 500;
+
 class MediaKitDriver implements AudioDriver {
   MediaKitDriver({Player? player}) : _player = player ?? Player() {
-    _positionSub = _player.stream.position.listen(
-      (value) => _emit(_position, value.inMilliseconds / 1000),
-    );
+    _positionSub = _player.stream.position.listen((value) {
+      final seconds = value.inMilliseconds / 1000;
+      // 换源之后位置真的前进过 = 这一首确实在出声（见 [kCompletedOpenSettleMs]）。
+      if (seconds > 0) _progressed = true;
+      _emit(_position, seconds);
+    });
     _durationSub = _player.stream.duration.listen(
       (value) => _emit(_duration, value.inMilliseconds / 1000),
     );
@@ -45,7 +65,22 @@ class MediaKitDriver implements AudioDriver {
       _emit(_loading, value);
     });
     _completedSub = _player.stream.completed.listen((value) {
-      if (value) _emit(_completed, null);
+      if (!value) return;
+      // 见 [kCompletedOpenSettleMs]：换源瞬间内核会把上一首的 eof 电平再投一次，
+      // 那不是「这一首播完」。只有本次 open 之后真的推进过位置、且已经过了静默
+      // 窗口的 completed 才算数。
+      final openedAt = _openedAt;
+      final msSinceOpen = openedAt == null
+          ? -1
+          : DateTime.now().difference(openedAt).inMilliseconds;
+      if (!MediaKitDriver.isSettledCompletion(
+        completed: value,
+        progressed: _progressed,
+        msSinceOpen: msSinceOpen,
+      )) {
+        return;
+      }
+      _emit(_completed, null);
     });
     _errorSub = _player.stream.error.listen((message) {
       // mpv 的 error 级日志**不都致命**。media_kit 把 `cplayer` / `lavf` /
@@ -94,6 +129,22 @@ class MediaKitDriver implements AudioDriver {
       message.contains('Can not open external file') ||
       message.contains('Failed to create file cache');
 
+  /// 换源残留 completed 的判定：**这次 open 真的播过**、且离换源已过静默窗口。
+  ///
+  /// 纯函数，`test/playback/media_kit_driver_filter_test.dart` 直接钉规则；
+  /// [msSinceOpen] 为负表示「还没 open 过」。
+  static bool isSettledCompletion({
+    required bool completed,
+    required bool progressed,
+    required int msSinceOpen,
+  }) {
+    if (!completed) return false;
+    // 本次换源之后位置从没前进过：这一首根本没出声，谈不上「播完」。
+    if (!progressed) return false;
+    if (msSinceOpen < 0) return false;
+    return msSinceOpen >= kCompletedOpenSettleMs;
+  }
+
   final Player _player;
 
   final _position = StreamController<double>.broadcast();
@@ -115,11 +166,21 @@ class MediaKitDriver implements AudioDriver {
 
   /// 当前曲目的文件名，只用于把内核原文归到「格式不支持 / 不存在」。
   String? _currentFileName;
+
+  /// 最近一次 [open] 的时刻；null = 还没开过源。
+  DateTime? _openedAt;
+
+  /// 本次 [open] 之后，内核是否真的推进过位置（= 这一首真的在出声）。
+  bool _progressed = false;
+
   bool _disposed = false;
 
   @override
   Future<bool> open(Track track) async {
     _currentFileName = track.handle.displayName;
+    // 换源即重置守卫：新媒体的「播完」必须由它自己重新挣出来（见 [kCompletedOpenSettleMs]）。
+    _openedAt = DateTime.now();
+    _progressed = false;
     final uri = track.handle.uri;
     try {
       await _player.open(Media(uri), play: false);

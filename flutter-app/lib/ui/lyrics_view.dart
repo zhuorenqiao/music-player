@@ -486,14 +486,15 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
         ),
         font,
       );
-      return canSeek
-          ? GestureDetector(
-              // 热区只覆盖文字本身：包文字，不包整行（:1948-1957）。
-              behavior: HitTestBehavior.opaque,
-              onTap: () => widget.onSeek!(line.time),
-              child: _lineText(textStyle, line.text, isEmpty),
-            )
-          : _lineText(textStyle, line.text, isEmpty);
+      final text = _lineText(textStyle, line.text, isEmpty);
+      if (isEmpty) return text;
+      return GestureDetector(
+        // 热区只覆盖文字本身：包文字，不包整行（:1948-1957）。
+        behavior: HitTestBehavior.opaque,
+        // 无时间轴的文字也消费点击，避免冒泡成进/出歌词页。
+        onTap: canSeek ? () => widget.onSeek!(line.time) : () {},
+        child: text,
+      );
     }
 
     // 放大 / 缩回都走渐变：目标倍数交给 TweenAnimationBuilder 插值，换行时旧行
@@ -519,7 +520,7 @@ class _LyricsLinesViewState extends State<LyricsLinesView> {
             // `width: fit-content; margin: auto`：热区收回文字本身（:1970-1978）。
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: canSeek ? () => widget.onSeek!(line.time) : null,
+              onTap: canSeek ? () => widget.onSeek!(line.time) : () {},
               child: Text(
                 trans,
                 textAlign: TextAlign.center,

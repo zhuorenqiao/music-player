@@ -314,11 +314,9 @@ void main() {
     final result = await service.importPaths([safSource, '/m/b.flac']);
     await result.enrichment;
 
-    expect(
-      probed,
-      ['/m/b.flac'],
-      reason: '只有真文件进探针；content:// 一次也不许（白等 3 秒换 NaN）',
-    );
+    expect(probed, [
+      '/m/b.flac',
+    ], reason: '只有真文件进探针；content:// 一次也不许（白等 3 秒换 NaN）');
     expect(playlist.tracks.first.hasDuration, isFalse);
     expect(playlist.tracks.last.duration, 187.5);
   });
@@ -367,6 +365,43 @@ void main() {
     // 探不出就是 NaN，绝不退成 0（0 会把「未知时长」显示成「零秒」）
     expect(playlist.tracks.last.duration.isNaN, isTrue);
     expect(playlist.tracks.last.hasDuration, isFalse);
+  });
+
+  test('时长单首落地就回调，不等整批收尾', () async {
+    final gates = <String, Completer<DurationProbeOutcome>>{};
+    final ready = <String>[];
+    final playlist = Playlist(tracks: const []);
+    final service = ImportService(
+      playlist: playlist,
+      toasts: RecordingToasts(),
+      durationProbe: (path) {
+        final gate = Completer<DurationProbeOutcome>();
+        gates[path] = gate;
+        return gate.future;
+      },
+    )..onDurationReady = (track) => ready.add(track.id);
+
+    final result = await service.importPaths(['/m/a.flac', '/m/b.flac']);
+    for (var i = 0; i < 200 && gates.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(
+      gates.keys,
+      containsAll(['/m/a.flac', '/m/b.flac']),
+      reason: '两首都要进探针队列',
+    );
+
+    gates['/m/a.flac']!.complete(const DurationProbeOutcome(120.0));
+    await waitUntil(() => ready.length == 1, reason: '第一首时长回调未到');
+    expect(ready.single, playlist.tracks.first.id);
+    expect(playlist.tracks.first.duration, 120.0);
+    // 第二首还卡在探针里：界面此时已经可以只刷新第一首，不必等整批。
+    expect(playlist.tracks.last.duration.isNaN, isTrue);
+
+    gates['/m/b.flac']!.complete(const DurationProbeOutcome(180.0));
+    await result.enrichment;
+    await waitUntil(() => ready.length == 2, reason: '第二首时长回调未到');
+    expect(playlist.tracks.last.duration, 180.0);
   });
 
   test('标签回填写回列表里的活对象，不是传进去的那份副本', () async {
@@ -518,15 +553,19 @@ void main() {
   // 暂时的「盘没挂上」就被冻结成永久降级（歌手/歌名猜反、时长 `--:--` 永远留着）。
   // 这一组用例钉的就是「标记只记给结论，不记给失败」。
 
-  Track restoredFromArchive(String path, {String title = '白玫瑰', TrackHandle? handle}) => Track(
-        id: localIdFor(path),
-        src: path,
-        title: title,
-        artist: '陈奕迅',
-        duration: double.nan,
-        isLocal: true,
-        handle: handle,
-      );
+  Track restoredFromArchive(
+    String path, {
+    String title = '白玫瑰',
+    TrackHandle? handle,
+  }) => Track(
+    id: localIdFor(path),
+    src: path,
+    title: title,
+    artist: '陈奕迅',
+    duration: double.nan,
+    isLocal: true,
+    handle: handle,
+  );
 
   test('文件暂时打不开时不记探测标记，插回硬盘后下次启动补得回来', () async {
     // 档案里早就有这条记录，文件这一次没挂上（U 盘 / 网盘尚未就位、或被别的进程占用）。
@@ -561,10 +600,9 @@ void main() {
     expect(playlist.tracks.single.duration.isNaN, isTrue);
 
     // 盘插回来了：同一条记录、同一个服务，第二次启动必须把标签与时长补上。
-    File(path).writeAsBytesSync(withId3([
-      textFrame('TIT2', '红玫瑰'),
-      textFrame('TPE1', '陈奕迅'),
-    ]));
+    File(path).writeAsBytesSync(
+      withId3([textFrame('TIT2', '红玫瑰'), textFrame('TPE1', '陈奕迅')]),
+    );
     await service.rehydrateIncomplete();
 
     final healed = playlist.tracks.single;
@@ -768,11 +806,7 @@ void main() {
     expect(live.artist, '陈奕迅');
     expect(live.duration, 187.5, reason: '时长也探到了');
     expect(live.hasRealCover, isFalse, reason: '失败只影响 cover 字段');
-    expect(
-      live.metadataProbed,
-      isTrue,
-      reason: '封面写盘失败不许把已经拿到的结论一起带走',
-    );
+    expect(live.metadataProbed, isTrue, reason: '封面写盘失败不许把已经拿到的结论一起带走');
   });
 
   test('content:// 曲目不记探测标记（M2 接上 SAF 后要能自愈）', () async {
@@ -824,11 +858,7 @@ void main() {
       reason: '谓词按能力位排除（第 2 轮 R7 的探针守卫仍在，双保险）',
     );
     expect(playlist.tracks.single.metadataProbed, isFalse);
-    expect(
-      probes,
-      0,
-      reason: '两条路都挡在探针之前（R7 的守卫 + I1 的谓词），一次也不许白等 3 秒',
-    );
+    expect(probes, 0, reason: '两条路都挡在探针之前（R7 的守卫 + I1 的谓词），一次也不许白等 3 秒');
   });
 
   // -- T12：同一个批次里的 .lrc 走手动歌词 -------------------------------------
@@ -855,8 +885,7 @@ void main() {
     addTearDown(() => dir.delete(recursive: true));
     final audio = File('${dir.path}/陈奕迅 - 孤勇者.flac')
       ..writeAsBytesSync(const []);
-    final lrc = File('${dir.path}/陈奕迅 - 十年.lrc')
-      ..writeAsStringSync('[00:01]甲');
+    final lrc = File('${dir.path}/陈奕迅 - 十年.lrc')..writeAsStringSync('[00:01]甲');
 
     final service = ImportService(
       playlist: playlist,

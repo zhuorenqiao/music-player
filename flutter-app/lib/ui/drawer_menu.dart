@@ -1,19 +1,20 @@
 // lib/ui/drawer_menu.dart
 //
-// 一级抽屉菜单：添加音乐 / 添加整个文件夹 / 清空播放列表 / 换肤 四个一级入口。
+// 一级抽屉菜单：添加音乐 / 清空播放列表 / 换肤 三个入口。
+// 「添加音乐」再进一层二级抽屉，选「选择音频文件」或「选择整个文件夹」——
+// 系统选择器没法一次同时选文件和目录，两个动作保留、一级只占一行。
 // 外观逐条对译 Web 端 `src/components/LibraryMenu.tsx` + `app.css:3488-3560`：
 //
 //   ┌────────────────────────┐
 //   │ ● 更多            (×)  │  ← `.drawer__head`：点题圆点 + 16px 标题 + 正圆关闭钮
-//   │ [＋] 添加音乐           │  ← `.menu-row`：54px 小卡、34px 图标托、14px 文案
-//   │ [▣] 添加整个文件夹      │
+//   │ [＋] 添加音乐      ›    │  ← `.menu-row--sub`：进二级选文件 / 文件夹
 //   │ [▤] 清空播放列表   (红) │  ← `.menu-row--danger`
-//   │ [◐] 换肤           ›    │  ← `.menu-row--sub`：右侧小箭头提示还能进去
+//   │ [◐] 换肤           ›    │  ← `.menu-row--sub`
 //   └────────────────────────┘
 //
 // 面板宽度是 `min(288px, 82vw)`（`.drawer__panel--narrow`），比换肤那档窄一档。
-// 只画内容，不负责打开：遮罩、滑入动画与「先收抽屉再执行」的时序在
-// `header.dart` 的 `AppHeader` 里。三个回调都由调用方注入，测试不碰 file_picker。
+// 只画内容与二级抽屉的打开时序；遮罩、滑入动画在 `more_menu.dart` 的宿主里。
+// 三个回调都由调用方注入，测试不碰 file_picker。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -63,7 +64,7 @@ class DrawerMenu extends StatelessWidget {
   final MenuAction onAddFolder;
   final MenuAction onClear;
 
-  /// 是否展示添加音乐 / 添加整个文件夹 / 清空播放列表三条曲库操作。
+  /// 是否展示「添加音乐 / 清空播放列表」两条曲库操作。
   /// 电台页传 false：那页只留「换肤」，不掺音乐曲库的动作。
   final bool showLibraryActions;
 
@@ -84,24 +85,23 @@ class DrawerMenu extends StatelessWidget {
         // 曲库操作只在音乐页出现：电台页是另一条音频链路，那页的「更多」
         // 只负责换肤，避免收听中被「清空播放列表」误导。
         if (showLibraryActions) ...[
-          _MenuRow(
+          MenuRow(
             icon: Icons.add,
             label: '添加音乐',
-            onTap: () => _closeAnd(context, onAddFiles),
+            sub: true,
+            // 「添加音乐」是二级抽屉：里面再选音频文件 / 整个文件夹。
+            // 浏览器与移动端的系统选择器都没法一次同时选文件和目录，所以
+            // 两个动作保留，但一级菜单只占一行。
+            onTap: () => _closeAnd(context, () => _openAdd(context)),
           ),
-          _MenuRow(
-            icon: Icons.folder_open,
-            label: '添加整个文件夹',
-            onTap: () => _closeAnd(context, onAddFolder),
-          ),
-          _MenuRow(
+          MenuRow(
             icon: Icons.delete_outline,
             label: '清空播放列表',
             danger: true,
             onTap: () => _confirmClear(context),
           ),
         ],
-        _MenuRow(
+        MenuRow(
           icon: Icons.palette_outlined,
           label: '换肤',
           sub: true,
@@ -119,20 +119,23 @@ class DrawerMenu extends StatelessWidget {
     return action();
   }
 
-  /// 打开换肤二级抽屉（M3 T6）：等一级抽屉**真的收完**再弹二级 —— 两级遮罩
-  /// 叠着会互相吞 Esc / 遮罩点击。
+  /// 打开二级抽屉：先等一级抽屉**真的收完**再弹，两级遮罩叠着会互相吞
+  /// Esc / 遮罩点击。
   ///
   /// 这里不能用固定延时去猜。抽屉收起动画 240ms，`pop` 一结束它的 Element 就
   /// 被拆掉；以前写的是「等 260ms 再用一级抽屉的 context 弹」，只要路由先拆完
   /// （真机稳定帧率下就是这样），计时器回来时 `context.mounted == false`，直接
-  /// return —— 用户看到的就是「抽屉收起来了，换肤弹窗没出来」。
+  /// return —— 用户看到的就是「抽屉收起来了，二级抽屉没出来」。
   ///
   /// 现在改成两件确定性的事：
   /// 1. 等 `ModalRoute.completed`，也就是这条抽屉路由自己播完收起动画；
   /// 2. 用 `NavigatorState` 的 context 去弹（路由层，抽屉收起后依然在树上，
   ///    且仍在 MultiProvider / Theme 之下，`context.tokens` 与
   ///    `context.watch<ThemeState>()` 都照常可用）。
-  Future<void> _openTheme(BuildContext context) async {
+  Future<void> _openSubDrawer(
+    BuildContext context,
+    void Function(BuildContext host) show,
+  ) async {
     final navigator = Navigator.of(context);
     final route = ModalRoute.of(context);
     if (route != null) {
@@ -140,8 +143,20 @@ class DrawerMenu extends StatelessWidget {
     }
     final host = navigator.context;
     if (!host.mounted) return;
-    showThemeDrawer(host);
+    show(host);
   }
+
+  Future<void> _openTheme(BuildContext context) =>
+      _openSubDrawer(context, showThemeDrawer);
+
+  Future<void> _openAdd(BuildContext context) => _openSubDrawer(
+        context,
+        (host) => showAddDrawer(
+          host,
+          onAddFiles: onAddFiles,
+          onAddFolder: onAddFolder,
+        ),
+      );
 
   void _close(BuildContext context) {
     Navigator.of(context).maybePop();
@@ -195,20 +210,112 @@ class DrawerMenu extends StatelessWidget {
   }
 }
 
-/// 一级入口行（`.menu-row`）：54px 小卡，34px 图标托 + 14px 文案。
+/// 「添加音乐」二级抽屉：只保留一个一级入口，进去再选文件或文件夹。
+///
+/// 为什么不直接合并成一次点击：系统选择器没有能同时选择文件和目录的对话框，
+/// 文件多选与目录选择是两个互斥的入口；拆成二级既能只占一行菜单，也不会把
+/// 任一导入方式藏掉。宽度、行高、图标托与一级抽屉完全相同，保持像素级一致。
+class AddDrawer extends StatelessWidget {
+  const AddDrawer({
+    required this.onAddFiles,
+    required this.onAddFolder,
+    super.key,
+  });
+
+  final MenuAction onAddFiles;
+  final MenuAction onAddFolder;
+
+  /// 与一级抽屉同宽：Web 两个抽屉都走 `.drawer__panel--narrow`。
+  static const double width = DrawerMenu.width;
+
+  @override
+  Widget build(BuildContext context) {
+    return DrawerPanel(
+      baseWidth: width,
+      viewportFraction: 0.82,
+      title: '添加音乐',
+      hint: '选择音频文件，或导入整个文件夹',
+      closeLabel: '关闭添加音乐',
+      gap: 8,
+      onClose: () => Navigator.of(context).maybePop(),
+      children: [
+        MenuRow(
+          icon: Icons.add,
+          label: '选择音频文件',
+          onTap: () => _closeAnd(context, onAddFiles),
+        ),
+        MenuRow(
+          icon: Icons.folder_open,
+          label: '选择整个文件夹',
+          onTap: () => _closeAnd(context, onAddFolder),
+        ),
+      ],
+    );
+  }
+
+  /// 先收抽屉再执行：选择器弹在抽屉之上、回来时抽屉已经不在，避免叠两层。
+  Future<void> _closeAnd(BuildContext context, MenuAction action) {
+    Navigator.of(context).maybePop();
+    return action();
+  }
+}
+
+/// 打开「添加音乐」二级抽屉。时序与 [DrawerMenu] 的换肤入口同一套：
+/// 一级抽屉收起完成后再弹，避免两层遮罩互相吞 Esc / 点击。
+void showAddDrawer(
+  BuildContext context, {
+  required MenuAction onAddFiles,
+  required MenuAction onAddFolder,
+}) {
+  final tokens = context.tokens;
+  showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: '关闭添加音乐',
+    barrierColor: scrimColor(tokens),
+    transitionDuration: const Duration(milliseconds: 240),
+    pageBuilder: (context, animation, secondaryAnimation) => SafeArea(
+      minimum: const EdgeInsets.all(kDrawerMargin),
+      child: Align(
+        alignment: Alignment.topRight,
+        child: AddDrawer(
+          onAddFiles: onAddFiles,
+          onAddFolder: onAddFolder,
+        ),
+      ),
+    ),
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(1, 0),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      );
+    },
+  );
+}
+
+/// 菜单行（`.menu-row`）：54px 小卡，34px 图标托 + 14px 文案。一级和二级抽屉共用。
 ///
 /// 三档变体与 CSS 一一对应：
 ///   · 默认：`--tint-1` 底 + 1px 描边（[menuCardBorder]），图标托 `--accent-soft`
 ///     / 图标 `--accent-light`；
 ///   · [danger]：整行字色 `--danger`，图标托换 `--danger-soft`（清空播放列表）；
 ///   · [sub]：右侧补一个 6px 小箭头（`.menu-row--sub::after`），提示还能再点进去。
-class _MenuRow extends StatelessWidget {
-  const _MenuRow({
+class MenuRow extends StatelessWidget {
+  const MenuRow({
     required this.icon,
     required this.label,
     required this.onTap,
     this.danger = false,
     this.sub = false,
+    super.key,
   });
 
   final IconData icon;

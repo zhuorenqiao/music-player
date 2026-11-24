@@ -20,6 +20,8 @@ import 'package:light_music/cover/cover_source.dart';
 import 'package:light_music/library/import_service.dart';
 import 'package:light_music/library/library_repository.dart';
 import 'package:light_music/library/recent_store.dart';
+import 'package:light_music/lyrics/lyrics_source.dart';
+import 'package:light_music/lyrics/query.dart';
 import 'package:light_music/lyrics/upstream.dart';
 import 'package:light_music/playback/audio_driver.dart';
 import 'package:light_music/playback/audio_player.dart';
@@ -28,6 +30,7 @@ import 'package:light_music/playback/track.dart';
 import 'package:light_music/playback/transport_controller.dart';
 import 'package:light_music/state/cover_state.dart';
 import 'package:light_music/state/library_state.dart';
+import 'package:light_music/state/media_refresh_state.dart';
 import 'package:light_music/state/panel_controller.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
@@ -95,6 +98,16 @@ class PanelHarness {
       diskStore: CoverDiskStore(directory: _directory.path),
       artistImageDirectory: _directory.path,
     );
+    // 表头那颗「重新获取封面与歌词」也读一份状态机：面板用例不点它，
+    // 离线替身保证误点时只会提示、不会真发请求。
+    mediaRefresh = MediaRefreshState(
+      library: library,
+      cover: cover,
+      matcher: const _NoLyrics(),
+      toasts: toasts,
+      sleep: (_) async {},
+      isOnline: () => false,
+    );
     // M3 T7：面板的卡面 alpha 走 glassLevel——外观状态机同场注册。
     theme = ThemeState.unloaded();
   }
@@ -116,6 +129,7 @@ class PanelHarness {
   late final PlayerState player;
   late final RecentState recent;
   late final CoverState cover;
+  late final MediaRefreshState mediaRefresh;
   late final ThemeState theme;
 
   /// 假播放器本体（只覆写两条 getter），用 [PlayerState] 的静态类型拿不到。
@@ -137,6 +151,7 @@ class PanelHarness {
       ChangeNotifierProvider<PlayerState>.value(value: player),
       ChangeNotifierProvider<RecentState>.value(value: recent),
       ChangeNotifierProvider<CoverState>.value(value: cover),
+      ChangeNotifierProvider<MediaRefreshState>.value(value: mediaRefresh),
       ChangeNotifierProvider<ThemeState>.value(value: theme),
       ChangeNotifierProvider<PanelController>(create: (_) => PanelController()),
     ],
@@ -144,11 +159,7 @@ class PanelHarness {
       height: tall ? 700 : null,
       child:
           child ??
-          Panel(
-            flush: flush,
-            frostLevel: frostLevel,
-            coverPath: coverPath,
-          ),
+          Panel(flush: flush, frostLevel: frostLevel, coverPath: coverPath),
     ),
   );
 
@@ -157,6 +168,7 @@ class PanelHarness {
     library.dispose();
     recent.dispose();
     cover.dispose();
+    mediaRefresh.dispose();
     theme.dispose();
     toasts.dispose();
     if (_directory.existsSync()) {
@@ -167,6 +179,19 @@ class PanelHarness {
 
 /// 面板用例不碰网络：json / bytes 一被问就回失败（面板只读 resolver 的
 /// 内存值，这两个替身根本不会被触发）。
+///
+/// 歌词替身同样只回错误：面板不验刷新按钮的实际刷新，只验它在那里。
+class _NoLyrics implements LyricsMatcher {
+  const _NoLyrics();
+
+  @override
+  Future<LyricsMatch> match(
+    LyricsQuery query, {
+    CancelToken? cancel,
+    bool useCache = true,
+  }) async => const LyricsMatch(status: 'error', message: '面板用例不联网');
+}
+
 class _NoJson implements HttpJsonClient {
   const _NoJson();
 
@@ -175,8 +200,7 @@ class _NoJson implements HttpJsonClient {
     Uri url, {
     required Duration timeout,
     required Map<String, String> headers,
-  }) async =>
-      const JsonNetwork();
+  }) async => const JsonNetwork();
 }
 
 class _NoBytes implements ImageBytesClient {
@@ -186,8 +210,7 @@ class _NoBytes implements ImageBytesClient {
   Future<ImageBytesOutcome> getBytes(
     Uri url, {
     required Duration timeout,
-  }) async =>
-      const ImageBytesNetwork();
+  }) async => const ImageBytesNetwork();
 }
 
 /// 只覆写两条提示 getter 的播放器：其余行为全是真 [PlayerState]。

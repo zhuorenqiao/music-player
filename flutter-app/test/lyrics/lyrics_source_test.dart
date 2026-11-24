@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/lyrics/lyrics_cache.dart';
+import 'package:light_music/lyrics/lyrics_provider.dart';
 import 'package:light_music/lyrics/lyrics_source.dart';
+import 'package:light_music/lyrics/netease_lyrics.dart';
 import 'package:light_music/lyrics/query.dart';
 import 'package:light_music/lyrics/upstream.dart';
 
@@ -39,6 +41,39 @@ final query = normalizeQuery(
   duration: 300,
 );
 
+/// 与 LyricsSource 的缓存纪元一致：v4 起主源链是 LRCLIB → 汽水 → 酷狗 → 网易云，
+/// 新结果都写在 `v4|` 前缀下。这里只用来「验尸」缓存有没有落盘，不参与生产逻辑。
+String epochIndexKey(String key) => 'v4|$key';
+
+/// 上一纪元（v3 四源时代）的索引键，只读兜底。
+String legacyIndexKey(String key) => 'v3|$key';
+
+/// 更早纪元（v2 网易云时代）的索引键，只读兜底。
+String legacy2IndexKey(String key) => 'v2|$key';
+
+String epochDiskKey(String track, String artist, String duration) =>
+    LyricsDiskCache.keyFor('v4|$track', artist, duration);
+
+String legacyDiskKey(String track, String artist, String duration) =>
+    LyricsDiskCache.keyFor('v3|$track', artist, duration);
+
+String legacy2DiskKey(String track, String artist, String duration) =>
+    LyricsDiskCache.keyFor('v2|$track', artist, duration);
+
+/// 固定返回一个结果的假歌词源；calls 用来钉「优先级高的命中后，低的绝不该被调用」。
+class FakeProvider implements LyricsProvider {
+  FakeProvider(this.record);
+
+  final LyricsRecord? record;
+  int calls = 0;
+
+  @override
+  Future<LyricsRecord?> lookup(LyricsQuery query, {CancelToken? cancel}) async {
+    calls += 1;
+    return record;
+  }
+}
+
 void main() {
   late Directory dir;
   late AppPrefs prefs;
@@ -59,6 +94,41 @@ void main() {
     client: client,
     disk: disk,
     index: LyricsIndexCache(prefs),
+    gate: gate ?? RateLimitGate(),
+    totalBudget: total,
+    sleep: (_) async {},
+  );
+
+  /// 带网易云补位的装配：LRCLIB 走 client，网易云走 NetEaseLyrics。
+  LyricsSource sourceWithNetease(
+    HttpJsonClient client, {
+    RateLimitGate? gate,
+    Duration total = const Duration(seconds: 60),
+  }) => LyricsSource(
+    client: client,
+    disk: disk,
+    index: LyricsIndexCache(prefs),
+    netease: NetEaseLyrics(client: client, sleep: (_) async {}),
+    gate: gate ?? RateLimitGate(),
+    totalBudget: total,
+    sleep: (_) async {},
+  );
+
+  /// 带三家补位的装配：LRCLIB → 汽水 → 酷狗 → 网易云。
+  LyricsSource sourceWithProviders(
+    HttpJsonClient client, {
+    LyricsProvider? qishui,
+    LyricsProvider? kugou,
+    LyricsProvider? netease,
+    RateLimitGate? gate,
+    Duration total = const Duration(seconds: 60),
+  }) => LyricsSource(
+    client: client,
+    disk: disk,
+    index: LyricsIndexCache(prefs),
+    qishui: qishui,
+    kugou: kugou,
+    netease: netease,
     gate: gate ?? RateLimitGate(),
     totalBudget: total,
     sleep: (_) async {},
@@ -132,7 +202,7 @@ void main() {
     final client = RoutingClient([]);
     final result = await sourceWith(client).match(query);
     expect(result.status, 'not-found');
-    expect(await LyricsIndexCache(prefs).read(query.key), isNotNull);
+    expect(await LyricsIndexCache(prefs).read(epochIndexKey(query.key)), isNotNull);
     final again = await sourceWith(client).match(query);
     expect(again.status, 'not-found');
     expect(again.source, '缓存');
@@ -164,7 +234,7 @@ void main() {
       gate: gate,
     ).match(query, useCache: false);
     expect(result.status, 'ok');
-    expect(await LyricsIndexCache(prefs).read(query.key), isNotNull);
+    expect(await LyricsIndexCache(prefs).read(epochIndexKey(query.key)), isNotNull);
   });
 
   test('上游抛错时回退过期磁盘缓存，source 覆盖为「LRCLIB（离线缓存）」', () async {
@@ -179,7 +249,7 @@ void main() {
     ]);
     await sourceWith(client).match(query);
     // 把磁盘条目改成过期
-    final key = LyricsDiskCache.keyFor(
+    final key = epochDiskKey(
       query.trackName,
       query.artistName,
       '${query.duration}',
@@ -237,7 +307,7 @@ void main() {
     ]);
     final result = await sourceWith(client).match(query);
     expect(result.status, 'ok');
-    final swapped = LyricsDiskCache.keyFor('陈奕迅', '十年', '300');
+    final swapped = epochDiskKey('陈奕迅', '十年', '300');
     expect(File('${dir.path}/$swapped.json').existsSync(), isTrue);
   });
 
@@ -403,5 +473,483 @@ void main() {
     expect(gate.isLimited, isTrue);
     expect(client.calls, isEmpty);
     expect(await prefs.readString(LyricsIndexCache.prefsKey), isNull);
+  });
+
+  // 繁→简折叠的回归用例（2026-11-21《完美主义》案例）：
+  // 标签写成「完美主義 / 周杰倫」时，上游那条简体记录 get 404、search 0 条。
+  test('繁体曲名/歌手先折到简体再查，缓存键也跟着折', () async {
+    final traditional = normalizeQuery(
+      title: '完美主義',
+      artist: '周杰倫',
+      duration: 244,
+    );
+    final client = RoutingClient([
+      (
+        match: (u) => u.path.endsWith('/get'),
+        reply: (_) =>
+            const JsonOk({'syncedLyrics': '[00:29]甲', 'plainLyrics': '甲'}),
+      ),
+    ]);
+    final result = await sourceWith(client).match(traditional);
+    expect(result.status, 'ok');
+
+    // 每一条请求都必须带简体：繁体请求在上游一律 404 / 0 条
+    for (final uri in client.calls) {
+      final values = uri.queryParameters.values.toList();
+      expect(
+        values.any((v) => v.contains('周杰倫') || v.contains('完美主義')),
+        isFalse,
+        reason: '不应再发繁体查询：$uri',
+      );
+      expect(
+        values.any((v) => v.contains('周杰伦') || v.contains('完美主义')),
+        isTrue,
+        reason: '应该发简体查询：$uri',
+      );
+    }
+
+    // 缓存键按折叠后的字段算，旧的繁体「未找到」自然被绕开
+    final folded = normalizeQuery(
+      title: '完美主义',
+      artist: '周杰伦',
+      duration: 244,
+    );
+    expect(
+      await LyricsIndexCache(prefs).read(epochIndexKey(folded.key)),
+      isNotNull,
+    );
+  });
+
+  test('简体全没命中 → 用原字形补一次 search，命中只在繁体条目里的歌', () async {
+    final traditional = normalizeQuery(
+      title: '完美主義',
+      artist: '周杰倫',
+      duration: 244,
+    );
+    final client = RoutingClient([
+      (
+        match: (u) =>
+            u.path.endsWith('/search') &&
+            u.queryParameters['q'] == '完美主義 周杰倫',
+        reply: (_) => const JsonOk([
+          {
+            'trackName': '完美主義',
+            'artistName': '周杰倫',
+            'duration': 244,
+            'syncedLyrics': '[00:29]甲',
+            'plainLyrics': '甲',
+          },
+        ]),
+      ),
+    ]);
+    final result = await sourceWith(client).match(traditional);
+    expect(result.status, 'ok');
+    expect(result.synced, '[00:29]甲');
+    // 简体那几路（含简体 search）都 404，只有原字形那一次命中
+    final rawCalls = client.calls.where(
+      (u) => u.queryParameters['q'] == '完美主義 周杰倫',
+    );
+    expect(rawCalls, hasLength(1));
+  });
+
+  // ---- LRCLIB 优先（2026-11-23） ---------------------------------------
+
+  final netEaseSearch = (
+    match: (Uri u) => u.path.endsWith('/search/get'),
+    reply: (Uri _) => const JsonOk({
+      'result': {
+        'songs': [
+          {
+            'id': 1,
+            'name': '十年',
+            'duration': 300000,
+            'artists': [
+              {'name': '陈奕迅'},
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  final netEaseSong = (
+    match: (Uri u) => u.path.endsWith('/song/lyric'),
+    reply: (Uri _) => const JsonOk({
+      'lrc': {'lyric': '[00:15.54]如果那两个字没有颤抖'},
+    }),
+  );
+
+  test('LRCLIB 没词 → 网易云命中', () async {
+    final client = RoutingClient([netEaseSearch, netEaseSong]);
+    final result = await sourceWithNetease(client).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '网易云音乐');
+    expect(result.synced, '[00:15.54]如果那两个字没有颤抖');
+    // LRCLIB 先被问，404 后才轮到网易云；后者只负责搜歌 + 取词。
+    expect(client.calls.first.host, 'lrclib.net');
+    expect(client.calls.where((u) => u.host == 'music.163.com').length, 2);
+
+    // 结果落进 v4：同一首歌再匹配一次，网络一声不吭。
+    final quiet = RoutingClient([
+      (match: (_) => true, reply: (_) => const JsonTimeout()),
+    ]);
+    final again = await sourceWithNetease(quiet).match(query);
+    expect(again.status, 'ok');
+    expect(again.source, '网易云音乐');
+    expect(again.synced, '[00:15.54]如果那两个字没有颤抖');
+    expect(quiet.calls, isEmpty);
+
+    final cached = await LyricsIndexCache(
+      prefs,
+    ).read(epochIndexKey(query.key));
+    expect(cached?.source, '网易云音乐');
+  });
+
+  test('LRCLIB 首命中：即使网易云会失败，也一次都不碰它', () async {
+    for (final failure in <JsonOutcome>[
+      const JsonOk({'nolyric': true}),
+      const JsonStatus(500),
+    ]) {
+      prefs = AppPrefs.inMemory();
+      await dir.delete(recursive: true);
+      dir = await Directory.systemTemp.createTemp('lyrics-source-');
+      disk = LyricsDiskCache(directory: dir.path);
+
+      final client = RoutingClient([
+        netEaseSearch,
+        (match: (u) => u.path.endsWith('/song/lyric'), reply: (_) => failure),
+        (
+          match: (u) =>
+              u.path.endsWith('/get') &&
+              u.queryParameters.containsKey('duration'),
+          reply: (_) =>
+              const JsonOk({'syncedLyrics': '[00:15.54]LRCLIB 的词', 'plainLyrics': ''}),
+        ),
+      ]);
+      final result = await sourceWithNetease(client).match(query);
+      expect(result.status, 'ok');
+      expect(result.source, 'LRCLIB');
+      expect(result.synced, '[00:15.54]LRCLIB 的词');
+      expect(client.calls.every((u) => u.host == 'lrclib.net'), isTrue);
+    }
+  });
+
+  test('旧纪元的 LRCLIB 命中不再直接返回：网易云有词就换掉', () async {
+    await LyricsIndexCache(prefs).write(
+      query.key,
+      const LyricsRecord(
+        status: 'ok',
+        synced: '[00:01]旧词',
+        plain: '旧词',
+        source: 'LRCLIB',
+      ),
+    );
+
+    final client = RoutingClient([netEaseSearch, netEaseSong]);
+    final result = await sourceWithNetease(client).match(query);
+    expect(result.synced, '[00:15.54]如果那两个字没有颤抖');
+    expect(result.source, '网易云音乐');
+
+    // 新纪元已经写成网易云的词：再进来直接命中，不会退回旧词。
+    final again = await sourceWithNetease(
+      RoutingClient([(match: (_) => true, reply: (_) => const JsonTimeout())]),
+    ).match(query);
+    expect(again.synced, '[00:15.54]如果那两个字没有颤抖');
+    expect(again.source, '网易云音乐');
+  });
+
+  test('旧纪元的 LRCLIB 命中 + 四源都没词 → 拿旧词兜底，并转正到新纪元', () async {
+    await LyricsIndexCache(prefs).write(
+      query.key,
+      const LyricsRecord(
+        status: 'ok',
+        synced: '[00:01]旧词',
+        plain: '旧词',
+        source: 'LRCLIB',
+      ),
+    );
+
+    final client = RoutingClient([]); // 全部 404
+    final result = await sourceWithNetease(client).match(query);
+    expect(result.status, 'ok');
+    expect(result.synced, '[00:01]旧词');
+    expect(result.source, 'LRCLIB');
+
+    // 已转写到 v4：下次播放不再为同一首歌反复问上游。
+    final again = await sourceWithNetease(
+      RoutingClient([(match: (_) => true, reply: (_) => const JsonTimeout())]),
+    ).match(query);
+    expect(again.synced, '[00:01]旧词');
+  });
+
+  test('旧纪元的「未找到」不挡路：网易云能翻案', () async {
+    await LyricsIndexCache(prefs).write(
+      query.key,
+      const LyricsRecord(status: 'not-found', source: '缓存'),
+    );
+
+    final client = RoutingClient([netEaseSearch, netEaseSong]);
+    final result = await sourceWithNetease(client).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '网易云音乐');
+  });
+
+  // ---- 汽水 / 酷狗优先（2026-11-23） -----------------------------------
+
+  const qishuiRecord = LyricsRecord(
+    status: 'ok',
+    synced: '[00:01]汽水的词',
+    plain: '',
+    source: '汽水音乐',
+  );
+  const kugouRecord = LyricsRecord(
+    status: 'ok',
+    synced: '[00:01]酷狗的词',
+    plain: '',
+    source: '酷狗音乐',
+  );
+  const neteaseRecord = LyricsRecord(
+    status: 'ok',
+    synced: '[00:01]网易云的词',
+    plain: '',
+    source: '网易云音乐',
+  );
+
+  test('LRCLIB 没词 → 汽水命中，酷狗 / 网易云不碰', () async {
+    final client = RoutingClient([]);
+    final qishui = FakeProvider(qishuiRecord);
+    final kugou = FakeProvider(null);
+    final netease = FakeProvider(null);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '汽水音乐');
+    expect(client.calls.first.host, 'lrclib.net');
+    expect(qishui.calls, 1);
+    expect(kugou.calls, 0);
+    expect(netease.calls, 0);
+  });
+
+  test('LRCLIB / 汽水都没词 → 酷狗命中，网易云不碰', () async {
+    final client = RoutingClient([]);
+    final qishui = FakeProvider(null);
+    final kugou = FakeProvider(kugouRecord);
+    final netease = FakeProvider(null);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '酷狗音乐');
+    expect(client.calls.first.host, 'lrclib.net');
+    expect(qishui.calls, 1);
+    expect(kugou.calls, 1);
+    expect(netease.calls, 0);
+  });
+
+  test('LRCLIB / 汽水 / 酷狗都没词 → 网易云命中', () async {
+    final client = RoutingClient([]);
+    final qishui = FakeProvider(null);
+    final kugou = FakeProvider(null);
+    final netease = FakeProvider(neteaseRecord);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '网易云音乐');
+    expect(client.calls.first.host, 'lrclib.net');
+    expect(qishui.calls, 1);
+    expect(kugou.calls, 1);
+    expect(netease.calls, 1);
+  });
+
+  test('LRCLIB 优先：命中就不碰汽水 / 酷狗 / 网易云', () async {
+    final client = RoutingClient([
+      (
+        match: (u) => u.path.endsWith('/get'),
+        reply: (_) =>
+            const JsonOk({'syncedLyrics': '[00:01]LRCLIB 的词', 'plainLyrics': ''}),
+      ),
+    ]);
+    final qishui = FakeProvider(qishuiRecord);
+    final kugou = FakeProvider(kugouRecord);
+    final netease = FakeProvider(neteaseRecord);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, 'LRCLIB');
+    expect(result.synced, '[00:01]LRCLIB 的词');
+    expect(client.calls, isNotEmpty);
+    expect(qishui.calls, 0);
+    expect(kugou.calls, 0);
+    expect(netease.calls, 0);
+  });
+
+  test('LRCLIB 没词且三家都没词 → not-found', () async {
+    final client = RoutingClient([]);
+    final qishui = FakeProvider(null);
+    final kugou = FakeProvider(null);
+    final netease = FakeProvider(null);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'not-found');
+    expect(client.calls.first.host, 'lrclib.net');
+    expect(qishui.calls, 1);
+    expect(kugou.calls, 1);
+    expect(netease.calls, 1);
+  });
+
+  test('LRCLIB 报错但汽水命中 → 用汽水，错误不吞掉命中', () async {
+    final client = RoutingClient([
+      (match: (_) => true, reply: (_) => const JsonStatus(500)),
+    ]);
+    final qishui = FakeProvider(qishuiRecord);
+    final kugou = FakeProvider(null);
+    final netease = FakeProvider(null);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '汽水音乐');
+    expect(qishui.calls, 1);
+    expect(kugou.calls, 0);
+    expect(netease.calls, 0);
+  });
+
+  test('LRCLIB 报错且三家都没词 → error，不是 not-found', () async {
+    final client = RoutingClient([
+      (match: (_) => true, reply: (_) => const JsonStatus(500)),
+    ]);
+    final qishui = FakeProvider(null);
+    final kugou = FakeProvider(null);
+    final netease = FakeProvider(null);
+    final result = await sourceWithProviders(
+      client,
+      qishui: qishui,
+      kugou: kugou,
+      netease: netease,
+    ).match(query);
+    expect(result.status, 'error');
+    expect(result.message, isNotEmpty);
+    expect(qishui.calls, 1);
+    expect(kugou.calls, 1);
+    expect(netease.calls, 1);
+  });
+
+  test('v3 旧词只兜底：四源都没词才拿出来，并转正到 v4', () async {
+    await LyricsIndexCache(prefs).write(
+      legacyIndexKey(query.key),
+      const LyricsRecord(
+        status: 'ok',
+        synced: '[00:01]v3 旧词',
+        plain: 'v3 旧词',
+        source: '酷狗音乐',
+      ),
+    );
+    await LyricsIndexCache(prefs).write(
+      legacy2IndexKey(query.key),
+      const LyricsRecord(
+        status: 'ok',
+        synced: '[00:01]v2 旧词',
+        plain: 'v2 旧词',
+        source: '网易云音乐',
+      ),
+    );
+
+    final result = await sourceWithProviders(
+      RoutingClient([]),
+      qishui: FakeProvider(null),
+      kugou: FakeProvider(null),
+      netease: FakeProvider(null),
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.synced, '[00:01]v3 旧词');
+    expect(result.source, '酷狗音乐');
+    expect(
+      await LyricsIndexCache(prefs).read(epochIndexKey(query.key)),
+      isNotNull,
+    );
+  });
+
+  test('只有 v2 旧词也能兜底，并转正到 v4', () async {
+    await LyricsIndexCache(prefs).write(
+      legacy2IndexKey(query.key),
+      const LyricsRecord(
+        status: 'ok',
+        synced: '[00:01]v2 旧词',
+        plain: 'v2 旧词',
+        source: '网易云音乐',
+      ),
+    );
+
+    final result = await sourceWithProviders(
+      RoutingClient([]),
+      qishui: FakeProvider(null),
+      kugou: FakeProvider(null),
+      netease: FakeProvider(null),
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.synced, '[00:01]v2 旧词');
+    expect(result.source, '网易云音乐');
+    expect(
+      await LyricsIndexCache(prefs).read(epochIndexKey(query.key)),
+      isNotNull,
+    );
+  });
+
+  test('v3 旧词遇到汽水命中 → 换汽水的词，不返回旧词', () async {
+    await LyricsIndexCache(prefs).write(
+      legacyIndexKey(query.key),
+      const LyricsRecord(
+        status: 'ok',
+        synced: '[00:01]v3 旧词',
+        plain: 'v3 旧词',
+        source: '酷狗音乐',
+      ),
+    );
+
+    final result = await sourceWithProviders(
+      RoutingClient([]),
+      qishui: FakeProvider(qishuiRecord),
+      kugou: FakeProvider(null),
+      netease: FakeProvider(null),
+    ).match(query);
+    expect(result.synced, '[00:01]汽水的词');
+    expect(result.source, '汽水音乐');
+  });
+
+  test('v3 的「未找到」不挡汽水：仍会去问新源', () async {
+    await LyricsIndexCache(prefs).write(
+      legacyIndexKey(query.key),
+      const LyricsRecord(status: 'not-found', source: '缓存'),
+    );
+
+    final result = await sourceWithProviders(
+      RoutingClient([]),
+      qishui: FakeProvider(qishuiRecord),
+      kugou: FakeProvider(null),
+      netease: FakeProvider(null),
+    ).match(query);
+    expect(result.status, 'ok');
+    expect(result.source, '汽水音乐');
   });
 }

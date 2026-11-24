@@ -42,6 +42,14 @@ void main() {
       // ，．：；、。· 全在类里
       expect(normText('，．：；、。·'), '');
     });
+
+    test('繁→简：繁体写法与简体写法归一后全等', () {
+      // 网易云结果偶尔写成繁体（陳奕迅 / 吻別 / 完美主義），逐字比会误判「歌手对不上」
+      expect(normText('陳奕迅'), normText('陈奕迅'));
+      expect(normText('梁靜茹'), normText('梁静茹'));
+      expect(normText('吻別'), normText('吻别'));
+      expect(normText('完美主義'), normText('完美主义'));
+    });
   });
 
   group('coreTitle', () {

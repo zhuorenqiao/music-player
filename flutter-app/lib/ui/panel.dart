@@ -37,6 +37,7 @@ import '../library/recent_store.dart' show formatRelativeTime, kRecentLimit;
 import '../playback/track.dart';
 import '../state/cover_state.dart';
 import '../state/library_state.dart';
+import '../state/media_refresh_state.dart';
 import '../state/panel_controller.dart';
 import '../state/player_state.dart';
 import '../state/recent_state.dart';
@@ -102,6 +103,12 @@ class Panel extends StatelessWidget {
     final recent = context.watch<RecentState>();
     final tab = context.select<PanelController, PanelTab>((c) => c.tab);
     final controller = context.read<PanelController>();
+    // `busy` 走 select：整批刷新期间进度通知很密，但按钮只需要在这一个布尔
+    // 翻面时重建；其余通知交给 CoverState 自己按 5 首合并。
+    final refreshing = context.select<MediaRefreshState, bool>(
+      (state) => state.busy,
+    );
+    final mediaRefresh = context.read<MediaRefreshState>();
     final notice = player.circuitOpen || player.blockedMessage != null
         ? PanelNotice(
             message: player.circuitOpen
@@ -137,6 +144,9 @@ class Panel extends StatelessWidget {
         playlistCount: library.tracks.length,
         recentCount: recent.entries.length,
         onClose: onClose,
+        refreshing: refreshing,
+        canRefresh: library.tracks.isNotEmpty,
+        onRefresh: () => unawaited(mediaRefresh.refreshAll()),
       ),
       const SizedBox(height: 10),
       const _SearchBox(),
@@ -164,7 +174,10 @@ class Panel extends StatelessWidget {
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [...fixed, Expanded(child: body)],
+          children: [
+            ...fixed,
+            Expanded(child: body),
+          ],
         );
       },
     );
@@ -209,7 +222,7 @@ class Panel extends StatelessWidget {
   }
 }
 
-/// 表头：两颗 tab 共用一颗药丸容器（`.panel__tabs`）+ 可选的收起按钮。
+/// 表头：两颗 tab 共用一颗药丸容器（`.panel__tabs`）+ 重新获取 + 可选的收起按钮。
 ///
 /// 高度 38（30 的 tab + 上下 3 内边距 + 1 描边）：过滤 / 切 tab 都不许改变
 /// 这一行的高度（列表才是收缩的那一块）。
@@ -220,6 +233,9 @@ class _Header extends StatelessWidget {
     required this.playlistCount,
     required this.recentCount,
     this.onClose,
+    required this.onRefresh,
+    required this.refreshing,
+    required this.canRefresh,
   });
 
   final PanelTab tab;
@@ -229,6 +245,11 @@ class _Header extends StatelessWidget {
   final int playlistCount;
   final int recentCount;
   final VoidCallback? onClose;
+
+  /// 「重新获取封面与歌词」：恒在（桌面侧栏也有），列表为空时禁用。
+  final VoidCallback onRefresh;
+  final bool refreshing;
+  final bool canRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -266,8 +287,100 @@ class _Header extends StatelessWidget {
           ),
         ),
         const Spacer(),
-        if (onClose != null) _CloseButton(onClose: onClose!, tokens: tokens),
+        _RefreshButton(
+          onRefresh: onRefresh,
+          busy: refreshing,
+          enabled: canRefresh,
+          tokens: tokens,
+        ),
+        if (onClose != null) ...[
+          const SizedBox(width: 8),
+          _CloseButton(onClose: onClose!, tokens: tokens),
+        ],
       ],
+    );
+  }
+}
+
+/// 「重新获取封面与歌词」：28 的圆形热区（与收起同尺寸），busy 时图标自转。
+class _RefreshButton extends StatefulWidget {
+  const _RefreshButton({
+    required this.onRefresh,
+    required this.busy,
+    required this.enabled,
+    required this.tokens,
+  });
+
+  final VoidCallback onRefresh;
+  final bool busy;
+  final bool enabled;
+  final AppTokens tokens;
+
+  @override
+  State<_RefreshButton> createState() => _RefreshButtonState();
+}
+
+class _RefreshButtonState extends State<_RefreshButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.busy) _spin.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_RefreshButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.busy == oldWidget.busy) return;
+    if (widget.busy) {
+      _spin.repeat();
+    } else {
+      _spin.stop();
+      _spin.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.enabled && !widget.busy;
+    final color = enabled || widget.busy
+        ? widget.tokens.textDim
+        : widget.tokens.textDim.withValues(alpha: 0.4);
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: '重新获取全部歌曲的封面与歌词',
+      excludeSemantics: true,
+      onTap: enabled ? widget.onRefresh : null,
+      child: Tooltip(
+        message: '重新获取封面与歌词',
+        child: InkWell(
+          key: const Key('panel-refresh'),
+          onTap: enabled ? widget.onRefresh : null,
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: Center(
+              child: RotationTransition(
+                turns: _spin,
+                child: Icon(Icons.refresh, size: 16, color: color),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -641,10 +754,7 @@ class _PlaylistBodyState extends State<_PlaylistBody> {
     if (tracks.isEmpty) {
       // 两种空态：列表本来就没有歌 vs 搜索没命中（原版分开写文案）
       return library.tracks.isEmpty
-          ? const EmptyState(
-              title: '播放列表是空的',
-              hint: '点击「添加音乐」，或把音频文件拖到页面上',
-            )
+          ? const EmptyState(title: '播放列表是空的', hint: '点击「添加音乐」，或把音频文件拖到页面上')
           : EmptyState(
               title: '没有找到《${library.keyword.trim()}》',
               hint: '换个关键词试试',
@@ -676,31 +786,29 @@ class _PlaylistBodyState extends State<_PlaylistBody> {
               // M2b T10：在线匹配的封面进 resolver（matchedCovers 优先于
               // 内嵌 cover 是错的 —— 内嵌优先，见 CoverState 的一级判据；
               // 传内嵌路径进去由 resolver 统一裁）。
-            coverPath: cover.coverForDisplay(
-              cover: track.cover,
-              artist: track.artist,
-              title: track.title,
-              trackId: track.id,
-            ),
-            coverArtist: track.artist,
-            coverTitle: track.title,
-            active: library.currentId == track.id,
-            playing: widget.player.playing,
-            broken: track.broken,
-            onPlay: () => unawaited(widget.player.playTrack(track.id)),
-            onRemove: () => unawaited(library.removeTrack(track.id)),
-          );
-        },
+              coverPath: cover.coverForDisplay(
+                cover: track.cover,
+                artist: track.artist,
+                title: track.title,
+                trackId: track.id,
+              ),
+              coverArtist: track.artist,
+              coverTitle: track.title,
+              active: library.currentId == track.id,
+              playing: widget.player.playing,
+              broken: track.broken,
+              onPlay: () => unawaited(widget.player.playTrack(track.id)),
+              onRemove: () => unawaited(library.removeTrack(track.id)),
+            );
+          },
         ),
       ),
     );
   }
 
   /// 副行：`歌手 · 专辑`，缺哪段就少哪段（与原版 join(' · ') 一致）。
-  static String _artistLine(Track track) => [
-    track.artist,
-    track.album,
-  ].where((part) => part.isNotEmpty).join(' · ');
+  static String _artistLine(Track track) =>
+      [track.artist, track.album].where((part) => part.isNotEmpty).join(' · ');
 }
 
 /// 最近播放 tab：26 高的说明行 + 列表 / 空态。
@@ -784,10 +892,7 @@ class _RecentBodyState extends State<_RecentBody> {
           // 四种空态：没有记录 vs 关键词没命中（后者只在「有记录但都被滤掉」
           // 时出现，文案与播放列表的搜索空态逐字相同）
           child: entries.isEmpty
-              ? const EmptyState(
-                  title: '还没有播放记录',
-                  hint: '播放过的歌会自动出现在这里',
-                )
+              ? const EmptyState(title: '还没有播放记录', hint: '播放过的歌会自动出现在这里')
               : visible.isEmpty
               ? EmptyState(
                   title: '没有找到《${library.keyword.trim()}》',

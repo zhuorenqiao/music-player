@@ -16,6 +16,7 @@ import { matchCover } from '../lib/cover-source.js';
 import { matchArtistImage, normalizeArtistKey } from '../lib/artist-image.js';
 import { generatedCoverUrl } from '../lib/generated-cover.js';
 import { DEFAULT_COVER } from '../lib/demo-data.js';
+import { patchTrack as patchLocalRecord } from '../lib/local-store.js';
 import { isOnline } from '../lib/lyrics-source.js';
 import type { Track } from './types';
 
@@ -27,6 +28,17 @@ const photoListeners = new Set<() => void>();
 
 function notifyPhotoArrived(): void {
   photoListeners.forEach((notify) => notify());
+}
+
+/**
+ * 丢掉本次会话的歌手写真表（含「问过没有」的负缓存）。
+ *
+ * 只由「重新获取封面与歌词」调用：写真属于第三级兜底，长期留着的话，歌手后来
+ * 补上的照片永远回不来。清空后显示层会在下一次渲染时重新请求。
+ */
+export function clearArtistPhotos(): void {
+  artistPhotos.clear();
+  notifyPhotoArrived();
 }
 
 /** 这首歌是否还需要在线匹配封面。 */
@@ -79,6 +91,14 @@ export function CoverProvider({ children }: { children: ReactNode }) {
       return;
     }
     track.cover = url;
+    /**
+     * 写回 IndexedDB：在线匹配到的封面之前只活在内存里，重启后 needsCoverMatch
+     * 又会把它当成「没有封面」，于是列表里的图要等下一次预取才回来。
+     * 内嵌封面走的是 tagging.ts 自己的落库，这里补的是在线图这一路。
+     */
+    if (track.isLocal) {
+      void patchLocalRecord(track.id, { cover: url });
+    }
     forceRender((value) => value + 1);
   }, []);
 
@@ -168,6 +188,10 @@ export async function prefetchCovers(tracks: Track[]): Promise<void> {
     void matchCover(track).then((result: { status: string; url?: string }) => {
       if (result.status === 'ok' && result.url) {
         track.cover = result.url;
+        // 预取命中同样要落库：否则重启后这批图又变回生成卡
+        if (track.isLocal) {
+          void patchLocalRecord(track.id, { cover: result.url });
+        }
         notifyPhotoArrived();
       }
     }).catch(() => undefined);

@@ -21,8 +21,10 @@
 //（track.dart:131）、导入回填判重（import_service.dart:311）与自愈谓词
 //（import_service.dart:593-611）都依赖「cover == 内嵌封面路径」不变量。
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart' show FileImage;
 
 import '../cover/artist_image.dart';
 import '../cover/cover_disk_cache.dart';
@@ -233,7 +235,11 @@ class CoverState extends ChangeNotifier {
         // prefetchCovers 用 needsCoverMatch(track) 查 track.cover）。
         try {
           final match = await matchCover(
-            (title: track.title, artist: track.artist, duration: track.duration),
+            (
+              title: track.title,
+              artist: track.artist,
+              duration: track.duration,
+            ),
             json: json,
             bytes: bytes,
             diskStore: diskStore,
@@ -251,6 +257,72 @@ class CoverState extends ChangeNotifier {
     } finally {
       // 中途抛也要把已经写进去的那些通知出去，否则界面停在旧封面上。
       if (changed) notifyListeners();
+    }
+  }
+
+  /// 用户主动的「重新获取所有封面」：对整批曲目强制绕过索引重查。
+  ///
+  /// 和 [prefetchCovers] 的差别：
+  /// * `useCache: false` —— 不信索引，直接再问 iTunes（索引随后被新结果覆盖）；
+  /// * 不只处理「没匹配过」的，已有 `_matched` 的也会重查并覆盖；
+  /// * 失败时**保留**现有 `_matched`，不把已经显示的封面弄丢；
+  /// * 同一路径重写磁盘后立刻从 Flutter 图片缓存里踢掉，否则界面还拿着旧
+  ///   解码结果，看起来「点了没反应」。
+  ///
+  /// 通知按 5 首合并一次（同 prefetchCovers 的整树重建理由），进度通过
+  /// [onMatched] 走状态机自己的 notify，不牵动整个面板。
+  Future<int> refreshAllCovers(
+    List<CoverPrefetchItem> tracks, {
+    void Function(int done)? onMatched,
+  }) async {
+    if (!_isOnline()) return 0;
+    var done = 0;
+    var changed = false;
+    try {
+      for (final track in tracks) {
+        try {
+          final match = await matchCover(
+            (
+              title: track.title,
+              artist: track.artist,
+              duration: track.duration,
+            ),
+            json: json,
+            bytes: bytes,
+            diskStore: diskStore,
+            index: coverIndex,
+            useCache: false,
+          );
+          if (match.status == 'ok' && (match.url?.isNotEmpty ?? false)) {
+            final path = match.url!;
+            changed = _matched[track.trackId] != path || changed;
+            _matched[track.trackId] = path;
+            await _evictCoverImage(path);
+            done += 1;
+            onMatched?.call(done);
+            if (changed && done % 5 == 0) {
+              changed = false;
+              notifyListeners();
+            }
+          }
+        } catch (_) {
+          // 单条失败继续，整批刷新不因为一首歌中断。
+        }
+        await _sleep(const Duration(milliseconds: kCoverPrefetchDelayMs));
+      }
+    } finally {
+      if (changed) notifyListeners();
+    }
+    return done;
+  }
+
+  /// 把某个封面文件从图片缓存里移除：重刷后路径通常不变（索引按查询键命名），
+  /// 不踢缓存的话 `Image.file` 会继续拿旧解码结果。
+  Future<void> _evictCoverImage(String path) async {
+    try {
+      await FileImage(File(path)).evict();
+    } catch (_) {
+      // 文件不存在 / 没有图片缓存时无所谓。
     }
   }
 

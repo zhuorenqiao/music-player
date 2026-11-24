@@ -85,6 +85,8 @@ export function normalizeTrack(raw) {
       : '',
     // 歌词来源：auto = 自动匹配，manual = 手动指定，空 = 内置数据
     lyricsSource: raw.lyricsSource === 'auto' || raw.lyricsSource === 'manual' ? raw.lyricsSource : '',
+    // 自动匹配的线上来源：qishui / kugou / netease / lrclib；老数据没有这个字段 → 空串
+    lyricsOrigin: ['qishui', 'kugou', 'netease', 'lrclib'].includes(raw.lyricsOrigin) ? raw.lyricsOrigin : '',
   };
 }
 

@@ -15,7 +15,7 @@
  */
 
 import { parseLRC } from './lyrics.js';
-import { normalizeQuery, isOnline } from './lyrics-source.js';
+import { normalizeQuery, foldQuery, isOnline } from './lyrics-source.js';
 
 /** 同源代理地址。 */
 const LOCAL_PROXY = 'api/translate';
@@ -339,7 +339,8 @@ async function machineTranslate(lines, signal) {
  * @returns {Promise<{status: string, translatedLyrics?: string, translatedLines?: string[], originalLyrics?: string, source?: string, machine?: boolean, reason?: string, message?: string}>}
  */
 export async function fetchTranslation(track, { signal, useCache = true, lines = [] } = {}) {
-  const query = normalizeQuery(track);
+  // 网易云同样不认繁简：标签里的繁体歌手会直接搜不到（与歌词同一条根因）
+  const query = foldQuery(normalizeQuery(track));
   if (!query.trackName) {
     return { status: 'empty-query' };
   }

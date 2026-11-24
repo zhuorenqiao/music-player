@@ -240,6 +240,9 @@ class ManualLyrics {
       target.lyrics = read.text;
       target.lyricsPlain = '';
       target.lyricsSource = 'manual';
+      // 手动歌词没有线上来源：清掉上次自动匹配留下的来源 id，
+      // 否则状态行会先显示「已使用手动指定的歌词」，重开后又变成别的来源。
+      target.lyricsOrigin = '';
       matched += 1;
 
       toasts.show(

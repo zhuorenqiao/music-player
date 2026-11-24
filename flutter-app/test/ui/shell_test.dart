@@ -118,7 +118,7 @@ void main() {
     expect(stage.top, closeTo(0, 0.5));
   });
 
-  testWidgets('窄屏简约模式：顶栏浮在卡片右上角内侧 16px / 10px', (tester) async {
+  testWidgets('窄屏简约模式：顶栏浮在卡片右上角内侧 12px / 10px', (tester) async {
     await pumpAt(tester, 420, 800);
 
     final header = tester.getRect(find.byKey(const Key('header')));
@@ -126,11 +126,11 @@ void main() {
 
     // `body:not(.is-lyrics-page) .app__header,
     //  body.is-lyrics-page .app__header { position: absolute;
-    //  top: 28px; right: 0; padding: 0 10px }`：
-    // 测试视口没有安全区，顶栏 top = 安全区 + 16 = 16（与电台页右上角两颗
-    // 同一条水平线，那边也是 16）；右侧 10px 由顶栏自己的左右内边距给出 ——
-    // 不占流、叠在卡片右上角。
-    expect(header.top, closeTo(16, 0.5));
+    //  top: 12px; right: 0; padding: 0 10px }`：
+    // 测试视口没有安全区，顶栏 top = 安全区 + 12 = 12（按钮 32 高 → 图标中心 28，
+    // 与电台页 / 休眠页右上角那几颗同一条水平线）；右侧 10px 由顶栏自己的
+    // 左右内边距给出 —— 不占流、叠在卡片右上角。
+    expect(header.top, closeTo(12, 0.5));
     expect(header.right, closeTo(420 - 10, 0.5));
     // 卡片已经跟着铺满，从视口左上角开始
     expect(stage.top, closeTo(0, 0.5));
@@ -158,9 +158,9 @@ void main() {
     final header = tester.getRect(find.byKey(const Key('header')));
     final overlay = tester.getRect(find.byKey(const Key('overlay')));
 
-    // 两种模式共用同一条 `Positioned(top: 安全区 + 16, right: 10)`：切模式时
+    // 两种模式共用同一条 `Positioned(top: 安全区 + 12, right: 10)`：切模式时
     // 「电台 / 更多」不再上下跳（从前歌词页顶栏在流内，位置是 10 + 32 + 14 间距）。
-    expect(header.top, closeTo(16, 0.5));
+    expect(header.top, closeTo(12, 0.5));
     expect(header.right, closeTo(420 - 10, 0.5));
     // 顶栏不再占流：歌词卡直接铺到屏幕顶边
     expect(overlay.top, closeTo(0, 0.5));
@@ -186,8 +186,8 @@ void main() {
     // 内容按 insets 内缩，不钻到系统栏下面
     expect(stage.top, closeTo(32, 0.5));
     expect(transport.bottom, closeTo(800 - 20, 0.5));
-    // 顶栏 = 安全区 + 16（与电台页右上角两颗同一条水平线）
-    expect(header.top, closeTo(48, 0.5));
+    // 顶栏 = 安全区 + 12（与电台页 / 休眠页右上角那几颗同一条水平线）
+    expect(header.top, closeTo(44, 0.5));
   });
 
   testWidgets('900 断点两侧列数不同', (tester) async {

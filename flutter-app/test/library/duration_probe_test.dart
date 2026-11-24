@@ -8,11 +8,40 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:light_music/library/audio_info_duration_opener.dart';
 import 'package:light_music/library/duration_probe.dart';
 
 void main() {
   test('预算默认 3000ms，与原版 DURATION_PROBE_TIMEOUT 同值', () {
     expect(kDurationProbeTimeoutMs, 3000);
+  });
+
+  test('容器头有时长就用它，不必再开 media_kit', () async {
+    var fallbackCalls = 0;
+    final opener = AudioInfoDurationOpener((source) async {
+      fallbackCalls += 1;
+      return 300.0;
+    }, audioInfo: (source) async => 187.5);
+
+    expect(await opener('/m/a.flac'), 187.5);
+    expect(fallbackCalls, 0, reason: '主路径已经给出正数，兜底一次都不该开');
+  });
+
+  test('容器头读不出 / 抛错时退回 media_kit', () async {
+    for (final broken in <Future<double> Function(String)>[
+      (source) async => double.nan,
+      (source) async => 0,
+      (source) async => throw StateError('unsupported container'),
+    ]) {
+      var fallbackCalls = 0;
+      final opener = AudioInfoDurationOpener((source) async {
+        fallbackCalls += 1;
+        return 300.0;
+      }, audioInfo: broken);
+
+      expect(await opener('/m/a.flac'), 300.0);
+      expect(fallbackCalls, 1);
+    }
   });
 
   test('探到正值就用；非有限 / 0 / 负数一律归成 NaN', () async {
@@ -65,15 +94,12 @@ void main() {
 
   test('一条超时或抛错不会卡住后面的探测', () async {
     var index = 0;
-    final probe = DurationProbe(
-      (source) async {
-        index += 1;
-        if (index == 1) throw StateError('boom');
-        if (index == 2) return Completer<double>().future; // 永不返回 → 超时
-        return 66;
-      },
-      timeoutMs: 20,
-    );
+    final probe = DurationProbe((source) async {
+      index += 1;
+      if (index == 1) throw StateError('boom');
+      if (index == 2) return Completer<double>().future; // 永不返回 → 超时
+      return 66;
+    }, timeoutMs: 20);
 
     expect(await probe('1'), isNaN);
     expect(await probe('2'), isNaN);
@@ -86,14 +112,11 @@ void main() {
   test('close 排到队列尾部：在飞的探测先跑完，之后一律 NaN 且只关一次', () async {
     var closes = 0;
     var opens = 0;
-    final probe = DurationProbe(
-      (source) async {
-        opens += 1;
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        return 100;
-      },
-      closeOpener: () async => closes++,
-    );
+    final probe = DurationProbe((source) async {
+      opens += 1;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      return 100;
+    }, closeOpener: () async => closes++);
 
     final first = probe('/m/a.flac');
     final closing = probe.close();

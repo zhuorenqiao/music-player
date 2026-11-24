@@ -10,6 +10,7 @@
 //   - 扫描只读不写，目录不存在 / 读不了时交回空列表而不是抛出去：导入是
 //     用户点的按钮，选择器给的路径可能已经失效，不该整页崩掉。
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:path/path.dart' as p;
 
@@ -140,47 +141,105 @@ int _compareCodePoints(String a, String b) {
 
 /// 扫一个目录下的音频文件，默认递归。
 ///
-/// - 隐藏项一律跳过：相对于 [root] 的路径里任何一段以 `.` 开头都算
-///   （`.git`、`.cache` 这类目录，以及 `.DS_Store` 这类文件）；
+/// - 隐藏项一律跳过：任何一段名字以 `.` 开头的文件 / 目录都不进入结果，
+///   隐藏目录**直接剪枝不下钻**（`.git`、`node_modules/.cache` 这类树本来
+///   就不可能有歌，扫进去只会白读几万个目录项）；
 /// - 只收白名单扩展名（[isSupportedExtension]）；
 /// - 符号链接一律跳过，文件和目录都算：`followLinks: false` 下链接以
-///   [Link] 出现，被下面的 `is File` 一并过滤，不会绕回来把同一批文件扫两遍。
-///   这是已知限制而非疏漏——Android 的 SAF 路径（content://）根本不暴露符号
-///   链接，桌面端把音乐库摆在符号链接目录下又是极少见用法，为它承担「同一首
-///   歌出现两次 / 成环」的风险不划算；
-/// - 目录不存在或读不了：返回已扫到的部分（通常是空），不抛异常；
+///   [Link] 出现，既不是 [File] 也不是 [Directory]，不会绕回来把同一批文件
+///   扫两遍。这是已知限制而非疏漏——Android 的 SAF 路径（content://）根本
+///   不暴露符号链接，桌面端把音乐库摆在符号链接目录下又是极少见用法，为它
+///   承担「同一首歌出现两次 / 成环」的风险不划算；
+/// - 目录不存在或读不了：返回已扫到的部分（通常是空），不抛异常；某个子目录
+///   读不了只跳过那个子树，不再像以前那样让整次枚举提前收工；
 /// - [maxFiles] 是硬上限，但截断发生在**自然排序之后**：先把整个目录枚举成
 ///   路径列表，排好序再取前 [maxFiles] 个。不在枚举途中提前 break，是因为
 ///   留哪几个不能由文件系统的枚举顺序决定——NTFS 大致按字典序、ext4 常常
 ///   是哈希序，提前停会让桌面和 Android 留下不同的歌，再被自然排序排成一份
 ///   看着合理的列表。代价是超大目录要全部枚举一遍（只存路径，不读文件内容）。
+///
+/// **必须在后台 isolate 里跑**（这是「添加大文件夹卡死」的根因之一）：递归
+/// 枚举几十万个目录项时，`Directory.list` 的流事件与逐项字符串处理都发生在
+/// 调用方 isolate；在主 isolate 上就是整页 UI 掉帧、安卓上直接 ANR。这里把
+/// 整个「枚举 + 过滤 + 自然排序」丢给 [Isolate.run]，主 isolate 只等一份
+/// 路径列表回来，扫多久界面都不掉帧。返回值是纯 `List<String>`（可跨 isolate
+/// 传递），[ScannedAudio] 在调用方这侧再组装。
 Future<List<ScannedAudio>> scanAudioDirectory(
   String root, {
   int maxFiles = 2000,
   bool recursive = true,
 }) async {
   if (maxFiles <= 0) return const [];
-  final found = <String>[];
+  List<String> paths;
   try {
-    final dir = Directory(root);
-    if (!await dir.exists()) return const [];
-    await for (final entity in dir.list(
+    paths = await Isolate.run(
+      () => _scanAudioPathsSync(
+        root,
+        maxFiles: maxFiles,
+        recursive: recursive,
+      ),
+    );
+  } catch (_) {
+    // isolate 起不来 / 传输失败（极端内存压力）：退回主 isolate 直接扫。
+    // 这一趟会卡一下界面，但好过把「扫不到」误报成「这个目录里没有可播放的
+    // 音频文件」——用户会以为文件夹白选了。扫描本身仍不读文件内容，内存占用
+    // 只有路径列表。
+    paths = _scanAudioPathsSync(
+      root,
+      maxFiles: maxFiles,
       recursive: recursive,
-      followLinks: false,
-    )) {
-      if (entity is! File) continue;
-      if (_hasHiddenSegment(entity.path, root)) continue;
-      if (!_isAudioPath(entity.path)) continue;
-      found.add(entity.path);
-    }
-  } on FileSystemException {
-    // 权限不足 / 目录在枚举途中被删：把已经扫到的交出去，导入流程继续跑。
+    );
   }
   return [
-    for (final path in naturalSort(found).take(maxFiles))
-      ScannedAudio(path, p.basename(path)),
+    for (final path in paths) ScannedAudio(path, p.basename(path)),
   ];
 }
 
-bool _hasHiddenSegment(String path, String root) =>
-    p.split(p.relative(path, from: root)).any((seg) => seg.startsWith('.'));
+/// [scanAudioDirectory] 的 isolate 侧实现：同步枚举，返回已排序截断的路径。
+///
+/// 同步 API 在这里是可接受的：它跑在独立 isolate 里，阻塞的只是那一条线程，
+/// 主 isolate 的 UI 完全不受影响。逐层 `listSync` 而不是
+/// `Directory.list(recursive: true)` 是为了能在**进入隐藏目录之前**剪枝。
+List<String> _scanAudioPathsSync(
+  String root, {
+  required int maxFiles,
+  required bool recursive,
+}) {
+  final found = <String>[];
+  try {
+    final dir = Directory(root);
+    if (!dir.existsSync()) return const [];
+    if (!recursive) {
+      for (final entity in dir.listSync(followLinks: false)) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path);
+        if (name.startsWith('.')) continue;
+        if (_isAudioPath(entity.path)) found.add(entity.path);
+      }
+    } else {
+      final pending = <Directory>[dir];
+      while (pending.isNotEmpty) {
+        final current = pending.removeLast();
+        final List<FileSystemEntity> entries;
+        try {
+          entries = current.listSync(followLinks: false);
+        } on FileSystemException {
+          // 权限不足 / 目录在枚举途中被删：跳过这一棵子树，其余照扫。
+          continue;
+        }
+        for (final entity in entries) {
+          final name = p.basename(entity.path);
+          if (name.startsWith('.')) continue;
+          if (entity is File) {
+            if (_isAudioPath(entity.path)) found.add(entity.path);
+          } else if (entity is Directory) {
+            pending.add(entity);
+          }
+        }
+      }
+    }
+  } on FileSystemException {
+    // 根目录本身都读不了：交回已经扫到的（通常为空）。
+  }
+  return naturalSort(found).take(maxFiles).toList();
+}

@@ -30,6 +30,15 @@ final RegExp _noiseBracket = RegExp(
   caseSensitive: false,
 );
 
+/// 尾部、不带括号的噪声标签（与 React `TITLE_TAIL_NOISE` 同表）。
+///
+/// 只认中文标记：`Live` / `Remix` 这类英文词裸剥会误伤 `Live Forever`，
+/// 它们只在括号里才算噪声。`伴奏` 本身不会被剥成空串。
+final RegExp _tailNoise = RegExp(
+  r'(?:[\s\-_·|/–—－]+)?(?:伴奏音乐|伴奏版|纯伴奏|消音伴奏|伴奏|纯音乐版|纯音乐|高音质|无损|完整版|超清|动态歌词|原唱|翻唱|官方版|正式版|试听版)$',
+  caseSensitive: false,
+);
+
 /// 连续空白折叠成单个空格（lyrics-source.js:102，/g）。
 final RegExp _multiSpace = RegExp(r'\s{2,}');
 
@@ -44,6 +53,17 @@ String cleanTitle(String title) {
   var value = title.trim();
   value = value.replaceFirst(_trackNo, '');
   value = value.replaceAll(_noiseBracket, '');
+  // 尾部无括号标签可叠加（`Catherine 伴奏 完整版`），最多三轮。
+  for (var i = 0; i < 3; i += 1) {
+    final next = value
+        .replaceFirst(_tailNoise, '')
+        .replaceFirst(_tailJunk, '')
+        .trim();
+    if (next == value || next.isEmpty) {
+      break;
+    }
+    value = next;
+  }
   value = value.replaceAll(_multiSpace, ' ');
   return value.replaceFirst(_tailJunk, '').trim();
 }

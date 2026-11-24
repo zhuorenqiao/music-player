@@ -11,7 +11,8 @@ import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
 import 'package:light_music/playback/transport_controller.dart';
 
-Track t(String id) => Track(id: id, src: '/$id.flac', title: '歌$id', duration: 100);
+Track t(String id) =>
+    Track(id: id, src: '/$id.flac', title: '歌$id', duration: 100);
 
 /// 广播流是异步投递：等两轮事件循环，让「驱动事件 -> AudioPlayer -> 控制器」跑完。
 Future<void> settle() async {
@@ -230,18 +231,28 @@ void main() {
 
       // next(auto: true) 在单曲循环下返回当前索引：重开同一首，而不是第 2 首
       expect(c.current!.id, '1');
-      expect(
-        driver.calls.where((call) => call.startsWith('open:')).toList(),
-        ['open:/1.flac'],
-      );
+      expect(driver.calls.where((call) => call.startsWith('open:')).toList(), [
+        'open:/1.flac',
+      ]);
     });
   });
 
-  group('上一首的三秒规则', () {
-    test('已播放超过 3 秒回到本曲开头，否则切上一曲', () async {
+  // 2026-11-23：用户报「有的时候按上一曲、下一曲切歌时，没有正常切其他歌曲，
+  // 而又是从头开始播放」。两条根因分别钉在两层：
+  //   ① 「上一首」的 3 秒规则（播过 3 秒就回本曲开头而不是换歌）—— 本文件；
+  //   ② 换源瞬间上一首的 completed 电平残留（media_kit 的 `completed` 是 mpv
+  //      `eof-reached` 的影子，open 不复位），会把刚切到的那首再跳一次 ——
+  //      驱动层 `MediaKitDriver.isSettledCompletion`，见
+  //      test/playback/media_kit_driver_filter_test.dart。
+  group('上一首 = 换歌', () {
+    test('播过 10 秒再按上一首，照样切上一首（不再 seek 回 0）', () async {
       final driver = FakeAudioDriver();
       final c = build(
-        playlist: Playlist.fromTracks([t('1'), t('2'), t('3')], currentIndex: 1),
+        playlist: Playlist.fromTracks([
+          t('1'),
+          t('2'),
+          t('3'),
+        ], currentIndex: 1),
         driver: driver,
       );
 
@@ -251,17 +262,14 @@ void main() {
       driver.emitPosition(10);
       await settle();
       await c.previous();
-      expect(c.current!.id, '2');
-      expect(driver.calls.last, 'seek:0.0');
+      await settle();
 
-      driver.emitPosition(1);
-      await settle();
-      await c.previous();
-      await settle();
       expect(c.current!.id, '1');
+      expect(driver.calls, isNot(contains('seek:0.0')));
+      expect(c.view.value.current!.id, '1');
     });
 
-    test('刚好 3 秒不算「超过」，按切上一首处理', () async {
+    test('刚好 3 秒、1 秒都是切上一首（没有阈值分支）', () async {
       final driver = FakeAudioDriver();
       final c = build(
         playlist: Playlist.fromTracks([t('1'), t('2')], currentIndex: 1),
@@ -276,6 +284,21 @@ void main() {
       await c.previous();
       await settle();
       expect(c.current!.id, '1');
+    });
+
+    test('上一首在列表首项回绕到末项（与下一首对称）', () async {
+      final driver = FakeAudioDriver();
+      final c = build(
+        playlist: Playlist.fromTracks([t('1'), t('2'), t('3')], currentIndex: 0),
+        driver: driver,
+      );
+
+      await c.playTrack('1');
+      await settle();
+      await c.previous();
+      await settle();
+
+      expect(c.current!.id, '3');
     });
   });
 
@@ -298,11 +321,10 @@ void main() {
       expect(c.consecutiveFailures, 1);
       expect(clock.scheduledMs, [1400]);
       expect(clock.pendingCount, 1);
-      // 提示要带曲名，且用逐字文案
-      expect(
-        toasts.messages,
-        ['${errorMessageFor(PlayErrorKind.decode)}（歌1）[broken-1]'],
-      );
+      // 提示要带曲名：曲名用「」括住，别和错误文案混成一句（如「（對不起）」）
+      expect(toasts.messages, [
+        '「歌1」${errorMessageFor(PlayErrorKind.decode)}[broken-1]',
+      ]);
 
       clock.flush();
       await settle();
@@ -311,6 +333,26 @@ void main() {
       expect(c.view.value.current!.id, '2');
       // 第二首正常可播：canplay 是唯一的清零时机
       expect(c.consecutiveFailures, 0);
+    });
+
+    test('未知错误的曲名用「」包住，不拼成「（對不起）」那种道歉句', () async {
+      final clock = FakeClock();
+      final driver = FakeAudioDriver()..failNext(kind: PlayErrorKind.unknown);
+      final toasts = RecordingToasts();
+      final c = buildWithClock(
+        playlist: Playlist.fromTracks([
+          Track(id: '1', src: '/sorry.mp3', title: '對不起', duration: 238),
+          t('2'),
+        ]),
+        driver: driver,
+        clock: clock,
+        toasts: toasts,
+      );
+
+      await c.playTrack('1');
+      await settle();
+
+      expect(toasts.messages, ['「對不起」音频播放失败[broken-1]']);
     });
 
     test('canplay 摘掉非致命错误误打的角标（歌能播就不是坏档）', () async {
@@ -541,10 +583,7 @@ void main() {
 
     test('位置推进不触发 view 通知（进度走独立 notifier）', () async {
       final driver = FakeAudioDriver();
-      final c = build(
-        playlist: Playlist.fromTracks([t('1')]),
-        driver: driver,
-      );
+      final c = build(playlist: Playlist.fromTracks([t('1')]), driver: driver);
 
       await c.playTrack('1');
       await settle();
@@ -562,10 +601,7 @@ void main() {
 
     test('buffered / duration 同步到独立 notifier', () async {
       final driver = FakeAudioDriver();
-      final c = build(
-        playlist: Playlist.fromTracks([t('1')]),
-        driver: driver,
-      );
+      final c = build(playlist: Playlist.fromTracks([t('1')]), driver: driver);
 
       await c.playTrack('1');
       await settle();
@@ -652,9 +688,7 @@ void main() {
       await settle();
       expect(driver.calls, isEmpty);
       expect(
-        toasts.errors.where(
-          (message) => message == '仍无法自动恢复播放，请点击播放按钮',
-        ),
+        toasts.errors.where((message) => message == '仍无法自动恢复播放，请点击播放按钮'),
         hasLength(1),
         reason: '放弃只该说一句，之后每次点击再喊就成了刷屏',
       );
@@ -694,10 +728,7 @@ void main() {
 
     test('没有被拦时 userGesture 不动播放器', () async {
       final driver = FakeAudioDriver();
-      final c = build(
-        playlist: Playlist.fromTracks([t('1')]),
-        driver: driver,
-      );
+      final c = build(playlist: Playlist.fromTracks([t('1')]), driver: driver);
 
       await c.playTrack('1');
       await settle();
@@ -713,10 +744,7 @@ void main() {
   group('播放控制透传', () {
     test('togglePlay 暂停后原位恢复，seek/volume 走驱动', () async {
       final driver = FakeAudioDriver();
-      final c = build(
-        playlist: Playlist.fromTracks([t('1')]),
-        driver: driver,
-      );
+      final c = build(playlist: Playlist.fromTracks([t('1')]), driver: driver);
 
       await c.playTrack('1');
       await settle();
@@ -842,11 +870,7 @@ void main() {
         ..duration = 213;
       c.syncView();
 
-      expect(
-        notifications,
-        1,
-        reason: '展示字段变了却不通知，界面就停在旧标签上（与 C1 叠加最明显）',
-      );
+      expect(notifications, 1, reason: '展示字段变了却不通知，界面就停在旧标签上（与 C1 叠加最明显）');
       final after = c.view.value;
       expect(after.current!.title, '岁月如歌');
       expect(after, isNot(before), reason: '两份视图必须判为不相等');

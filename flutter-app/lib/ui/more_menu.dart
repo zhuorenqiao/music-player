@@ -36,7 +36,7 @@ class MoreMenu extends StatelessWidget {
   final Future<void> Function()? onAddFolder;
   final Future<void> Function()? onClearPlaylist;
 
-  /// 是否展示添加音乐 / 添加整个文件夹 / 清空播放列表。
+  /// 是否展示「添加音乐 / 清空播放列表」。
   /// 电台页传 false：那页只留「换肤」。
   final bool showLibraryActions;
 

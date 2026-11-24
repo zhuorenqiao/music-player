@@ -13,7 +13,7 @@ const Map<PlayErrorKind, String> kPlayErrorMessages = {
   PlayErrorKind.network: '网络错误，无法获取音频文件',
   PlayErrorKind.decode: '音频解码失败，文件可能已损坏',
   PlayErrorKind.unsupported: '格式不支持或音频文件不存在',
-  PlayErrorKind.unknown: '音频播放失败，请稍后重试',
+  PlayErrorKind.unknown: '音频播放失败',
 };
 
 /// 原版是「浏览器阻止了自动播放」；Flutter 侧对应音频焦点被抢（spec §4）。

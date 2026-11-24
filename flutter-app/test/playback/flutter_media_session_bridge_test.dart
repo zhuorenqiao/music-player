@@ -150,6 +150,30 @@ void main() {
       expect(actionsFor(const PublishedSnapshot()), isEmpty);
     });
 
+    test('电台快照只给播放 / 暂停 / 关闭：直播没有上下曲与进度', () {
+      const radio = PublishedSnapshot(
+        kind: MediaKind.radio,
+        title: '国际新闻',
+        artist: '资讯 · 网络台 · 直播',
+        live: true,
+        playing: true,
+      );
+      expect(actionsFor(radio), ['play', 'pause', 'stop']);
+      expect(
+        mediaActionsFor(radio),
+        [
+          fms.MediaAction.play,
+          fms.MediaAction.pause,
+          fms.MediaAction.stop,
+        ],
+      );
+      expect(
+        mediaActionsFor(radio),
+        isNot(contains(fms.MediaAction.skipToNext)),
+      );
+      expect(mediaActionsFor(radio), isNot(contains(fms.MediaAction.seekTo)));
+    });
+
     test('动作集合翻成包认的动作名：上下曲是 skipToNext / skipToPrevious', () {
       const known = PublishedSnapshot(
         title: 'A',

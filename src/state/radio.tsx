@@ -43,6 +43,8 @@ interface RadioContextValue {
   isLive: (station: RadioStation) => boolean;
   tune: (station: RadioStation) => void;
   toggle: () => void;
+  /** 无条件往「暂停」走（不看当前在不在响；保留当前台） */
+  pause: () => void;
   stop: () => void;
   /** 用户可读的错误文案（内核原文不进界面） */
   errorMessage: string;
@@ -352,6 +354,28 @@ export function RadioProvider({ children }: { children: ReactNode }) {
     tune(station);
   }, [current, tune]);
 
+  /**
+   * 无条件暂停（保留当前台，迷你条显示「已暂停」）。
+   *
+   * 与 [toggle] 的区别：这个不看当前在不在响，也不会把暂停翻成续播 ——
+   * 睡眠定时器到点、用户在音乐页按下播放，都需要电台无条件让位，
+   * 不能因为状态晚到一拍而反过来把音乐切了。
+   *
+   * 重连／卡死看门狗一并取消：定时结束时电台正处在「等下一次重连」的空档，
+   * 少了这一步，它到点后还会自己接回来重新出声。
+   */
+  const pause = useCallback(() => {
+    const audio = audioRef.current;
+    userPausedRef.current = true;
+    clearReconnectTimer();
+    if (audio && !audio.paused) {
+      audio.pause();
+    }
+    // 元素已经停住时不会补发 pause 事件，这里把两个状态一起落定
+    setPlaying(false);
+    setLoading(false);
+  }, [clearReconnectTimer]);
+
   const stop = useCallback(() => {
     const audio = audioRef.current;
     clearReconnectTimer();
@@ -385,13 +409,11 @@ export function RadioProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     if (!musicPlaying) return;
-    const audio = audioRef.current;
     // 让位是用户侧的决定（他刚在音乐页按了播放）：断流重连不许把它推翻，
     // 否则「音乐开声 → 电台暂停 → 重连把音乐又挤停」就成了一段死循环。
-    userPausedRef.current = true;
-    clearReconnectTimer();
-    if (audio && !audio.paused) audio.pause();
-  }, [clearReconnectTimer, musicPlaying]);
+    // pause() 里已经置了 userPausedRef 并清掉重连，这里不必再写一遍。
+    pause();
+  }, [musicPlaying, pause]);
 
   /**
    * 回来的时候自己看一眼。
@@ -434,9 +456,10 @@ export function RadioProvider({ children }: { children: ReactNode }) {
     isLive,
     tune,
     toggle,
+    pause,
     stop,
     errorMessage: error ? '这台暂时连不上，换一台试试' : '',
-  }), [current, error, isLive, loading, playing, reconnecting, stop, toggle, tune]);
+  }), [current, error, isLive, loading, pause, playing, reconnecting, stop, toggle, tune]);
 
   return <RadioContext.Provider value={value}>{children}</RadioContext.Provider>;
 }

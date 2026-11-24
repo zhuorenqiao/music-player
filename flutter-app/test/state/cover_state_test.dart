@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:light_music/core/app_prefs.dart';
 import 'package:light_music/cover/cover_disk_cache.dart';
 import 'package:light_music/cover/cover_source.dart';
 import 'package:light_music/lyrics/upstream.dart';
@@ -417,6 +418,59 @@ void main() {
       );
       expect(state.matchedPathFor('t1'), isNotNull);
       expect(state.matchedPathFor('t2'), isNotNull);
+    });
+    test('refreshAllCovers 强制绕过索引重查、失败保留旧图、按 400ms 串行', () async {
+      final durations = <Duration>[];
+      var failed = false;
+      final json = _FakeJson((url) {
+        final term = url.queryParameters['term'] ?? '';
+        if (failed && term.contains('浮夸')) return const JsonNetwork();
+        return _searchOk(
+          trackName: term.contains('十年')
+              ? '十年'
+              : term.contains('富士山下')
+              ? '富士山下'
+              : '浮夸',
+        );
+      });
+      final index = CoverIndexCache(AppPrefs.inMemory());
+      final state = CoverState(
+        json: json,
+        bytes: _FakeBytes(ImageBytesOk(onePixelPng)),
+        diskStore: CoverDiskStore(directory: root.path),
+        artistImageDirectory: root.path,
+        coverIndex: index,
+        sleep: (d) async => durations.add(d),
+      );
+      // 先跑一次预取：索引里已有 ok 记录，_matched 也有值。
+      await state.prefetchCovers(const [
+        (title: '十年', artist: '陈奕迅', duration: 226.0, trackId: 't0'),
+        (title: '浮夸', artist: '陈奕迅', duration: 260.0, trackId: 't1'),
+      ]);
+      final oldT0 = state.matchedPathFor('t0');
+      final oldT1 = state.matchedPathFor('t1');
+      expect(oldT0, isNotNull);
+      expect(oldT1, isNotNull);
+      json.requests.clear();
+      durations.clear();
+      failed = true;
+
+      var progress = 0;
+      final matched = await state.refreshAllCovers(const [
+        (title: '十年', artist: '陈奕迅', duration: 226.0, trackId: 't0'),
+        (title: '浮夸', artist: '陈奕迅', duration: 260.0, trackId: 't1'),
+      ], onMatched: (done) => progress = done);
+
+      expect(json.requests, isNotEmpty, reason: '索引命中也要重新问 iTunes');
+      expect(durations.length, 2);
+      expect(
+        durations.every((d) => d == const Duration(milliseconds: 400)),
+        isTrue,
+      );
+      expect(matched, 1);
+      expect(progress, 1);
+      expect(state.matchedPathFor('t0'), isNotNull);
+      expect(state.matchedPathFor('t1'), oldT1, reason: '重查失败不许把已显示的封面弄丢');
     });
   });
 

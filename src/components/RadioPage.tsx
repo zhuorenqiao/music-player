@@ -7,6 +7,8 @@
  *
  * 「所属分类」写在播放卡顶部那行小字里（`传统 FM · 音乐台`），换台时跟着换；
  * 下方页签只负责筛台表，两者共用 `radioTabOf()` 那一份分类元数据。
+ * 页签支持左右滑动切换（在页签 + 台表这一块横滑，松手过 56px 就翻页），
+ * 键盘也能用 ←/→ 在页签间走 —— 见 [RadioTabs] 下面的手势说明。
  *
  * 在播时大卡上的同心环会一圈圈慢慢向外扩散（暂停就冻在原地，不跳回）；
  * 列表缩略图不参与，40px 里再扩散只会像噪点。
@@ -17,12 +19,16 @@
  */
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   RADIO_STATIONS,
@@ -37,31 +43,21 @@ import {
   type RadioStation,
 } from '../lib/radio';
 import { useRadio } from '../state/radio';
+import { BroadcastIcon, MoonIcon, MusicNoteIcon } from './PageIcons';
 import { LibraryMenu } from './LibraryMenu';
+import { SleepTimerButton } from './SleepTimerButton';
 
-/** 广播波图标：下方实心点 + 上方三道同心弧（与 Flutter `_BroadcastPainter` 同规格）。 */
-export function BroadcastIcon({ className = 'icon' }: { className?: string }) {
-  const arcs = [4.6, 7.2, 9.8].map((radius) => (
-    `M ${12 - radius} 17.2 A ${radius} ${radius} 0 0 1 ${12 + radius} 17.2`
-  ));
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-      <circle cx="12" cy="17.2" r="1.9" fill="currentColor" stroke="none" />
-      {arcs.map((d) => <path key={d} d={d} />)}
-    </svg>
-  );
-}
+/** 页签滑动切换的横向位移阈值（px）——与 Flutter `kTabSwipePx` 同值。 */
+const TAB_SWIPE_PX = 56;
 
-/** 音符图标（回音乐播放器）。 */
-function MusicNoteIcon({ className = 'icon' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9 16.6V5.4l9-1.6v10.4" />
-      <circle cx="6.6" cy="16.8" r="2.6" />
-      <circle cx="15.6" cy="14.4" r="2.6" />
-    </svg>
-  );
-}
+/** 横向位移必须是纵向的这么多倍：竖着划列表不切页（与 `useTrackSwipe` 同一道闸）。 */
+const TAB_SWIPE_RATIO = 1.25;
+
+/** 起手死区：位移没过它之前还看不出方向，不抢手势。 */
+const TAB_SWIPE_SLOP = 10;
+
+/** 台表换页时从滑入方向进来的位移（px），与 Flutter `_TabSwipeArea` 同值。 */
+const TAB_PANEL_IN_PX = 24;
 
 /** 播放 / 暂停图形。 */
 export function PlayGlyph({ playing }: { playing: boolean }) {
@@ -272,24 +268,52 @@ function RadioStatus() {
   );
 }
 
-/** 分类页签：短名 + 台数，选中走 accent 与一根短下划线。 */
+/**
+ * 分类页签：短名 + 台数，选中走 accent 与一根短下划线。
+ *
+ * 点击之外还认键盘：←/→ 在当前页签上换到相邻一页（到头折返），并同步把焦点
+ * 搬到新页签 —— 这是 ARIA `tablist` 的标准走法，焦点不能留在已经 `tabIndex=-1`
+ * 的那颗按钮上。手势（左右滑）由外层 `.radio-panel` 统一接。
+ */
 function RadioTabs({ active, onChange }: {
   active: RadioCategory;
   onChange: (category: RadioCategory) => void;
 }) {
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const index = RADIO_TABS.findIndex((tab) => tab.id === active);
+    const target = (index + step + RADIO_TABS.length) % RADIO_TABS.length;
+    onChange(RADIO_TABS[target].id);
+    // 按钮节点按 id 固定 key，状态更新不重建，所以可以立刻搬焦点
+    stripRef.current?.querySelectorAll<HTMLButtonElement>('.radio-tabs__btn')[target]?.focus();
+  };
+
   return (
-    <div className="radio-tabs" role="tablist" aria-label="电台分类">
+    <div
+      className="radio-tabs"
+      role="tablist"
+      aria-label="电台分类"
+      ref={stripRef}
+      onKeyDown={onKeyDown}
+    >
       {RADIO_TABS.map((tab) => {
         const count = radioStationsOf(tab.id).length;
         const selected = active === tab.id;
         return (
           <button
             key={tab.id}
+            id={`radio-tab-${tab.id}`}
             className={`radio-tabs__btn${selected ? ' is-active' : ''}`}
             type="button"
             role="tab"
             aria-selected={selected}
-            aria-controls={`radio-list-${tab.id}`}
+            aria-controls="radio-panel"
+            // roving tabindex：Tab 键只落在当前页签，←/→ 再在页签间走
+            tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
           >
             <span className="radio-tabs__label">{tab.label}</span>
@@ -332,18 +356,123 @@ function StationRow({ station }: { station: RadioStation }) {
   );
 }
 
-export function RadioPage({ onBack }: {
+export function RadioPage({ onBack, onSleep }: {
   /** 回音乐播放器（不停流，电台继续在后台放） */
   onBack: () => void;
+  /** 去休眠页：整页切过去（电台继续在后台放，交给 MiniRadio 交代） */
+  onSleep: () => void;
 }) {
   const { current } = useRadio();
   const [active, setActive] = useState<RadioCategory>(current?.category ?? 'music');
   const stations = useMemo(() => radioStationsOf(active), [active]);
   const greeting = useMemo(() => radioGreeting(), []);
 
+  /** 往下滚（手指往上滑）时把右上角三颗收起来，往回滚再放出来。 */
+  const [actionsHidden, setActionsHidden] = useState(false);
+
+  /** 新台表从哪边进来：+1 从右（左滑翻到下一页）、-1 从左；0 是进页面，不播动画。 */
+  const [enterFrom, setEnterFrom] = useState(0);
+  /** 手势起点：`pointerup` 与它相减，横竖判定都按起止坐标算。 */
+  const gesture = useRef<{ id: number; x: number; y: number; axis: 'x' | 'y' | null } | null>(null);
+  /** 拖动过页签后浏览器仍会补一发 click，用它把那一发吃掉，别误开播。 */
+  const suppressClick = useRef(false);
+
+  useEffect(() => {
+    // 电台页整页贴 body 滚（`.app` 在这页放开 overflow），所以听 window 的 scroll。
+    // 收/放都留 16px 行程：手指轻抖或列表回弹不会让三颗来回闪。
+    let last = window.scrollY;
+    let travel = 0;
+    const onScroll = () => {
+      const offset = window.scrollY;
+      if (offset <= 12) {
+        last = offset;
+        travel = 0;
+        setActionsHidden(false);
+        return;
+      }
+      const delta = offset - last;
+      last = offset;
+      if (delta === 0) return;
+      travel = travel === 0 || Math.sign(delta) !== Math.sign(travel) ? delta : travel + delta;
+      if (travel > 16) setActionsHidden(true);
+      else if (travel < -16) setActionsHidden(false);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const activeIndex = RADIO_TABS.findIndex((tab) => tab.id === active);
+
+  const selectTab = useCallback((next: RadioCategory, direction?: 1 | -1) => {
+    if (next === active) return;
+    const from = RADIO_TABS.findIndex((tab) => tab.id === active);
+    const to = RADIO_TABS.findIndex((tab) => tab.id === next);
+    setEnterFrom(direction ?? (to > from ? 1 : -1));
+    setActive(next);
+  }, [active]);
+
+  /** 左滑 → 下一页、右滑 → 上一页；到头不动（也不回弹，本来就没跟手位移）。 */
+  const swipeTab = (step: 1 | -1) => {
+    const target = RADIO_TABS[activeIndex + step];
+    if (!target) return;
+    selectTab(target.id, step);
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // 鼠标只认左键；触摸 / 触控笔都放行
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    gesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: null };
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = gesture.current;
+    if (!start || start.id !== event.pointerId) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (!start.axis) {
+      // 死区里还看不出方向；横竖倾斜到「横向为主」才归这里，否则让页面滚
+      if (Math.abs(dx) < TAB_SWIPE_SLOP && Math.abs(dy) < TAB_SWIPE_SLOP) return;
+      if (Math.abs(dx) <= Math.abs(dy) * TAB_SWIPE_RATIO) {
+        start.axis = 'y';
+        return;
+      }
+      start.axis = 'x';
+      suppressClick.current = true;
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // 指针已经抬起（浏览器中途取消），捕获失败不影响后面的判定
+      }
+    }
+  };
+
+  const finishSwipe = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = gesture.current;
+    gesture.current = null;
+    if (!start || start.id !== event.pointerId || start.axis !== 'x') return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    // 够远且横向为主才翻页（与 Flutter `_TabSwipeArea` 同一套口径）
+    if (Math.abs(dx) < TAB_SWIPE_PX || Math.abs(dx) <= Math.abs(dy) * TAB_SWIPE_RATIO) return;
+    swipeTab(dx < 0 ? 1 : -1);
+  };
+
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    finishSwipe(event);
+    // 这一发 click 若真来了会先被下头吃掉；有些浏览器要等一拍才补发，留 300ms 兜底
+    window.setTimeout(() => { suppressClick.current = false; }, 300);
+  };
+
+  const onClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressClick.current) return;
+    suppressClick.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   return (
     <div className="radio-page">
-      <header className="radio-head">
+      <header className={`radio-head${actionsHidden ? ' is-actions-hidden' : ''}`}>
         <span className="radio-head__brand">
           <span className="radio-head__logo"><BroadcastIcon className="radio-head__logo-icon" /></span>
           <span className="radio-head__text">
@@ -351,20 +480,40 @@ export function RadioPage({ onBack }: {
             <span className="radio-head__sub">LIVE RADIO</span>
           </span>
         </span>
-        <button
-          className="btn radio-head__back"
-          type="button"
-          aria-label="返回音乐播放器"
-          title="返回音乐播放器"
-          onClick={onBack}
-        >
-          <MusicNoteIcon />
-          <span className="btn__text">音乐</span>
-        </button>
-        {/* 右上角「更多」：只留「换肤」这一项（`showLibraryActions={false}`）。
-            电台是另一条音频链路，这页不提供添加 / 清空播放列表，免得听着电台
-            误操作了音乐曲库；换肤不再只能回音乐页才找得到。 */}
-        <LibraryMenu className="radio-head__menu" showLibraryActions={false} />
+        {/* 右侧这一组：睡眠定时器 → 「休眠」互跳 → 「音乐」回退 → 「更多」。
+            定时器与音乐页那几颗是同一个组件（交互一致：图标 → 滑杆选时长 +
+            自定义分钟数 + 开始 / 取消；跑起来后图标旁直接显示剩余 mm:ss）。
+            页头在上面，所以面板向下弹、贴按钮右缘展开；到点时它会把电台也一并
+            暂停（见 state/sleep-timer.tsx）。
+            「休眠」这一颗与休眠页右上角那颗「电台」互为邻居入口，两页各留一条
+            回音乐页的路 —— 条上的暂停 / 关闭才是停台的地方。 */}
+        <div className="radio-head__actions">
+          <SleepTimerButton variant="head" />
+          <button
+            className="btn radio-head__sleep"
+            type="button"
+            aria-label="打开助眠页"
+            title="打开助眠页"
+            onClick={onSleep}
+          >
+            <MoonIcon />
+            <span className="btn__text">助眠</span>
+          </button>
+          <button
+            className="btn radio-head__back"
+            type="button"
+            aria-label="返回音乐播放器"
+            title="返回音乐播放器"
+            onClick={onBack}
+          >
+            <MusicNoteIcon />
+            <span className="btn__text">音乐</span>
+          </button>
+          {/* 右上角「更多」：只留「换肤」这一项（`showLibraryActions={false}`）。
+              电台是另一条音频链路，这页不提供添加 / 清空播放列表，免得听着电台
+              误操作了音乐曲库；换肤不再只能回音乐页才找得到。 */}
+          <LibraryMenu className="radio-head__menu" showLibraryActions={false} />
+        </div>
       </header>
 
       <section className="radio-greet" aria-label="想听点什么">
@@ -374,16 +523,40 @@ export function RadioPage({ onBack }: {
 
       <RadioHero />
       <RadioStatus />
-      <RadioTabs active={active} onChange={setActive} />
 
-      <ul
-        className="radio-list"
-        id={`radio-list-${active}`}
-        role="tabpanel"
-        aria-label={`${radioTabOf(active).label} ${stations.length} 台`}
+      {/* 页签 + 台表整块接横滑：`touch-action: pan-y` 把纵向留给页面滚动，
+          横向手势归这里；竖着划会被 [onPointerMove] 判成 axis='y' 直接放行。 */}
+      <div
+        className="radio-panel"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          gesture.current = null;
+          window.setTimeout(() => { suppressClick.current = false; }, 300);
+        }}
+        onClickCapture={onClickCapture}
       >
-        {stations.map((station) => <li key={station.id} className="radio-list__item"><StationRow station={station} /></li>)}
-      </ul>
+        <RadioTabs active={active} onChange={selectTab} />
+        <div
+          key={active}
+          className={`radio-panel__page${enterFrom === 0 ? '' : ' is-enter'}`}
+          style={{ '--panel-from': `${enterFrom >= 0 ? TAB_PANEL_IN_PX : -TAB_PANEL_IN_PX}px` } as CSSProperties}
+          onAnimationEnd={(event) => {
+            // 动画收尾就把标记摘掉，页面上不留一个永久的 transform（会凭空多一层合成）
+            if (event.animationName === 'radio-panel-in') setEnterFrom(0);
+          }}
+        >
+          <ul
+            className="radio-list"
+            id="radio-panel"
+            role="tabpanel"
+            aria-label={`${radioTabOf(active).label} ${stations.length} 台`}
+          >
+            {stations.map((station) => <li key={station.id} className="radio-list__item"><StationRow station={station} /></li>)}
+          </ul>
+        </div>
+      </div>
 
       <p className="radio-foot">让声音，慢一点。</p>
     </div>

@@ -32,6 +32,8 @@
 // JSON 的 num 只收有限数，不做 `String(...)` 强转——搜索结果里混一条怪数据不该让整次匹配
 // 失败，也不该被强转成一个能误配的歌手名。
 
+import 'opencc/converter.dart';
+
 /// 归一化要剥的空白：`\s` 之外**额外**含全角空格 U+3000，music-api.ts:420。
 final RegExp _spaces = RegExp(r'[\s　]');
 
@@ -102,11 +104,15 @@ class TranslateCandidate {
       [artist, name].where((part) => part.isNotEmpty).join(' ');
 }
 
-/// 匹配用的归一化：小写、去空白与常见标点，括号说明留着（靠前缀判断）。
+/// 匹配用的归一化：繁→简、小写、去空白与常见标点，括号说明留着（靠前缀判断）。
 ///
 /// music-api.ts:417-421。标点类见 [_punct] 的注释。
-String normText(String value) =>
-    value.toLowerCase().replaceAll(_spaces, '').replaceAll(_punct, '');
+/// 繁→简与 React 侧同步加在 `normText` 里：网易云结果写成繁体（陳奕迅 / 吻別）时，
+/// 逐字比较会判成「歌手对不上」，译文便永远匹配不到（与歌词同一条 root cause）。
+String normText(String value) => toSimplified(value)
+    .toLowerCase()
+    .replaceAll(_spaces, '')
+    .replaceAll(_punct, '');
 
 /// 去掉尾部的括号说明与分隔符，得到「歌名本体」，music-api.ts:428-436。
 ///

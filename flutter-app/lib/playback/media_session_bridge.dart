@@ -44,7 +44,7 @@ class NextCommand extends MediaSessionCommand {
   const NextCommand();
 }
 
-/// 上一首：沿用「已播放超过 3 秒则回本曲开头」的既有语义。
+/// 上一首：换歌（与 [NextCommand] 对称，不再有「回本曲开头」那套三秒规则）。
 class PreviousCommand extends MediaSessionCommand {
   const PreviousCommand();
 }
@@ -65,10 +65,24 @@ class SeekCommand extends MediaSessionCommand {
 /// `list` 与 `shuffle` 都是「整列表循环」，随机与否由 `shuffleEnabled` 单独表达。
 enum MediaRepeatMode { off, all, one }
 
+/// 卡片当前代表哪条播放链路。
+///
+/// App 只有一张系统媒体卡片（Android 一个会话一条通知、Windows 一个 SMTC），
+/// 所以音乐与电台必须「谁在响谁接管」：由 [MediaSessionCoordinator] 按播放态
+/// 动态选源，不能用两张会话各推各的。
+enum MediaKind {
+  /// 曲库里的歌。
+  music,
+
+  /// 电台 / 播客直播流。
+  radio,
+}
+
 /// 一次推给系统的状态快照。字段全部是与平台无关的值，bridge 实现负责翻译。
 @immutable
 class PublishedSnapshot {
   const PublishedSnapshot({
+    this.kind = MediaKind.music,
     this.title = '',
     this.artist = '',
     this.album = '',
@@ -76,9 +90,14 @@ class PublishedSnapshot {
     this.playing = false,
     this.position = Duration.zero,
     this.duration,
+    this.live = false,
+    this.artworkHue,
     this.shuffleEnabled = false,
     this.repeatMode = MediaRepeatMode.off,
   });
+
+  /// 这条快照属于音乐还是电台。电台快照下系统按钮只剩播放 / 暂停 / 关闭。
+  final MediaKind kind;
 
   /// 曲名；没有当前曲目时为空串。
   final String title;
@@ -96,12 +115,23 @@ class PublishedSnapshot {
   /// 总时长；未知时 null（通知栏据此不画进度条）。
   final Duration? duration;
 
+  /// 直播流：没有进度、不可拖动、不给上下曲。
+  ///
+  /// 与 [duration] 为 null 的区别是语义上的：未知时长只是「算不出来」，
+  /// 直播是「永远没有终点」，系统卡片据此只画播放 / 暂停 / 关闭。
+  final bool live;
+
+  /// 生成卡的色相覆盖（0~360）。电台卡固定落在品牌绿附近，
+  /// 音乐曲目为 null 时仍按「歌手名哈希」取色，和界面生成卡一致。
+  final int? artworkHue;
+
   final bool shuffleEnabled;
   final MediaRepeatMode repeatMode;
 
   @override
   bool operator ==(Object other) =>
       other is PublishedSnapshot &&
+      other.kind == kind &&
       other.title == title &&
       other.artist == artist &&
       other.album == album &&
@@ -109,11 +139,14 @@ class PublishedSnapshot {
       other.playing == playing &&
       other.position == position &&
       other.duration == duration &&
+      other.live == live &&
+      other.artworkHue == artworkHue &&
       other.shuffleEnabled == shuffleEnabled &&
       other.repeatMode == repeatMode;
 
   @override
   int get hashCode => Object.hash(
+    kind,
     title,
     artist,
     album,
@@ -121,15 +154,18 @@ class PublishedSnapshot {
     playing,
     position,
     duration,
+    live,
+    artworkHue,
     shuffleEnabled,
     repeatMode,
   );
 
   @override
   String toString() =>
-      'PublishedSnapshot(title: $title, artist: $artist, album: $album, '
-      'artUri: $artUri, playing: $playing, position: $position, '
-      'duration: $duration, shuffleEnabled: $shuffleEnabled, '
+      'PublishedSnapshot(kind: ${kind.name}, title: $title, artist: $artist, '
+      'album: $album, artUri: $artUri, playing: $playing, '
+      'position: $position, duration: $duration, live: $live, '
+      'artworkHue: $artworkHue, shuffleEnabled: $shuffleEnabled, '
       'repeatMode: ${repeatMode.name})';
 }
 
@@ -206,12 +242,18 @@ class MediaSessionCoordinator {
 
   /// 系统侧「播放 / 上一首 / 下一首」是否该被压住（返回 true = 不理）。
   ///
-  /// 电台在响的时候，通知栏里还挂着的是**音乐**那份已暂停的快照（电台不走
-  /// 媒体会话）。此时 Android 的媒体按键 / 通知栏 / 蓝牙耳机按 Play，落的都是
-  /// 音乐的 `resume()` —— 用户听到的就是「电台播着播着，突然开始放歌」。装配层
-  /// 把这条接到「电台正在响」，电台掌着声音的时候音乐侧的播放指令一律丢弃：
-  /// 想听歌请回音乐页按播放（那条会按互斥规则把电台让位）。
+  /// 电台还没接管卡片（例如正在起播、音乐还没落暂停）时，系统按键仍可能落在
+  /// 音乐那份快照上。此时 Android 的媒体按键 / 蓝牙耳机按 Play，落的都是音乐的
+  /// `resume()` —— 用户听到的就是「电台播着播着，突然开始放歌」。装配层把这条
+  /// 接到「电台正在响」，这条链上的播放指令一律丢弃；电台真正接管卡片后，
+  /// 动作走 [onRadioPlay] / [onRadioPause] / [onRadioStop]，不再经过这里。
   bool Function()? suppressTransportCommands;
+
+  /// 电台接管卡片后的系统动作。与音乐一样只有一套入口：续播 / 暂停 / 关闭
+  /// 都转给 [RadioState] 的既有方法，不在这里另开一条播放路径。
+  Future<void> Function()? onRadioPlay;
+  Future<void> Function()? onRadioPause;
+  Future<void> Function()? onRadioStop;
 
   final int Function() _nowMs;
 
@@ -224,8 +266,40 @@ class MediaSessionCoordinator {
   bool _attached = false;
   bool _stoppedWithoutTrack = false;
 
+  /// 电台侧最近一次快照；null = 没有当前台（或已关台）。
+  PublishedSnapshot? _radio;
+
+  /// 上一次真正在响的是不是电台。都没响时用它决定卡片留给谁：
+  /// 用户刚暂停的电台应该留在卡片上，而不是被一份同样暂停的音乐顶掉。
+  bool _radioOwns = false;
+
+  /// 音乐上一拍是否在响：只在「开始响」的那一下抢走卡片，
+  /// 暂停中的音乐不会把电台挤下去。
+  bool _lastMusicPlaying = false;
+
   /// 成功推给 bridge 的快照条数（节流 / 去重之后的真实推送次数）。
   int get publishCount => _publishCount;
+
+  /// 当前卡片是否由电台接管（测试与装配层可以读）。
+  bool get radioOwnsCard =>
+      _radio != null && _radio!.title.isNotEmpty && _radioOwns;
+
+  /// 电台侧状态变化的入口：装配层在 [RadioState] 每次 notify 时调这里。
+  ///
+  /// [snapshot] 为 null = 没有当前台（关台 / 清空）。换了台、开始出声都会把
+  /// 卡片让给电台；单纯暂停不会 —— 暂停是「同一台还在」，卡片应留在它身上。
+  void publishRadio(PublishedSnapshot? snapshot) {
+    final previous = _radio;
+    _radio = snapshot;
+    if (snapshot == null) {
+      _radioOwns = false;
+    } else if (snapshot.playing ||
+        previous == null ||
+        previous.title != snapshot.title) {
+      _radioOwns = true;
+    }
+    if (_attached) _publish();
+  }
 
   /// 接上会话：启动 bridge、订阅指令与状态、并立刻推一次当前快照。
   Future<void> attach() async {
@@ -246,14 +320,36 @@ class MediaSessionCoordinator {
   /// 补推；`_publish` 内部按元数据指纹去重，封面没变时不会重复打平台。
   void refresh() => _publish();
 
-  /// 系统侧动作 → transport 的既有方法。这里是唯一的翻译点。
+  /// 系统侧动作 → 当前接管的那条链路。这里是唯一的翻译点。
   ///
-  /// 播放走 [TransportController.resume]（不重载、接着放），停止走
-  /// [TransportController.stopPlayback]（暂停 + 清当前曲目 → 空态）：
+  /// 电台接管时：播放 / 暂停 / 关闭都转给电台的既有方法，上下曲与 seek 直接
+  /// 忽略（直播没有「下一台」也没有进度可拖）。音乐接管时仍走
+  /// [TransportController.resume] / [TransportController.stopPlayback]：
   /// 锁屏按钮与界面按钮的听觉与数据结果必须一致，不能给系统留第二条路径。
   void _onCommand(MediaSessionCommand command) {
-    // 电台在响：音乐侧的播放类按键**一概不理**（见
-    // [suppressTransportCommands]）。暂停 / 停止仍然放行 —— 它们只是让音乐
+    if (radioOwnsCard) {
+      switch (command) {
+        case PlayCommand():
+          final play = onRadioPlay;
+          if (play != null) unawaited(play());
+          return;
+        case PauseCommand():
+          final pause = onRadioPause;
+          if (pause != null) unawaited(pause());
+          return;
+        case StopCommand():
+          final stop = onRadioStop;
+          if (stop != null) unawaited(stop());
+          return;
+        case NextCommand():
+        case PreviousCommand():
+        case SeekCommand():
+          return;
+      }
+    }
+
+    // 电台还没接管（起播中 / 音乐刚被让位）：音乐侧的播放类按键**一概不理**
+    // （见 [suppressTransportCommands]）。暂停 / 停止仍然放行 —— 它们只是让音乐
     // 更安静，不会把电台挤停。
     final suppressed = suppressTransportCommands?.call() ?? false;
     if (suppressed) {
@@ -298,7 +394,7 @@ class MediaSessionCoordinator {
     final now = _nowMs();
     final view = transport.view.value;
     final track = view.current;
-    final snapshot = PublishedSnapshot(
+    final music = PublishedSnapshot(
       title: track?.title ?? '',
       artist: track?.artist ?? '',
       album: track?.album ?? '',
@@ -309,6 +405,8 @@ class MediaSessionCoordinator {
       shuffleEnabled: view.mode == PlayMode.shuffle,
       repeatMode: _repeatModeOf(view.mode),
     );
+
+    final snapshot = _activeSnapshot(music);
 
     final last = _last;
     if (last != null) {
@@ -323,7 +421,7 @@ class MediaSessionCoordinator {
     _lastPublishMs = now;
     _publishCount += 1;
 
-    if (track == null) {
+    if (snapshot.title.isEmpty) {
       // 空状态：通知栏 / SMTC 只该被停一次，反复 stop 会打平台日志。
       if (!_stoppedWithoutTrack) {
         _stoppedWithoutTrack = true;
@@ -335,15 +433,47 @@ class MediaSessionCoordinator {
     unawaited(bridge.publish(snapshot));
   }
 
+  /// 谁在响谁接管；都没响时，卡片留在最后响过的那条链路。
+  ///
+  /// 三条规则：
+  ///   1. 电台在响 → 电台（音乐此时已被互斥钩子暂停）；
+  ///   2. 音乐在响 → 音乐，并把「最后响过」记到音乐；
+  ///   3. 都没响 → [lastRadio] 决定；它没有台时才回落到音乐的暂停态。
+  ///
+  /// 每次采样都先记「音乐这一拍是否在响」，于是音乐由响转停时不会反过来把
+  /// 刚让位的电台又顶掉：暂停中的音乐只在电台没有台的时候出现。
+  PublishedSnapshot _activeSnapshot(PublishedSnapshot music) {
+    final radio = _radio;
+    final radioHasContent = radio != null && radio.title.isNotEmpty;
+
+    if (music.playing && !_lastMusicPlaying) {
+      _radioOwns = false;
+    }
+    if (radio != null && radio.playing) {
+      _radioOwns = true;
+    }
+    _lastMusicPlaying = music.playing;
+
+    if (radio != null && radio.playing) return radio;
+    if (music.playing) return music;
+    if (radioHasContent && _radioOwns) return radio;
+    if (music.title.isNotEmpty) return music;
+    if (radioHasContent) return radio;
+    return music;
+  }
+
   /// 除 position 外全部字段相同即视为「语义未变」：position 单独走节流，
   /// 不能把它算进判等，否则进度每秒一次的节流永远不会生效。
   bool _sameMetadata(PublishedSnapshot a, PublishedSnapshot b) =>
+      a.kind == b.kind &&
       a.title == b.title &&
       a.artist == b.artist &&
       a.album == b.album &&
       a.artUri == b.artUri &&
       a.playing == b.playing &&
       a.duration == b.duration &&
+      a.live == b.live &&
+      a.artworkHue == b.artworkHue &&
       a.shuffleEnabled == b.shuffleEnabled &&
       a.repeatMode == b.repeatMode;
 

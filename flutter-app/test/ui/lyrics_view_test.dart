@@ -339,6 +339,34 @@ void main() {
       expect(seeks, [7]);
     });
 
+    testWidgets('无时间轴的原文和译文不把点击传给外层模式切换热区', (tester) async {
+      var modeSwitches = 0;
+      final seeks = <double>[];
+      await tester.pumpWidget(
+        wrap(
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => modeSwitches++,
+            child: SizedBox(
+              height: 300,
+              child: LyricsLinesView(
+                lines: const [LyricLine(time: double.nan, text: '纯文本')],
+                trans: const ['译文'],
+                variant: LyricsVariant.full,
+                activeIndex: 0,
+                onSeek: seeks.add,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('纯文本'));
+      await tester.tap(find.text('译文'));
+      expect(modeSwitches, 0);
+      expect(seeks, isEmpty);
+    });
+
     testWidgets('onSeek 为 null 时不崩、也不可点', (tester) async {
       await tester.pumpWidget(
         wrap(

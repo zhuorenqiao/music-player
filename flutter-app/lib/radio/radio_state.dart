@@ -170,8 +170,8 @@ class RadioState extends ChangeNotifier {
   bool _opened = false;
   bool _disposed = false;
 
-  /// 用户自己按的暂停：只有它能让「断流重连」闭嘴。
-  /// （[pause] / [toggle] 的暂停分支会置位，开台与续播再清掉。）
+  /// 用户侧决定的暂停（自己按 / 音乐开声让位 / 睡眠定时器到点）：
+  /// 只有它们能让「断流重连」闭嘴。
   bool _userPaused = false;
 
   /// 正在重连 / 已排上重连。
@@ -252,6 +252,13 @@ class RadioState extends ChangeNotifier {
       return;
     }
     _opened = true;
+    // 开流这段时间里，睡眠定时器到点 / 用户回音乐页按了播放：流可以开，
+    // 但绝不能再出声（`pause()` 会把 `_userPaused` 置位并取消重连）。
+    if (_userPaused) {
+      _loading = false;
+      notifyListeners();
+      return;
+    }
     await engine.play();
     if (_disposed) return;
     // 内核的 playing 流通常紧随其后；这里兜一层，避免按钮一直转圈。
@@ -283,6 +290,12 @@ class RadioState extends ChangeNotifier {
       // 音乐页点迷你条上的播放键，音乐往往还在响 —— 少了这一步两路声音就叠住。
       await onTuned?.call(station);
       if (_disposed) return;
+      // 续播前这几帧里定时器到点了 / 音乐又开声了：别再出声。
+      if (_userPaused) {
+        _loading = false;
+        notifyListeners();
+        return;
+      }
       await engine.play();
       if (_disposed) return;
       _loading = false;
@@ -290,23 +303,47 @@ class RadioState extends ChangeNotifier {
     }
   }
 
+  /// 续播当前台（系统卡片上的「播放」走这里）。
+  ///
+  /// 与 [toggle] 的区别：这个不看当前在不在响，永远往「出声」走 ——
+  /// 通知栏 / 锁屏按播放时，状态可能因为重连或缓冲晚到一拍，不能反过来
+  /// 把电台按成暂停。已经在响就什么都不做；没开过流（上次 open 失败）就
+  /// 重新走一次 [tune]，让用户点一下真的能听见。
+  Future<void> resume() async {
+    final station = _current;
+    if (_disposed || station == null || _playing) return;
+    if (!_opened) {
+      await tune(station);
+      return;
+    }
+    await toggle();
+  }
+
   /// 暂停当前台（保留当前台，迷你条仍在）。
   ///
   /// 与 [toggle] 的区别：这个不看当前是否在响，永远往「暂停」走 —— 用户在音乐页
-  /// 按了播放，电台就该无条件让位，不能因为状态晚到一拍而反过来把音乐切了。
+  /// 按了播放、睡眠定时器到点，电台都必须无条件让位，不能因为状态晚到一拍
+  /// 而反过来把音乐切了，也不能在「等下一次重连」的空档里被定时器放过。
+  ///
+  /// 幂等：没开过台只把状态收干净；已经暂停时再调一次不会重复出声。
   Future<void> pause() async {
-    if (_disposed || !_opened) return;
-    if (!_playing) return;
-    // 让位是**用户的**决定（他刚在音乐页按了播放）：断流重连不许把它推翻，
-    // 否则「音乐开声 → 电台暂停 → 重连把音乐又挤停」就成了一段死循环。
+    if (_disposed) return;
+    // 让位是**用户侧**的决定（自己按 / 音乐开声 / 睡眠定时器到点）：
+    // 断流重连不许把它推翻，否则「定时结束 → 暂停 → 重连又开声」会成死循环。
     _userPaused = true;
+    final hadReconnect = _reconnecting;
+    final hadLoading = _loading;
     _cancelReconnect();
-    // 让位也是稳定态：按钮回播放图形，断流重连不许推翻，转圈也不能留着。
-    if (_loading) {
-      _loading = false;
+    _loading = false;
+    if (hadReconnect || hadLoading) notifyListeners();
+    if (!_opened) return;
+    await engine.pause();
+    if (_disposed) return;
+    // 内核没补 pause 事件时也要把界面落到「已暂停」。
+    if (_playing) {
+      _playing = false;
       notifyListeners();
     }
-    await engine.pause();
   }
 
   void _onMusicStateChanged() {
@@ -395,6 +432,13 @@ class RadioState extends ChangeNotifier {
       return;
     }
     _opened = true;
+    // 重连期间定时器到点：重开的流不推、不播，留在暂停态。
+    if (_userPaused) {
+      _reconnecting = false;
+      _loading = false;
+      notifyListeners();
+      return;
+    }
     await engine.play();
     if (_disposed) return;
     // 内核的 playing 流随后就到；这里先落「不在连接中」，别让按钮一直转圈。

@@ -25,6 +25,8 @@ import 'panel.dart';
 import 'radio_bar.dart';
 import 'radio_page.dart';
 import 'shell.dart';
+import 'sleep_bar.dart';
+import 'sleep_page.dart';
 import 'stage.dart';
 import 'transport.dart';
 
@@ -79,6 +81,9 @@ class HomePage extends StatelessWidget {
                 // 「电台」入口（T31）：整页切过去；回来时电台继续在后台放，
                 // 由控制条上方那条迷你电台条交代状态（见 RadioBar）。
                 onOpenRadio: () => _openRadio(context),
+                // 「休眠」入口（T32）：整页切过去；回来时声景继续在后台放，
+                // 由控制条上方那条迷你休眠条交代状态（见 SleepBar）。
+                onOpenSleep: () => _openSleep(context),
                 // React `App.tsx:1700` 的 onSwitchView：在封面页 / 完整歌词页
                 // 之间切，与「点曲目区进歌词页」共用同一个控制器。
                 onSwitchView: page.toggle,
@@ -91,8 +96,15 @@ class HomePage extends StatelessWidget {
                 frostLevel: frostLevel,
               ),
               transport: const TransportBar(), // T29：进度、五个按钮、音量与窄屏列表入口
-              // 迷你电台条：贴在控制条正上方；没有当前台时它自己返回空。
-              radioBar: RadioBar(onOpen: () => _openRadio(context)),
+              // 迷你条：休眠声景在后台放时贴在最上面，电台条在其下。
+              // 两条都自己判空，没在响的那一条不占位。
+              radioBar: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SleepBar(onOpen: () => _openSleep(context)),
+                  RadioBar(onOpen: () => _openRadio(context)),
+                ],
+              ),
               coverPath: coverPath,
               frostLevel: frostLevel,
               // 融合卡整张底色的 alpha 缩放（`.app__main` 的 color-mix）
@@ -124,7 +136,45 @@ class HomePage extends StatelessWidget {
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 320),
         reverseTransitionDuration: const Duration(milliseconds: 240),
-        pageBuilder: (_, _, _) => RadioPage(onBack: navigator.pop),
+        pageBuilder: (_, _, _) => RadioPage(
+          onBack: navigator.pop,
+          // 「休眠」互跳：先让这一页退场，下一帧再从音乐页推休眠页。两页永远是
+          // 同一层路由，来回切几次也不会把返回栈越压越深。
+          onOpenSleep: () {
+            navigator.pop();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) _openSleep(context);
+            });
+          },
+        ),
+        transitionsBuilder: (_, animation, _, child) =>
+            FadeTransition(opacity: animation, child: child),
+      ),
+    );
+  }
+
+  /// 「休眠」：整页切到休眠页（淡入，与电台页同一节奏）。
+  ///
+  /// 与电台页同一条「独立路由」的做法；区别是**返回后不停声** —— 睡前声景要
+  /// 一直放到睡着，音乐页底部那条 [SleepBar] 接着交代「还在响的是哪一段」，
+  /// 点它回页面，暂停 / 关闭在条上。
+  Future<void> _openSleep(BuildContext context) async {
+    final navigator = Navigator.of(context);
+    await navigator.push<void>(
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 320),
+        reverseTransitionDuration: const Duration(milliseconds: 240),
+        pageBuilder: (_, _, _) => SleepPage(
+          onBack: navigator.pop,
+          // 「电台」互跳：与电台页那颗「休眠」同一套 —— 先退场，下一帧再推，
+          // 保证页面上永远只有一层子页面。
+          onOpenRadio: () {
+            navigator.pop();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) _openRadio(context);
+            });
+          },
+        ),
         transitionsBuilder: (_, animation, _, child) =>
             FadeTransition(opacity: animation, child: child),
       ),

@@ -10,11 +10,23 @@
 
 import { readAudioTags, mergeTaggedNames } from '../lib/audio-tags.js';
 import { patchTrack as patchLocalRecord } from '../lib/local-store.js';
+import { mapWithConcurrency } from '../lib/async-limit.js';
 import { DEFAULT_COVER } from '../lib/demo-data.js';
 import type { Track } from './types';
 
 /** 内嵌封面缩放上限（像素）：够 600 见方显示，又不会把 IndexedDB 撑爆。 */
 const EMBEDDED_COVER_MAX_SIDE = 600;
+
+/**
+ * 标签回填的同时并发上限。
+ *
+ * 大文件夹导入 2000 首时，原来的 `Promise.all(tracks.map(...))` 会同时打开
+ * 2000 个文件、把每首最多 8MB 的标签区读进内存，带封面的再同时走 canvas
+ * 解码 —— 浏览器内存与主线程都扛不住。4 条并发足够让标签陆续出现，峰值
+ * 内存被压在「4 × 单文件预算」以内；与 Flutter 端 ImportService 的回填闸门
+ * 同值，两端行为一致。
+ */
+const TAG_CONCURRENCY = 4;
 
 /**
  * 内嵌封面 → 缩放后的 JPEG data URL。
@@ -73,7 +85,7 @@ export async function applyAudioTags(
 ): Promise<Track[]> {
   const renamed: Track[] = [];
 
-  await Promise.all(tracks.map(async (source) => {
+  await mapWithConcurrency(tracks, TAG_CONCURRENCY, async (source) => {
     // Playlist.addMany 会克隆对象，直接改传进来的那份可能改到副本上
     const track = liveTracks?.find((item) => item.id === source.id) ?? source;
     const blob = blobById.get(track.id);
@@ -116,7 +128,7 @@ export async function applyAudioTags(
         console.error('[tagging] 内嵌封面不可用：', track.title, error);
       }
     }
-  }));
+  });
 
   return renamed;
 }

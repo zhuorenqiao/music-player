@@ -14,7 +14,7 @@ export const AUDIO_ERROR_MESSAGES = Object.freeze({
 });
 
 /** 无法归类时的兜底提示。 */
-export const UNKNOWN_ERROR_MESSAGE = '音频播放失败，请稍后重试';
+export const UNKNOWN_ERROR_MESSAGE = '音频播放失败';
 
 /** 默认音量：没有存档时按 100% 起步。 */
 export const DEFAULT_VOLUME = 1;

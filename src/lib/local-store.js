@@ -18,6 +18,16 @@ const STORE = 'local-tracks';
 /** 单曲大小上限（128MB），避免误存超大文件把配额吃光。 */
 const MAX_TRACK_BYTES = 128 * 1024 * 1024;
 
+/**
+ * 一次 IndexedDB 事务最多写多少首。
+ *
+ * 文件夹导入可能一次进来 2000 首，每条都要把整个文件 Blob 交给 IndexedDB。
+ * 一次性 `put` 2000 条会让单个事务长时间占着配额、中途一条 QuotaExceeded 就
+ * 整批回滚（前面已经成功存的也一起没了）。按 50 首分块：每块独立提交，
+ * 配额在中途耗尽时至少前面几块已经在库里；重复执行 put 同一 id 也是幂等的。
+ */
+const SAVE_CHUNK_SIZE = 50;
+
 /** @type {Promise<IDBDatabase>|null} 连接缓存 */
 let dbPromise = null;
 
@@ -136,6 +146,8 @@ export function recordToTrack(record, fallbackCover) {
       lyrics: record.lyrics || '',
       lyricsPlain: record.lyricsPlain || '',
       lyricsSource: record.lyricsSource || '',
+      // 老记录没有这个字段 → 空串；状态行按「线上歌词库」泛称显示，不冒充某一家。
+      lyricsOrigin: record.lyricsOrigin || '',
       restored: true,
     };
   } catch (error) {
@@ -159,38 +171,45 @@ export async function saveMany(entries) {
   }
 
   let saved = 0;
-  try {
-    await withStore('readwrite', (store) => {
-      valid.forEach(({ track, file }) => {
-        if (file.size > MAX_TRACK_BYTES) {
-          return;
-        }
-        store.put({
-          id: track.id,
-          blob: file,
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          lastModified: file.lastModified,
-          addedAt: Date.now(),
-          title: track.title,
-          artist: track.artist,
-          album: track.album,
-          cover: track.cover,
-          duration: Number.isFinite(track.duration) ? track.duration : null,
-          lyrics: track.lyrics || '',
-          lyricsPlain: track.lyricsPlain || '',
-          lyricsSource: track.lyricsSource || '',
+  for (let start = 0; start < valid.length; start += SAVE_CHUNK_SIZE) {
+    const chunk = valid.slice(start, start + SAVE_CHUNK_SIZE);
+    let chunkSaved = 0;
+    try {
+      await withStore('readwrite', (store) => {
+        chunk.forEach(({ track, file }) => {
+          if (file.size > MAX_TRACK_BYTES) {
+            return;
+          }
+          store.put({
+            id: track.id,
+            blob: file,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: file.lastModified,
+            addedAt: Date.now(),
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            cover: track.cover,
+            duration: Number.isFinite(track.duration) ? track.duration : null,
+            lyrics: track.lyrics || '',
+            lyricsPlain: track.lyricsPlain || '',
+            lyricsSource: track.lyricsSource || '',
+            lyricsOrigin: track.lyricsOrigin || '',
+          });
+          chunkSaved += 1;
         });
-        saved += 1;
       });
-    });
-    return { ok: true, saved };
-  } catch (error) {
-    const quota = error?.name === 'QuotaExceededError' || /quota/i.test(error?.message ?? '');
-    console.error('[local-store] 保存本地曲目失败：', error);
-    return { ok: false, saved: 0, error: quota ? 'quota' : 'unknown' };
+    } catch (error) {
+      const quota = error?.name === 'QuotaExceededError' || /quota/i.test(error?.message ?? '');
+      console.error('[local-store] 保存本地曲目失败：', error);
+      // 「已提交的块」是调用方唯一能信赖的结果；没提交的块下次启动靠重导入补。
+      return { ok: false, saved, error: quota ? 'quota' : 'unknown' };
+    }
+    saved += chunkSaved;
   }
+  return { ok: true, saved };
 }
 
 /**

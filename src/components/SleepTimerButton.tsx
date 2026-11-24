@@ -24,6 +24,12 @@ import {
 /** 面板与触发按钮之间的缝隙（原先 CSS 的 `calc(100% + 8px)`，同一个值）。 */
 const PANEL_GAP = 8;
 
+/** 面板宽度（与 `.sleep-timer__panel` 的 244px 对齐，用来做左右夹紧）。 */
+const PANEL_WIDTH = 244;
+
+/** 面板贴屏幕边缘时留出的最小空隙（与 Flutter `ToolPanel` 的 8 一致）。 */
+const PANEL_EDGE = 8;
+
 /** 面板的落位：四个方向各给一个值，不用的那侧写 'auto'，免得被基础样式补齐成拉伸。 */
 interface PanelAnchor {
   top: number | 'auto';
@@ -84,10 +90,17 @@ export function SleepTimerButton({ variant }: { variant?: 'head' }) {
       return;
     }
     const rect = el.getBoundingClientRect();
+    // 页头那颗闹钟左边还有「音乐 / 更多」两颗，右缘比歌词页页头更靠里；
+    // 面板又只有 244px，极窄屏（<320）贴右缘会从左边顶出去。这里把 right
+    // 夹到「面板左缘至少离屏幕 8px」，与 Flutter `ToolPanel` 的夹紧一致。
+    const maxRight = Math.max(
+      PANEL_EDGE,
+      window.innerWidth - PANEL_WIDTH - PANEL_EDGE,
+    );
     const next: PanelAnchor = variant === 'head'
       ? {
         top: rect.bottom + PANEL_GAP,
-        right: Math.max(0, window.innerWidth - rect.right),
+        right: Math.min(Math.max(0, window.innerWidth - rect.right), maxRight),
         bottom: 'auto',
         left: 'auto',
       }

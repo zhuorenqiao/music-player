@@ -34,7 +34,10 @@ class LibraryState extends ChangeNotifier {
     required this.importer,
     required this.toasts,
     this.onPlaylistChanged,
-  });
+  }) {
+    // 单首时长回填完就通知界面，不能等整批收尾。见 ImportService.onDurationReady。
+    importer.onDurationReady = _onDurationReady;
+  }
 
   final AppPrefs prefs;
   final LibraryRepository repo;
@@ -51,9 +54,24 @@ class LibraryState extends ChangeNotifier {
   /// 装配层看 `tracks.isEmpty` 即可。状态层只负责喊这一声，不认识播放编排。
   final void Function({String? removedId})? onPlaylistChanged;
 
+  /// 新导入批次「标签 / 时长回填完成」后的媒体预加载钩子（装配层设置）。
+  ///
+  /// 为什么放在这里而不是 ImportService.onImported：那一声在入列时就喊，
+  /// 标签还没读完、时长还没探到，拿文件名去配封面 / 歌词会配错。装配层需要
+  /// 等回填收敛后再跑，所以由本类在批次收尾时把**活对象**交出去。
+  /// null = 本进程不做导入预加载（测试默认；生产在 main.dart 里接上）。
+  Future<void> Function(List<Track> tracks)? onTracksImported;
+
+  /// 导入预加载的串行队列：两个批次前后脚进来时，别让两轮预取互相插队。
+  Future<void> _importPrefetchQueue = Future<void>.value();
+
+  /// 等当前批次预加载收尾（测试 / 退出前用；空闲时立即完成）。
+  Future<void> get importPrefetchSettled => _importPrefetchQueue;
+
   String _keyword = '';
   String _effectiveKeyword = '';
   bool _restoring = false;
+  bool _disposed = false;
   Timer? _searchDebounce;
 
   /// 「这一份现场是从坏档案里退回来的吗」（终审 R8，第 4 轮 I11）。
@@ -125,10 +143,13 @@ class LibraryState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _searchDebounce = Timer(const Duration(milliseconds: kSearchDebounceMs), () {
-      _effectiveKeyword = normalized;
-      notifyListeners();
-    });
+    _searchDebounce = Timer(
+      const Duration(milliseconds: kSearchDebounceMs),
+      () {
+        _effectiveKeyword = normalized;
+        notifyListeners();
+      },
+    );
     notifyListeners();
   }
 
@@ -140,6 +161,18 @@ class LibraryState extends ChangeNotifier {
       text: next,
       selection: TextSelection.collapsed(offset: next.length),
     );
+  }
+
+  /// 单首曲目的时长刚从探针回来：列表立刻重绘，不必等整批 enrichment 收尾。
+  ///
+  /// 为什么不能攒到批次末尾：一批 42 首的时长是串行探的，3 秒预算下最坏要两分钟。
+  /// 那两分钟里 `Track.duration` 其实已经一首首填好，只是没人通知界面，用户看到的
+  /// 就是整批 `-:--`，像是时长根本没探。这里只在活对象仍在列表里时通知，删歌后的
+  /// 迟到回调不会白刷一帧。
+  void _onDurationReady(Track track) {
+    if (_disposed) return;
+    if (playlist.byId(track.id) == null) return;
+    notifyListeners();
   }
 
   /// 点了「最近播放」里已经不在列表中的条目：只提示，不假装播放。
@@ -340,7 +373,8 @@ class LibraryState extends ChangeNotifier {
       _changed();
     }
     // 回填没补上任何东西（result.added == 0 / 全是重复导入）时 null，不多落库。
-    _flushAfterEnrichment(result.enrichment);
+    _flushAfterEnrichment(result.enrichment, retryDurationIds: result.addedIds);
+    _scheduleImportedPrefetch(result.addedIds, result.enrichment);
     return result.added;
   }
 
@@ -352,7 +386,8 @@ class LibraryState extends ChangeNotifier {
       await persist();
       _changed();
     }
-    _flushAfterEnrichment(result.enrichment);
+    _flushAfterEnrichment(result.enrichment, retryDurationIds: result.addedIds);
+    _scheduleImportedPrefetch(result.addedIds, result.enrichment);
     return result.added;
   }
 
@@ -506,20 +541,92 @@ class LibraryState extends ChangeNotifier {
   /// 第 4 轮 I9：批次**什么都没学到**（值为 false：文件全打不开、探针全没结论）
   /// 时直接收工 —— 没有新结论就没有要落盘的东西，再整库重写一遍档案只是每次
   /// 启动白写一次盘，而 R1 想止住的正是这个开销。
-  void _flushAfterEnrichment(Future<bool>? enrichment) {
+  void _flushAfterEnrichment(
+    Future<bool>? enrichment, {
+    List<String>? retryDurationIds,
+  }) {
     if (enrichment == null) return;
-    _enrichmentQueue = _enrichmentQueue.then((_) async {
-      final learned = await enrichment;
-      if (!learned) return;
-      await persist();
-      _changed();
-    }).catchError((Object _) {
-      // 收尾失败只当这次没落上：下一批照样继续，绝不把异常冒到界面层。
-    });
+    _enrichmentQueue = _enrichmentQueue
+        .then((_) async {
+          final learned = await enrichment;
+          // 批次收尾时再给「仍没时长」的新曲目补一次探针：第一次可能只是被
+          // 3000ms 预算掐掉，而界面已经先画成 -:-- 了。只碰本批 id。
+          final retried =
+              await importer.repairMissingDurations(
+                retryDurationIds ?? const [],
+              ) ??
+              false;
+          if (!learned && !retried) return;
+          await persist();
+          _changed();
+        })
+        .catchError((Object _) {
+          // 收尾失败只当这次没落上：下一批照样继续，绝不把异常冒到界面层。
+        });
   }
 
-  /// 无 IO 的测试构造（T28 的 PanelHarness 用）：只读列表，不落盘。
-  @visibleForTesting
+  /// 新导入批次交给装配层预加载封面 / 歌词（等回填收敛后，按批串行）。
+  ///
+  /// 不并进 [_flushAfterEnrichment]：那条链只做「再落一次库」，预加载可能跑
+  /// 几十秒，不能把下一批的落库堵在后面；两条队列各自串行即可。回填信号
+  /// 是同一个 Future，可以重复 await。
+  void _scheduleImportedPrefetch(List<String> ids, Future<bool>? enrichment) {
+    final hook = onTracksImported;
+    if (hook == null || ids.isEmpty) return;
+    _importPrefetchQueue = _importPrefetchQueue
+        .then((_) async {
+          if (enrichment != null) {
+            try {
+              await enrichment;
+            } catch (_) {
+              // 回填失败也照样预取：至少按文件名 / 已知标签去配，总比什么都不做强。
+            }
+          }
+          final tracks = <Track>[];
+          for (final id in ids) {
+            final track = playlist.byId(id);
+            if (track != null) tracks.add(track);
+          }
+          if (tracks.isEmpty) return;
+          await hook(tracks);
+        })
+        .catchError((Object _) {
+          // 预加载失败只当这批没预上：绝不把异常冒到导入调用方。
+        });
+  }
+
+  /// 安装新版本后的**一次性**时长补探。
+  ///
+  /// 老档案里可能已经写着 `metadataProbed=true`（旧版 media_kit 探测回过一个
+  /// NaN，被当成结论记了盘），这批曲目不会再把 `rehydrateIncomplete` 走一遍；
+  /// 但用户看到的仍是 `-:--`。这里只在本版第一次启动时，把所有「有文件、没时长」
+  /// 的曲目交给新的容器头探针补一次，成功后落库并重绘；标记写在 prefs，之后
+  /// 不再重跑。只在 `main()` 的生产入口调用，测试装配不触发。
+  Future<void> repairDurationOnUpgrade() {
+    return _enrichmentQueue = _enrichmentQueue
+        .then((_) async {
+          if (await prefs.readString(StorageKeys.durationRepair) == '1') return;
+          final ids = [
+            for (final track in playlist.tracks)
+              // 只修「旧版已经判过、但仍没有时长」的冻结记录；没判过的
+              // 由 restore 里的 rehydrateIncomplete 正常补，不在这里重复开文件。
+              if (!track.hasDuration && track.metadataProbed) track.id,
+          ];
+          if (ids.isNotEmpty) {
+            final batch = importer.repairMissingDurations(ids);
+            if (batch != null && await batch) {
+              await persist();
+              _changed();
+            }
+          }
+          await prefs.writeString(StorageKeys.durationRepair, '1');
+        })
+        .catchError((Object _) {
+          // 补探/写标记失败只当这次没做：下次启动还有机会，绝不冒到界面层。
+        });
+  }
+
+  /// 无 IO 的测试构造（T28 的 PanelHarness 用）：只读列表，不落盘。  @visibleForTesting
   factory LibraryState.fake(Playlist playlist) {
     const silent = _SilentToasts();
     return LibraryState(
@@ -532,6 +639,8 @@ class LibraryState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    importer.onDurationReady = null;
     _searchDebounce?.cancel();
     searchController.dispose();
     super.dispose();

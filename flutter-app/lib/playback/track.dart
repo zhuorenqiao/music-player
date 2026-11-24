@@ -26,6 +26,9 @@ Track? normalizeTrack(Object? raw) {
   // （src/lib/playlist.js:87 `raw.lyricsSource === 'auto'`），不做 trim，
   // 所以 ' auto ' 这类值在原版得到空串，这里必须一致。
   final lyricsSource = map['lyricsSource'];
+  // 歌词来源（自动匹配的线上曲库）：'qishui' / 'kugou' / 'netease' / 'lrclib'，缺省空串。
+  // 老档案没有这个字段 → 空串，界面按「线上歌词库」泛称显示，不冒充某一家。
+  final lyricsOrigin = map['lyricsOrigin'];
   return Track(
     id: map['id']! as String,
     title: ((map['title'] as String?) ?? '').trim().isEmpty
@@ -43,6 +46,13 @@ Track? normalizeTrack(Object? raw) {
     lyricsPlain: _clampLyrics(map['lyricsPlain']),
     lyricsSource: lyricsSource == 'auto' || lyricsSource == 'manual'
         ? lyricsSource as String
+        : '',
+    lyricsOrigin:
+        lyricsOrigin == 'qishui' ||
+            lyricsOrigin == 'kugou' ||
+            lyricsOrigin == 'netease' ||
+            lyricsOrigin == 'lrclib'
+        ? lyricsOrigin as String
         : '',
     restored: map['restored'] == true,
     // 老档案里没有这个字段：一律按「从没探测过」读回（终审 R1 的兼容默认值），
@@ -81,6 +91,7 @@ class Track {
     this.lyrics = '',
     this.lyricsPlain = '',
     this.lyricsSource = '',
+    this.lyricsOrigin = '',
     this.restored = false,
     this.metadataProbed = false,
     TrackHandle? handle,
@@ -101,6 +112,13 @@ class Track {
   String lyrics;
   String lyricsPlain;
   String lyricsSource;
+
+  /// 自动匹配时的线上来源：`'qishui'` / `'kugou'` / `'netease'` / `'lrclib'`；
+  /// 手动歌词与没匹配过是空串。
+  ///
+  /// 只用于状态行的「歌词自动匹配自 …」文案。与 [lyricsSource] 正交：
+  /// 后者只分 auto / manual，决定要不要被自动匹配覆盖。
+  String lyricsOrigin;
   bool restored;
   TrackHandle handle;
 
@@ -142,6 +160,7 @@ class Track {
     lyrics: lyrics,
     lyricsPlain: lyricsPlain,
     lyricsSource: lyricsSource,
+    lyricsOrigin: lyricsOrigin,
     restored: restored,
     metadataProbed: metadataProbed,
     handle: handle,
@@ -159,6 +178,7 @@ class Track {
     'lyrics': lyrics,
     'lyricsPlain': lyricsPlain,
     'lyricsSource': lyricsSource,
+    'lyricsOrigin': lyricsOrigin,
     'restored': restored,
     // 终审 R1：与 `broken` 相反，这个标记**必须**进存档 —— 它是冷启动自愈
     // 谓词唯一的依据，存档往返读不回来就等于每次启动重跑整个曲库。

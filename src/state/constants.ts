@@ -48,9 +48,6 @@ export const SEEK_STEP = 5;
 /** 方向键调节音量步长（0~1）。 */
 export const VOLUME_STEP = 0.05;
 
-/** 「上一首」在已播放超过这个秒数时变为回到本曲开头。 */
-export const PREV_RESTART_AFTER = 3;
-
 /** 预读本地文件时长的超时（毫秒）。 */
 export const DURATION_PROBE_TIMEOUT = 3000;
 

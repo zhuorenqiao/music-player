@@ -1,0 +1,94 @@
+{
+  "inputs": {
+    "cloudfunctions/lyrics-relay/opencc-shim.cjs": {
+      "bytes": 431,
+      "imports": [],
+      "format": "cjs"
+    },
+    "src/lib/chinese.ts": {
+      "bytes": 1092,
+      "imports": [
+        {
+          "path": "cloudfunctions/lyrics-relay/opencc-shim.cjs",
+          "kind": "import-statement",
+          "original": "opencc-js/t2cn"
+        }
+      ],
+      "format": "esm"
+    },
+    "src/lib/netease-match.ts": {
+      "bytes": 9770,
+      "imports": [
+        {
+          "path": "src/lib/chinese.ts",
+          "kind": "import-statement",
+          "original": "./chinese"
+        }
+      ],
+      "format": "esm"
+    },
+    "src/server/lyrics-providers.ts": {
+      "bytes": 16658,
+      "imports": [
+        {
+          "path": "src/lib/netease-match.ts",
+          "kind": "import-statement",
+          "original": "../lib/netease-match"
+        }
+      ],
+      "format": "esm"
+    },
+    "cloudfunctions/lyrics-relay/src/index.ts": {
+      "bytes": 11363,
+      "imports": [
+        {
+          "path": "node:http",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "src/server/lyrics-providers.ts",
+          "kind": "import-statement",
+          "original": "../../../src/server/lyrics-providers"
+        },
+        {
+          "path": "src/lib/netease-match.ts",
+          "kind": "import-statement",
+          "original": "../../../src/lib/netease-match"
+        }
+      ],
+      "format": "esm"
+    }
+  },
+  "outputs": {
+    "cloudfunctions/lyrics-relay/index.min.js": {
+      "imports": [
+        {
+          "path": "node:http",
+          "kind": "require-call",
+          "external": true
+        }
+      ],
+      "exports": [],
+      "entryPoint": "cloudfunctions/lyrics-relay/src/index.ts",
+      "inputs": {
+        "cloudfunctions/lyrics-relay/opencc-shim.cjs": {
+          "bytesInOutput": 96
+        },
+        "cloudfunctions/lyrics-relay/src/index.ts": {
+          "bytesInOutput": 4557
+        },
+        "src/lib/chinese.ts": {
+          "bytesInOutput": 295
+        },
+        "src/lib/netease-match.ts": {
+          "bytesInOutput": 2736
+        },
+        "src/server/lyrics-providers.ts": {
+          "bytesInOutput": 7062
+        }
+      },
+      "bytes": 15286
+    }
+  }
+}

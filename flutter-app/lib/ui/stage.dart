@@ -453,6 +453,10 @@ class StagePreview extends StatelessWidget {
       mainAxisSize: inPlayerCard ? MainAxisSize.max : MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // `.stage__cover-wrap { margin-top }`（app.css:791 段）：唱机整体下移
+        // 40px，留白加在封面之上，歌名 / 歌词跟着一起走，不会压到盘面。
+        // 只在合成卡里生效 —— 独立预览（StagePreview 自带 chrome）不跟着走。
+        if (inPlayerCard) const SizedBox(height: 40),
         Center(child: cover),
         // `.stage { gap: 16px }`（:757），窄屏 @media 收到 14（:3944）。
         SizedBox(height: inPlayerCard ? (desktop ? 16 : 14) : 16),

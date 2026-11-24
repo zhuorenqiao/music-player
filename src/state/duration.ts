@@ -17,9 +17,13 @@ import type { Track } from './types';
 /**
  * 用临时 audio 预读时长。
  * @param track 已入列的曲目
+ * @param onFilled 探到有效时长后的回调：调用方据此立刻刷新列表，不必等整批
  * @returns 是否真的填上了一个有效时长
  */
-export function probeTrackDuration(track: Track): Promise<boolean> {
+export function probeTrackDuration(
+  track: Track,
+  onFilled?: (track: Track) => void,
+): Promise<boolean> {
   if (!track || Number.isFinite(track.duration)) {
     return Promise.resolve(false);
   }
@@ -55,6 +59,9 @@ export function probeTrackDuration(track: Track): Promise<boolean> {
       // 必须写回 IndexedDB：本地曲目的 localStorage 序列化会跳过它们，
       // 不补这一刀，刷新后时长又变 NaN。
       void patchLocalRecord(track.id, { duration: value });
+      // 列表要在单首探完时就更新；整批几十首并发探，等全部收敛再刷新会让
+      // 新导入的曲目在列表里长时间停在「-:--」。
+      onFilled?.(track);
       resolve(true);
     };
 

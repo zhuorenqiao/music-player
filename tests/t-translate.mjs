@@ -1,7 +1,9 @@
 /**
  * t-translate.mjs —— 译文获取的两条路径（本地代理 / 静态部署机翻兜底）
  *
- * 运行：node tests/t-translate.mjs
+ * 运行（依赖链里有 TS 模块，先用 esbuild 打包）：
+ *   node_modules\.bin\esbuild.cmd src/lib/translate-source.js --bundle --format=esm --platform=node --outfile=.cache/test/translate-source.bundle.mjs
+ *   node tests/t-translate.mjs
  *
  * 这里只测「请求编排」：代理可用时拿人工译文；代理不可用（返回 HTML）时改用
  * MyMemory 机翻，结果按行对回展示行，并写进本地缓存。真实的网易译文解析在
@@ -45,7 +47,10 @@ global.fetch = async (url, init) => {
   return realFetch(url, init);
 };
 
-const { fetchTranslation } = await import(new URL('src/lib/translate-source.js', root).href);
+const sourceUrl = process.env.TRANSLATE_BUNDLE
+  ? new URL(process.env.TRANSLATE_BUNDLE, root)
+  : new URL('src/lib/translate-source.js', root);
+const { fetchTranslation } = await import(sourceUrl.href);
 
 const track = { id: 't1', title: 'Yellow', artist: 'Coldplay', duration: 266, lyrics: '', lyricsPlain: '' };
 const lines = [{ text: 'Look at the stars' }, { text: 'Look how they shine for you' }, { text: '' }];

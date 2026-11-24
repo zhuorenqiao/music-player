@@ -52,7 +52,14 @@ class LyricsPrefetch {
   final Set<String> queued = <String>{};
 
   /// 为一批曲目后台补歌词，返回实际补齐的曲目数。
-  Future<int> prefetch(List<Track> tracks, {String? currentId}) async {
+  ///
+  /// [allowMissingDuration] 供「刚导入的一批」用：时长探针有 3 秒上限，个别
+  /// 坏文件探不到时不该把整首歌词永远跳过；默认 false 保持启动预取的旧语义。
+  Future<int> prefetch(
+    List<Track> tracks, {
+    String? currentId,
+    bool allowMissingDuration = false,
+  }) async {
     if (!isOnline()) {
       return 0;
     }
@@ -66,7 +73,7 @@ class LyricsPrefetch {
         continue;
       }
       // 本地文件时长还没探到时先跳过：带时长查准率高得多，探到后下一轮会补上。
-      if (track.isLocal && !track.hasDuration) {
+      if (track.isLocal && !track.hasDuration && !allowMissingDuration) {
         continue;
       }
       queued.add(track.id);
@@ -86,6 +93,7 @@ class LyricsPrefetch {
           track.lyrics = match.synced.isNotEmpty ? match.synced : '';
           track.lyricsPlain = match.synced.isNotEmpty ? '' : match.plain;
           track.lyricsSource = 'auto';
+          track.lyricsOrigin = lyricsOriginOf(match.source);
           filled += 1;
         }
       } catch (_) {

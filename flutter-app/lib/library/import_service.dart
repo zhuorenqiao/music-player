@@ -21,6 +21,7 @@
 // 这里按**来源字符串**派生（[localIdFor]），同一路径永远同一个 id，于是
 // 「重复导入同一个文件」天然去重。
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -84,6 +85,19 @@ class ImportResult {
 /// 一次开文件读进来，之后的小读取都在内存里命中）。
 const int _headProbeBytes = 64 * 1024;
 
+/// 一批导入里「标签 / 封面 / 时长回填」同时在跑的上限。
+///
+/// 为什么必须限流（大文件夹崩溃的根因）：导入 2000 首会把 2000 条回填任务
+/// **一次性全部启动**，每条都要开文件、把最多 64KB 头部 + 标签区（含内嵌封面，
+/// 单文件上限 8MB）读进内存；带封面的曲目还要 `instantiateImageCodec` 解码。
+/// 2000 条叠在一起，移动端直接 OOM / 文件句柄耗尽被杀，桌面端也会一次吃掉
+/// 数 GB。回填是**增值项**，完全没必要抢跑：4 条并发的吞吐已经足够让用户在
+/// 几秒内看到标签陆续出现，而峰值内存被压在「4 × 单文件预算」以内。
+///
+/// 不能只靠 [DurationProbe] 的串行队列：那个队列管住的只是「探时长」那一步，
+/// 开文件读标签与封面解码都发生在它之前，且彼此并发。
+const int kMaxConcurrentEnrichments = 4;
+
 /// 逐条点名的上限：超过这个数的拒绝一律汇总成一句。
 ///
 /// 原版对拒绝只发一句汇总（`skipped <n> unsupported files`）；这里保留点名
@@ -108,10 +122,23 @@ class ImportService {
     this.durationProbe,
     this.onImported,
     this.manualLyrics,
-  });
+    this.maxConcurrentEnrichments = kMaxConcurrentEnrichments,
+  }) : _enrichGate = _CountingSemaphore(maxConcurrentEnrichments);
 
   final Playlist playlist;
   final ToastSink toasts;
+
+  /// 回填并发上限（见 [kMaxConcurrentEnrichments]）。测试可调小以便断言。
+  final int maxConcurrentEnrichments;
+
+  /// 回填闸门：同一时刻最多 [maxConcurrentEnrichments] 条在跑。
+  ///
+  /// 实例级而不是批次级：连续导入两次时，两个批次也不该叠加成 8 条。
+  final _CountingSemaphore _enrichGate;
+
+  /// 本实例历史上同时跑过的回填任务峰值（测试用：钉住「大文件夹不雪崩」）。
+  @visibleForTesting
+  int get peakEnrichmentConcurrency => _enrichGate.peakActive;
 
   /// 手动 `.lrc` 的应用器（T12）。没给就退回「`.lrc` 与其它非音频一样被拒绝」。
   ///
@@ -146,6 +173,16 @@ class ImportService {
   /// 新曲目入列后回调（落库用）。fire-and-forget，出错不影响导入结果。
   final Future<void> Function(List<String> ids)? onImported;
 
+  /// 单首曲目的时长一落地就回调（界面渐进刷新用）。
+  ///
+  /// 为什么需要：一批几十首的时长是**串行**探的，而 `LibraryState` 只在整批
+  /// `enrichment` 收尾时 notify。等整批跑完再刷新，列表会在这几十秒里一直停在
+  /// `-:--` —— 用户看到的就是「新导入的歌没有时长」，哪怕探针其实已经填进了
+  /// 活对象。这个回调把「已经探到」的中间结果及时推给界面。
+  ///
+  /// 回调在探测链路里执行，**绝不许抛**：抛了会拖垮整批回填。
+  void Function(Track track)? onDurationReady;
+
   /// 导入一批路径。
   ///
   /// 空输入直接返回零结果、不发提示（拖了个空文件夹不该弹「已跳过 0 个」）。
@@ -174,8 +211,9 @@ class ImportService {
     final lyricsPaths = <String>[];
     final mediaPaths = <String>[];
     for (final path in paths) {
-      (isLyricsExtension(extensionOf(path)) ? lyricsPaths : mediaPaths)
-          .add(path);
+      (isLyricsExtension(extensionOf(path)) ? lyricsPaths : mediaPaths).add(
+        path,
+      );
     }
     // 音频那半照原流程走（含拒绝提示与入列），歌词那半等到它之后。
     final result = mediaPaths.isEmpty
@@ -369,9 +407,10 @@ class ImportService {
     // 探时长排在标签之后、也排在整批完成信号之前：批次的落库收尾会连它一起落盘。
     final outcome = await probe(live.handle.pathish);
     // 能填就填：NaN / 0 / 负数 / 无穷都算「探不出来」，未知时长必须保持 NaN，
-    // 不是 0；拿到了正数就写进活对象 —— 哪怕这次不算结论（下面那支），界面也
-    // 该早一点有进度条（第 4 轮 C8 的要求：别把已拿到的东西一起丢掉）。
-    if (outcome.isKnown) live.duration = outcome.seconds;
+    // 不是 0；拿到了正数就写进活对象，并立刻通知界面（不等整批收尾）—— 哪怕
+    // 这次不算结论（下面那支），界面也该早一点有进度条（第 4 轮 C8 的要求：
+    // 别把已拿到的东西一起丢掉）。
+    _applyDuration(live, outcome);
     // 结论只认「真的问过内核、没被预算掐掉、途中也没被关掉」这一种（第 3 轮 C1 +
     // 第 4 轮 C8）：超时是暂时的失败（大文件、盘没挂稳、媒体线程排队），探针在
     // 途中被关掉（退出时正在跑自愈回填）是整批被丢弃的尝试 —— 两者记上标记就
@@ -383,6 +422,26 @@ class ImportService {
     // 一遍，再由批次收尾把整库档案重写一遍（`library_state.dart` 的收尾落库）。
     return opened || outcome.isKnown;
   }
+
+  /// 把已探到的正数时长写进活对象，并通知界面。
+  ///
+  /// 幂等：同一首歌若被多条探测路径命中，只通知一次。
+  void _applyDuration(Track live, DurationProbeOutcome outcome) {
+    if (!outcome.isKnown || live.hasDuration) return;
+    live.duration = outcome.seconds;
+    try {
+      onDurationReady?.call(live);
+    } catch (_) {
+      // 通知界面是增值项，不许把回填链路带崩。
+    }
+  }
+
+  /// [_enrichOnce] 的闸门外壳：排队拿许可后再跑。
+  ///
+  /// 这是「大文件夹不把内存 / 句柄打满」的唯一入口：批量导入、冷启动自愈
+  /// 都从这里进，同一实例共享同一份并发额度。
+  Future<bool> _enrichQuiet(Track live) =>
+      _enrichGate.run(() => _enrichOnce(live));
 
   /// [_enrich] 的「绝不抛」外壳：失败只意味着这次没回填。
   ///
@@ -408,7 +467,7 @@ class ImportService {
   ///
   /// 返回值 = 这一次有没有真的记上标记（第 4 轮 I9）：整批都没记上就说明这一批
   /// 什么也没学到，调用方据此跳过那次「整库重写档案」的收尾。
-  Future<bool> _enrichQuiet(Track live) async {
+  Future<bool> _enrichOnce(Track live) async {
     var settled = false;
     try {
       settled = await _enrich(live);
@@ -430,9 +489,8 @@ class ImportService {
   /// 一条都没学到时不该再整库重写一遍档案，那是每次启动白写一次盘。
   Future<bool>? _batchOf(List<Future<bool>> tasks) {
     if (tasks.isEmpty) return null;
-    return Future.wait(tasks).then(
-      (results) => results.any((learned) => learned),
-    );
+    return Future.wait(tasks)
+        .then((results) => results.any((learned) => learned));
   }
 
   /// 冷启动还原的自愈回填：把**还没探测过**、且字段确实还缺的既有曲目重新
@@ -458,6 +516,40 @@ class ImportService {
         if (metadataIncomplete(track)) track,
     ];
     return _batchOf([for (final track in targets) _enrichQuiet(track)]);
+  }
+
+  /// 一批新导入曲目里仍没有时长的，回填收尾后再补探一次。
+  ///
+  /// 第一次探针可能被 3000ms 预算掐掉（安卓上 media_kit 的内核排队尤其常见），
+  /// 而界面已经在同一秒把「没有时长」画出来了。等整批 enrichment 收尾后再给
+  /// 这些漏网的歌一次机会：不重读标签，只重探时长；拿到就立刻通知界面并落库。
+  /// 只对**刚导入的这批**做，不碰老档案里已经定性「没有时长」的曲目，
+  /// 免得每次启动都把真空壳文件重新开一遍。
+  Future<bool>? repairMissingDurations(List<String> ids) {
+    if (durationProbe == null || ids.isEmpty) return null;
+    final targets = <Track>[];
+    for (final id in ids) {
+      final track = playlist.byId(id);
+      if (track == null || track.hasDuration) continue;
+      if (!track.handle.canProbeDuration) continue;
+      targets.add(track);
+    }
+    if (targets.isEmpty) return null;
+    return _batchOf([for (final track in targets) _retryDurationQuiet(track)]);
+  }
+
+  Future<bool> _retryDurationQuiet(Track live) async {
+    final probe = durationProbe;
+    if (probe == null) return false;
+    try {
+      final outcome = await probe(live.handle.pathish);
+      _applyDuration(live, outcome);
+      if (!outcome.isConclusive) return false;
+      live.metadataProbed = true;
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 文件名 → 曲目。歌手与曲名按原版规则拆（左侧歌手、右侧曲名），
@@ -513,6 +605,57 @@ class ImportService {
     unawaited(
       Future<void>.sync(task).then<void>((_) {}, onError: (Object _) {}),
     );
+  }
+}
+
+/// 计数信号量：限制同一时刻最多 [permits] 条异步任务在跑。
+///
+/// 为什么不用 `Future.wait` + 分批 `chunk`：分批会让每一段都等最慢的那条，
+/// 2000 条被切成 500 批时，最后一批要等前面 499 批全部结束才开始；而信号量是
+/// 「谁先完成谁先补位」，吞吐更稳，调用方拿到的仍是一条条的 Future。
+///
+/// 许可直接**移交**给等待者（release 时不加回计数），避免「释放后新来的任务
+/// 抢走许可、被唤醒的等待者又多占一个」的经典超发。
+class _CountingSemaphore {
+  _CountingSemaphore(int permits) : _permits = permits > 0 ? permits : 1;
+
+  int _permits;
+  int _active = 0;
+  int _peak = 0;
+  final Queue<Completer<void>> _waiting = Queue<Completer<void>>();
+
+  /// 历史峰值（测试用）。
+  int get peakActive => _peak;
+
+  Future<T> run<T>(Future<T> Function() task) async {
+    await _acquire();
+    _active += 1;
+    if (_active > _peak) _peak = _active;
+    try {
+      return await task();
+    } finally {
+      _active -= 1;
+      _release();
+    }
+  }
+
+  Future<void> _acquire() {
+    if (_permits > 0) {
+      _permits -= 1;
+      return Future<void>.value();
+    }
+    final waiter = Completer<void>();
+    _waiting.add(waiter);
+    return waiter.future;
+  }
+
+  void _release() {
+    if (_waiting.isNotEmpty) {
+      // 许可移交：_permits 保持 0，等待者醒来直接进入临界区。
+      _waiting.removeFirst().complete();
+    } else {
+      _permits += 1;
+    }
   }
 }
 

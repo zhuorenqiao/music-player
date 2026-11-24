@@ -4,7 +4,7 @@
 // 「播放器事件」（403-479）两段。职责边界：
 //   - 曲目切换的入口只有 [playTrack]，上下曲 / 自动跳 / 损坏跳 / 曲末续播都汇到它；
 //   - 曲末自动续播：`CompletedEvent` -> `next(auto: true)`（player.tsx:441），熔断后停手；
-//   - 上一首的三秒规则（constants.ts:46 PREV_RESTART_AFTER）；
+//   - 上一首 = 换歌（与下一首对称；没有「回本曲开头」那套三秒规则，见 [previous]）；
 //   - 加载失败 -> 打角标 + 1400ms 后自动跳，连续失败到列表长度就熔断；
 //   - 失败计数只在 canplay 清零（player.tsx:412 的清零点），位置 / 播放态不许洗它；
 //   - 真的出声（position > 0 的 timeupdate）才记最近播放，500ms 内同曲不重复。
@@ -52,11 +52,10 @@ abstract class ToastSink {
 typedef CancelDelay = void Function();
 
 /// 延时调度入口。默认 `Timer`；测试注入可手动推进的假时钟。
-typedef DelayScheduler =
-    CancelDelay Function(Duration delay, void Function() callback);
-
-/// 「上一首」回到本曲开头的阈值：已播放超过 3 秒就回开头而不是切曲。
-const int kPrevRestartAfter = 3;
+typedef DelayScheduler = CancelDelay Function(
+  Duration delay,
+  void Function() callback,
+);
 
 /// 损坏曲目自动跳下一首前的等待（毫秒）。
 const int kBrokenSkipDelayMs = 1400;
@@ -359,15 +358,24 @@ class TransportController {
     await playTrack(playlist.tracks[index].id);
   }
 
-  /// 上一首：已播放超过三秒先回本曲开头，否则真的切上一曲。
+  /// 上一首：直接切到上一首，与 [next] 对称。
+  ///
+  /// **不再有「已播放超过 3 秒先回本曲开头」那条约定**（原 `kPrevRestartAfter`）。
+  /// 它从 Apple Music 那套「上一首按钮兼作回开头」的交互抄来，实际后果是：用户
+  /// 听着半首歌按上一首 / 右滑切歌，**并没有换歌**，而是当前这首从 0:00 重来 ——
+  /// 就是用户报的「有的时候按上一曲、下一曲切歌，没有正常切其他歌曲，而是从头
+  /// 开始播放」。三处证据说明这条约定在这个产品里是错的：
+  ///   1. React 端的手势（`App.tsx:485`）与系统媒体会话（`media-session.tsx:277`）
+  ///      一直走 `playPrevTrack`（无条件切歌），只有按钮 / 键盘这条链走 `playPrev`
+  ///      —— 同一个「上一首」在同一端上有两套语义，本身就是 bug；
+  ///   2. 国内主流播放器（QQ 音乐、网易云音乐）的「上一首」就是换歌，回开头点
+  ///      进度条；用户对「上一首」的预期统一是「切上一首」；
+  ///   3. 锁屏 / 通知栏 / 耳机线控 / 键盘媒体键（`media_session_bridge.dart`）与
+  ///      舞台右滑（`ui/stage.dart:160`）都汇到这一个入口 —— 它们必须换歌。
+  /// React 端已同步改成无条件切歌（`src/state/player.tsx` 的 `playPrev`），两端
+  /// 同一条语义。
   Future<void> previous() async {
     if (playlist.size == 0) return;
-    // 读驱动的实时位置而不是 position.value：事件是异步投递的，刚 seek 完
-    // 可能还没到；原版这里读的也是 player.currentTime（player.tsx:290）。
-    if (player.position > kPrevRestartAfter) {
-      await player.seek(0);
-      return;
-    }
     final index = playlist.prevIndex();
     if (index < 0) return;
     await playTrack(playlist.tracks[index].id);
@@ -377,7 +385,11 @@ class TransportController {
   PlayMode cycleMode() {
     final mode = playlist.cycleMode();
     // 同一个 key：连点只在原位置改文案并重新计时，不叠一条新的（player.tsx:346）
-    toasts.show('播放模式：${playModeLabel(mode)}', key: 'play-mode', durationMs: 2000);
+    toasts.show(
+      '播放模式：${playModeLabel(mode)}',
+      key: 'play-mode',
+      durationMs: 2000,
+    );
     _publish();
     return mode;
   }
@@ -565,8 +577,11 @@ class TransportController {
     final track = playlist.current;
     if (track != null) {
       track.broken = true;
+      // 曲名必须用「」括起来：直接塞进圆括号会读成一句道歉
+      // （歌名恰好叫《對不起》时就是「…请稍后重试（對不起）」）。
+      final title = track.title.trim();
       toasts.show(
-        '$message（${track.title}）',
+        title.isEmpty ? message : '「$title」$message',
         key: 'broken-${track.id}',
         durationMs: 5000,
       );
@@ -635,10 +650,7 @@ class TransportController {
     );
   }
 
-  static CancelDelay _timerSchedule(
-    Duration delay,
-    void Function() callback,
-  ) {
+  static CancelDelay _timerSchedule(Duration delay, void Function() callback) {
     final timer = Timer(delay, callback);
     return timer.cancel;
   }

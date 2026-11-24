@@ -23,11 +23,14 @@ import 'package:light_music/playback/audio_driver.dart';
 import 'package:light_music/playback/media_session_bridge.dart';
 import 'package:light_music/playback/play_mode.dart';
 import 'package:light_music/playback/track.dart';
+import 'package:light_music/sleep/sleep_state.dart';
 import 'package:light_music/state/library_state.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/recent_state.dart';
 import 'package:light_music/state/toast_state.dart';
 import 'package:light_music/ui/home_page.dart';
+import 'package:light_music/ui/radio_page.dart';
+import 'package:light_music/ui/sleep_page.dart';
 import 'package:light_music/ui/toasts.dart';
 import 'package:provider/provider.dart';
 
@@ -545,8 +548,92 @@ void main() {
     expect(context.read<PlayerState>(), same(bootstrap.player));
     expect(context.read<RecentState>(), same(bootstrap.recent));
     expect(context.read<ToastState>(), same(bootstrap.toasts));
+    // T32：休眠链路也挂在应用根上（SleepBar / SleepPage 都从这里取）
+    expect(context.read<SleepState>(), isNotNull);
     // 提示条宿主编在路由之上：任何页面都能看到同一条提示
     expect(find.byType(ToastsHost), findsOneWidget);
+  });
+
+  testWidgets('休眠入口：顶栏点「休眠」进休眠页，点「音乐」回音乐页', (tester) async {
+    tester.view.physicalSize = const Size(1100, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final bootstrap = (await tester.runAsync(
+      () => buildBootstrap(
+        prefs: prefs,
+        dataDirectory: dir.path,
+        driver: FakeAudioDriver(),
+        bridge: FakeMediaSessionBridge(),
+      ),
+    ))!;
+    await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('sleep-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.byType(SleepPage), findsOneWidget);
+    expect(find.text('把今天，轻轻放下'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('sleep-back-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SleepPage), findsNothing);
+    expect(find.byType(HomePage), findsOneWidget);
+
+    // 路由上的呼吸动画要随页面一起销毁，否则 FakeAsync 会留一个 Ticker。
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('休眠 ⇄ 电台互跳：始终只有一层子页面，来回切都能回音乐页', (tester) async {
+    tester.view.physicalSize = const Size(1100, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final bootstrap = (await tester.runAsync(
+      () => buildBootstrap(
+        prefs: prefs,
+        dataDirectory: dir.path,
+        driver: FakeAudioDriver(),
+        bridge: FakeMediaSessionBridge(),
+      ),
+    ))!;
+    await tester.pumpWidget(LightMusicApp(bootstrap: bootstrap));
+    await tester.pump();
+
+    /// 退场 240ms → 下一帧从音乐页推新页 → 淡入 320ms。
+    Future<void> settleSwitch() async {
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 260));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 340));
+    }
+
+    await tester.tap(find.byKey(const Key('sleep-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.byType(SleepPage), findsOneWidget);
+
+    // 休眠页右上角「电台」→ 电台页（先把休眠页退掉，再推电台页）
+    await tester.tap(find.byKey(const Key('sleep-radio-button')));
+    await settleSwitch();
+    expect(find.byType(RadioPage), findsOneWidget);
+    expect(find.byType(SleepPage), findsNothing);
+
+    // 电台页右上角「休眠」→ 又回休眠页
+    await tester.tap(find.byKey(const Key('radio-sleep-button')));
+    await settleSwitch();
+    expect(find.byType(SleepPage), findsOneWidget);
+    expect(find.byType(RadioPage), findsNothing);
+
+    // 最后从休眠页的「音乐」回音乐页：路由栈里确实只剩这一层
+    await tester.tap(find.byKey(const Key('sleep-back-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(HomePage), findsOneWidget);
+    expect(find.byType(SleepPage), findsNothing);
+    expect(find.byType(RadioPage), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
   });
 
   test('删除正在播的曲目：接续曲目接手播放', () async {

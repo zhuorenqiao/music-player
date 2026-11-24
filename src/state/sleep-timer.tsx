@@ -2,11 +2,13 @@
  * sleep-timer.tsx —— 睡眠定时器
  *
  * 设定一个时长，倒计时归零时**暂停播放**（保留当前进度，再按播放即可继续）。
+ * 电台走的是另一条音频链路，这里也一并把它暂停 —— 到点时用户可能正在听电台
+ * （音乐早已让位），只暂停音乐的话电台会继续响一整夜。
  *
  * 状态只有一个：**截止时刻（deadline，墙钟时间戳）**。没有 deadline = 未启用。
  * 剩余时间由 1s 的 tick 现算（deadline - now），不另存一个会漂移的倒计时器。
  *
- * 定时器按墙钟走：切歌不重置、暂停 / 播放歌曲都不影响它 —— 它只认时间。
+ * 定时器按墙钟走：切歌、换台都不重置，暂停 / 播放也不影响它 —— 它只认时间。
  * deadline 写进 localStorage：刷新页面或重开应用后倒计时接着走；否则用户刷新
  * 一下定时器就凭空失效，太意外。
  */
@@ -17,6 +19,8 @@ import {
 import { Storage } from '../lib/storage.js';
 import { STORAGE_KEYS } from './constants';
 import { usePlayer } from './player';
+import { useRadio } from './radio';
+import { useSleep } from './sleep';
 import { useToast } from './toast';
 
 /** 缺省时长（分钟）：面板打开时滑杆停在这一档，自定义输入也预填它。 */
@@ -56,6 +60,8 @@ function formatRemaining(ms: number): string {
 
 export function SleepTimerProvider({ children }: { children: ReactNode }) {
   const { pause } = usePlayer();
+  const { pause: pauseRadio } = useRadio();
+  const { pause: pauseSleep } = useSleep();
   const { show } = useToast();
 
   const [deadline, setDeadline] = useState<number | null>(() => {
@@ -76,16 +82,20 @@ export function SleepTimerProvider({ children }: { children: ReactNode }) {
   const firedRef = useRef(false);
 
   /**
-   * pause / show 走 ref：它们的身份可能因为别的状态变化而换，
+   * pause / pauseRadio / show 走 ref：它们的身份可能因为别的状态变化而换，
    * 而倒计时的 tick 必须在整个期间一直有效（把它们放进依赖里会让定时器
    * 跟着无关的渲染反复重排）。
    */
   const pauseRef = useRef(pause);
+  const pauseRadioRef = useRef(pauseRadio);
+  const pauseSleepRef = useRef(pauseSleep);
   const showRef = useRef(show);
   useEffect(() => {
     pauseRef.current = pause;
+    pauseRadioRef.current = pauseRadio;
+    pauseSleepRef.current = pauseSleep;
     showRef.current = show;
-  }, [pause, show]);
+  }, [pause, pauseRadio, pauseSleep, show]);
 
   useEffect(() => {
     if (deadline === null) {
@@ -100,7 +110,11 @@ export function SleepTimerProvider({ children }: { children: ReactNode }) {
       firedRef.current = true;
       setDeadline(null);
       Storage.remove(STORAGE_KEYS.sleepTimer);
+      // 音乐、电台与休眠声景是三条独立链路，谁在响就停谁 —— 都调用不会互相
+      // 影响：没在响的那一路本来就是暂停态。
       pauseRef.current();
+      pauseRadioRef.current();
+      pauseSleepRef.current();
       showRef.current('定时结束，已暂停播放');
     };
     const timer = window.setInterval(tick, 1000);

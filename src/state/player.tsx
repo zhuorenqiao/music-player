@@ -35,7 +35,7 @@ export interface Notice {
   message: string;
   actionLabel?: string;
 }
-import { APP_TITLE, PREV_RESTART_AFTER, STORAGE_KEYS } from './constants';
+import { APP_TITLE, STORAGE_KEYS } from './constants';
 import type { PlayMode, RecentEntry, Track } from './types';
 import { useToast } from './toast';
 
@@ -290,7 +290,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [goTo, playlist]);
 
-  /** 无条件切到上一首：手势切歌不该被「回到本曲开头」的按钮约定打断 */
+  /** 切到上一首（手势 / 系统媒体会话 / 「上一首」按钮共用这一条语义） */
   const playPrevTrack = useCallback(() => {
     const prev = playlist.prevIndex();
     if (prev >= 0) {
@@ -298,15 +298,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [goTo, playlist]);
 
+  /**
+   * 「上一首」= 换歌，与 `playNext` 对称。
+   *
+   * 从前这里有一条「已播放超过 3 秒回到本曲开头」的约定（`PREV_RESTART_AFTER`）：
+   * 用户在播到一半时按上一首 / 右滑，看到的不是换歌，而是当前这首从 0:00 重来。
+   * 那个约定来自 Apple Music 的按钮交互，但本项目的手势与系统媒体会话一直走
+   * [playPrevTrack]（无条件切歌），同一个「上一首」有两套语义本身就是 bug；
+   * 国内主流播放器（QQ 音乐、网易云音乐）也都是换歌，回开头点进度条。
+   * Flutter 端已同步（`TransportController.previous` 去掉同一条规则），两端一致。
+   */
   const playPrev = useCallback(() => {
-    // 已播放超过 3 秒：「上一首」回到本曲开头，这是播放器通用约定
-    if (player.currentTime > PREV_RESTART_AFTER) {
-      player.seek(0);
-      timeStore.set(0);
-      return;
-    }
     playPrevTrack();
-  }, [playPrevTrack, player]);
+  }, [playPrevTrack]);
 
   const togglePlay = useCallback(() => {
     if (playlist.size === 0) {
@@ -490,7 +494,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setFailedIds((current) => (current.includes(track.id) ? current : [...current, track.id]));
       }
       consecutiveFailures.current += 1;
-      show(detail?.message || '音频播放失败，请稍后重试', 'error', 5000);
+      const reason = detail?.message || '音频播放失败';
+      const title = track?.title?.trim() ?? '';
+      // 曲名加「」：直接拼「（對不起）」会被读成一句道歉。
+      show(title ? `「${title}」${reason}` : reason, 'error', 5000);
       if (consecutiveFailures.current >= Math.max(1, playlist.size)) {
         // 全列表都试过一轮：停手并说清楚，别静默卡在那里
         window.clearTimeout(failureTimer.current);

@@ -19,10 +19,12 @@
 // 「更多」按钮与抽屉住在 `more_menu.dart`（电台页页头也用它，两处同一颗）。
 // 三个动作回调由调用方注入，`HomePage` 接 `core/file_picking.dart`。
 //
-// T31 起「更多」左侧多一颗「电台」：进电台页的入口。它是顶栏里**唯一**带主题色
-// 的一颗（accent 描边 + accent 图标 + accent 微光），因为它是「另一个页面」的
-// 入口而不是又一个工具按钮；窄屏与其它按钮一样收成 32×32 图标，但保留 accent
-// 着色，仍能一眼认出来。
+// T31 起「更多」左侧多一颗「电台」：进电台页的入口。它带 accent 描边 + 淡渐变底，
+// 但图标在所有尺寸下都与「更多」同用中性 token，不跟随主题色；窄屏收成 32×32 图标。
+// 这颗不落外发光、也不挂「在播」点 —— 顶栏是平的一排。
+//
+// T32 起「电台」左侧再多一颗「休眠」：进休眠页的入口。壳保持素色（border +
+// surface），月亮在所有尺寸下与「更多」同用中性 token；窄屏同样收成 32×32。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -30,6 +32,7 @@ import 'package:flutter/material.dart';
 import '../core/breakpoints.dart';
 import '../theme/app_tokens.dart';
 import 'more_menu.dart';
+import 'sleep_moon.dart';
 
 class AppHeader extends StatelessWidget {
   const AppHeader({
@@ -37,6 +40,7 @@ class AppHeader extends StatelessWidget {
     required this.onAddFolder,
     required this.onClearPlaylist,
     this.onOpenRadio,
+    this.onOpenSleep,
     this.onSwitchView,
     this.immersive = false,
     super.key,
@@ -48,6 +52,9 @@ class AppHeader extends StatelessWidget {
 
   /// 「电台」入口：切到电台页。null 时不渲染（纯展示 / 旧调用点保持原样）。
   final VoidCallback? onOpenRadio;
+
+  /// 「休眠」入口：切到休眠页。null 时不渲染（纯展示 / 旧调用点保持原样）。
+  final VoidCallback? onOpenSleep;
 
   /// 顶部「模式切换」按钮（React `App.tsx:220-229` 的 `.app__mode`）：
   /// 在封面页 / 完整歌词页之间切。null 时不渲染（纯展示 / 旧调用点保持原样）。
@@ -72,6 +79,8 @@ class AppHeader extends StatelessWidget {
     final showMode = onSwitchView != null && !narrow;
     // 电台入口：桌面与「更多」并排；窄屏仍是图标一枚（见 [_RadioChip]）。
     final openRadio = onOpenRadio;
+    // 休眠入口：排在电台**左侧**（用户明确的位置），见 [_SleepChip]。
+    final openSleep = onOpenSleep;
 
     final children = <Widget>[];
     if (!narrow) {
@@ -94,6 +103,25 @@ class AppHeader extends StatelessWidget {
               borderRadius: BorderRadius.circular(999),
               overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
               child: _ViewModeChip(iconOnly: narrow, immersive: immersive),
+            ),
+          ),
+        )
+        ..add(const SizedBox(width: 8));
+    }
+    if (openSleep != null) {
+      children
+        ..add(
+          Semantics(
+            button: true,
+            label: '助眠',
+            excludeSemantics: true,
+            onTap: openSleep,
+            child: InkWell(
+              key: const Key('sleep-button'),
+              onTap: openSleep,
+              borderRadius: BorderRadius.circular(999),
+              overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
+              child: _SleepChip(iconOnly: narrow),
             ),
           ),
         )
@@ -328,12 +356,63 @@ class _ModeIconPainter extends CustomPainter {
       oldDelegate.immersive != immersive || oldDelegate.color != color;
 }
 
+/// 「休眠」入口胶囊。
+///
+/// 排在「电台」左侧：壳是素色（border + surface 的淡渐变），月亮与「更多」同用
+/// 中性 token。窄屏与其它顶栏按钮同一套规则：只剩 32×32 图标、去掉「地」。
+class _SleepChip extends StatelessWidget {
+  const _SleepChip({required this.iconOnly});
+
+  final bool iconOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.tokens;
+    final iconColor = iconOnly ? tokens.textDim : tokens.text;
+    if (iconOnly) {
+      return SizedBox(
+        width: 32,
+        height: 32,
+        child: Center(child: SleepMoonIcon(size: 16, color: iconColor)),
+      );
+    }
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: tokens.border),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [tokens.accent.withValues(alpha: 0.10), tokens.surface],
+        ),
+      ),
+      alignment: Alignment.center,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SleepMoonIcon(size: 16, color: iconColor),
+          const SizedBox(width: 6),
+          Text(
+            '助眠',
+            style: TextStyle(
+              fontSize: 12.5,
+              letterSpacing: 0.6,
+              color: tokens.text,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 「电台」入口胶囊。
 ///
-/// 顶栏里唯一带主题色的一颗：accent 描边 + accent 图标 + 一点点外发光，
-/// 与旁边的「模式切换 / 更多」那两颗素色胶囊分得开，又不会抢走播放按钮的注意力。
-/// 窄屏（<900）与其它顶栏按钮同一套规则：只剩 32×32 图标、去掉「地」，
-/// 但图标保留 accent 色 —— 它是另一个页面的入口，颜色是它唯一的身份标记。
+/// 顶栏里带描边 + 淡渐变底的一颗：accent 描边 + 一层淡渐变底，**图标与字在所有
+/// 尺寸下都不跟随主题色**。窄屏（<900）与其它顶栏按钮同一套规则：只剩 32×32
+/// 图标、去掉「地」。不落外发光、不挂「在播」点，避免顶栏看起来浮起。
 class _RadioChip extends StatelessWidget {
   const _RadioChip({required this.iconOnly});
 
@@ -342,11 +421,12 @@ class _RadioChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
+    final iconColor = iconOnly ? tokens.textDim : tokens.text;
     if (iconOnly) {
       return SizedBox(
         width: 32,
         height: 32,
-        child: Center(child: _RadioIcon(size: 18, color: tokens.accent)),
+        child: Center(child: _RadioIcon(size: 18, color: iconColor)),
       );
     }
     return Container(
@@ -360,38 +440,20 @@ class _RadioChip extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [tokens.accentSoft, tokens.surface],
         ),
-        boxShadow: [
-          BoxShadow(
-            color: tokens.accent.withValues(alpha: 0.16),
-            blurRadius: 18,
-            spreadRadius: -8,
-            offset: const Offset(0, 4),
-          ),
-        ],
       ),
       alignment: Alignment.center,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _RadioIcon(size: 16, color: tokens.accent),
+          _RadioIcon(size: 16, color: iconColor),
           const SizedBox(width: 6),
           Text(
             '电台',
             style: TextStyle(
               fontSize: 12.5,
               letterSpacing: 0.6,
+              // 图标与「更多」同用中性 token，只有描边和底色保留主题色。
               color: tokens.text,
-            ),
-          ),
-          const SizedBox(width: 6),
-          // 一颗 4px 的「在播」点：让入口看起来像「开着的一台电台」，
-          // 而不是又一个纯图标按钮（只有装饰作用，点整颗胶囊都能进页面）。
-          Container(
-            width: 4,
-            height: 4,
-            decoration: BoxDecoration(
-              color: tokens.accent.withValues(alpha: 0.8),
-              shape: BoxShape.circle,
             ),
           ),
         ],

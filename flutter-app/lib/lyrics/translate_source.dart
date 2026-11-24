@@ -36,6 +36,7 @@ import 'dart:async';
 
 import 'netease_match.dart';
 import 'query.dart';
+import 'script_fold.dart';
 import 'translate_cache.dart';
 import 'upstream.dart';
 
@@ -125,10 +126,8 @@ class TranslateSource implements TranslationFetcher {
     CancelToken? cancel,
     bool useCache = true,
   }) async {
-    final query = normalizeQuery(
-      title: title,
-      artist: artist,
-      duration: duration,
+    final query = foldQuery(
+      normalizeQuery(title: title, artist: artist, duration: duration),
     );
     if (query.trackName.isEmpty) {
       return const TranslationResult(status: 'empty-query');

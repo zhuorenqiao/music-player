@@ -17,11 +17,15 @@ import 'package:light_music/playback/audio_player.dart';
 import 'package:light_music/playback/playlist.dart';
 import 'package:light_music/playback/track.dart';
 import 'package:light_music/playback/transport_controller.dart';
+import 'package:light_music/radio/radio_engine.dart';
+import 'package:light_music/radio/radio_state.dart';
+import 'package:light_music/radio/radio_station.dart';
 import 'package:light_music/state/player_state.dart';
 import 'package:light_music/state/sleep_timer_state.dart';
 import 'package:light_music/state/toast_state.dart';
 import 'package:light_music/theme/app_theme.dart';
 import 'package:light_music/theme/app_tokens.dart';
+import 'package:light_music/ui/radio_page.dart';
 import 'package:light_music/ui/sleep_timer_button.dart';
 import 'package:provider/provider.dart';
 
@@ -347,6 +351,90 @@ void main() {
       await tester.tap(find.text('开始'));
       await tester.pump();
       expect(harness.timer.remaining, const Duration(minutes: 10));
+      await harness.cleanup();
+    });
+  });
+
+  group('电台页', () {
+    testWidgets('闹钟排在「音乐」左边；到点把电台也暂停（当前台保留）', (tester) async {
+      addTearDown(tester.view.reset);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1200, 900);
+
+      final harness = _Harness();
+      addTearDown(harness.dispose);
+      final engine = FakeRadioEngine();
+      final radio = RadioState(engine: engine);
+      addTearDown(radio.dispose);
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<SleepTimerState>.value(
+              value: harness.timer,
+            ),
+            ChangeNotifierProvider<RadioState>.value(value: radio),
+          ],
+          child: MaterialApp(
+            theme: buildTheme().copyWith(
+              extensions: const [AppTokensData(tokens: AppTokens.dark)],
+            ),
+            home: RadioPage(onBack: () {}),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final station = radioStationById('fm-beijing-music')!;
+      await radio.tune(station);
+      await tester.pump();
+
+      final trigger = find.byKey(const Key('sleep-timer-trigger'));
+      final music = find.byKey(const Key('radio-back-button'));
+      expect(trigger, findsOneWidget, reason: '电台页要复用同一颗睡眠定时器');
+      expect(tester.getCenter(trigger).dx, lessThan(tester.getCenter(music).dx));
+
+      // 交互与音乐页一致：点开是同一块面板（滑杆 + 自定义 + 开始）
+      await tester.tap(trigger, warnIfMissed: false);
+      await tester.pump();
+      expect(find.byKey(const Key('sleep-timer-slider')), findsOneWidget);
+      expect(find.byKey(const Key('sleep-timer-custom')), findsOneWidget);
+      await tester.tap(trigger, warnIfMissed: false);
+      await tester.pump();
+      expect(find.byKey(const Key('sleep-timer-slider')), findsNothing);
+
+      // 装配层接的是 app.dart 那条线：到点除了暂停音乐，也暂停电台
+      harness.timer.onExpire = () => radio.pause();
+      harness.timer.start(1);
+      await tester.pump();
+      // 时间到：把假时钟拨过截止时刻，再让 tick 跑一次
+      harness.clock = harness.clock.add(const Duration(minutes: 1, seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+
+      expect(radio.playing, isFalse, reason: '定时结束电台要停声');
+      expect(radio.current?.id, station.id, reason: '暂停保留当前台');
+      expect(engine.calls, contains('pause'));
+      expect(harness.timer.running, isFalse);
+
+      // 窄屏落位与 React 端对齐：右内缩 10、三颗各占 32/32/26、间隔 8，
+      // 26 高的闹钟由 Row 居中 → y = 12 + (32-26)/2 = 15
+      //（三页统一口径：按钮上缘 12、图标中心 28）。
+      tester.view.physicalSize = const Size(390, 844);
+      await tester.pump();
+      expect(
+        tester.getRect(trigger),
+        const Rect.fromLTWH(274, 15, 26, 26),
+        reason: '闹钟落在「音乐」左边',
+      );
+      expect(
+        tester.getRect(music),
+        const Rect.fromLTWH(308, 12, 32, 32),
+      );
+      expect(
+        tester.getRect(find.byKey(const Key('menu-button'))),
+        const Rect.fromLTWH(348, 12, 32, 32),
+      );
       await harness.cleanup();
     });
   });

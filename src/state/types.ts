@@ -24,6 +24,8 @@ export interface Track {
   lyricsPlain?: string;
   /** auto = 联网匹配；manual = 用户导入的 .lrc */
   lyricsSource?: string;
+  /** 自动匹配的线上来源：`qishui` / `kugou` / `netease` / `lrclib`；手动歌词与没匹配过为空 */
+  lyricsOrigin?: string;
   /** 从 IndexedDB 还原出来的标记 */
   restored?: boolean;
 }

@@ -123,10 +123,7 @@ void main() {
   });
 
   testWidgets('常驻错误横幅优先于列表内容', (tester) async {
-    final harness = PanelHarness(
-      titles: ['十年'],
-      notice: '音频解码失败，文件可能已损坏',
-    );
+    final harness = PanelHarness(titles: ['十年'], notice: '音频解码失败，文件可能已损坏');
     addTearDown(harness.dispose);
     await pump(tester, harness);
     expect(find.text('音频解码失败，文件可能已损坏'), findsOneWidget);
@@ -140,10 +137,7 @@ void main() {
   // 终审 I5 / ledger T28 那条 deferred minor：这颗按钮从前只是画出来，
   // 没有任何断言证明它接到 `userGesture()`。
   testWidgets('「继续播放」按下去就是一次 userGesture 重试', (tester) async {
-    final harness = PanelHarness(
-      titles: ['十年'],
-      notice: '音频解码失败，文件可能已损坏',
-    );
+    final harness = PanelHarness(titles: ['十年'], notice: '音频解码失败，文件可能已损坏');
     addTearDown(harness.dispose);
     await pump(tester, harness);
 
@@ -170,14 +164,60 @@ void main() {
     final harness = PanelHarness(titles: ['十年', '白玫瑰'], tall: true);
     addTearDown(harness.dispose);
     await pump(tester, harness);
-    final headerBefore = tester.getRect(
-      find.byKey(const Key('panel-header')),
-    );
+    final headerBefore = tester.getRect(find.byKey(const Key('panel-header')));
     await tester.enterText(searchField(), '十年');
     await tester.pump(const Duration(milliseconds: 300));
     final headerAfter = tester.getRect(find.byKey(const Key('panel-header')));
     expect(headerAfter.top, headerBefore.top);
     expect(headerAfter.height, headerBefore.height);
+  });
+
+  testWidgets('表头「重新获取」：空列表禁用，有歌时交给状态机', (tester) async {
+    final empty = PanelHarness();
+    addTearDown(empty.dispose);
+    await pump(tester, empty);
+    expect(find.byKey(const Key('panel-refresh')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('panel-refresh')));
+    await tester.pump();
+    expect(empty.toasts.items, isEmpty, reason: '空列表按钮禁用，不弹提示');
+
+    final harness = PanelHarness(titles: ['十年']);
+    addTearDown(harness.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme().copyWith(
+          extensions: const [AppTokensData(tokens: AppTokens.dark)],
+        ),
+        home: Scaffold(
+          body: SizedBox(width: 420, height: 700, child: harness.build()),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('panel-refresh')));
+    await tester.pump();
+    // 装配壳的替身是离线的：命中真实状态机的离线短路，只提示、不发请求。
+    expect(harness.toasts.items.single.kind.name, 'error');
+    harness.toasts.drainForTest();
+  });
+
+  testWidgets('320 宽表头不溢出：tab + 重新获取 + 收起都放得下', (tester) async {
+    addTearDown(tester.view.reset);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 700);
+    final harness = PanelHarness(titles: ['十年', '白玫瑰']);
+    addTearDown(harness.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTheme().copyWith(
+          extensions: const [AppTokensData(tokens: AppTokens.dark)],
+        ),
+        home: Scaffold(body: harness.build()),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('panel-refresh')), findsOneWidget);
+    expect(find.byKey(const Key('panel-tabs')), findsOneWidget);
   });
 
   testWidgets('点击已失效的最近记录只提示，不播放', (tester) async {
@@ -188,10 +228,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('旧歌0'));
     await tester.pump();
-    expect(
-      harness.toasts.items.single.message,
-      '这首歌已经不在播放列表里了',
-    );
+    expect(harness.toasts.items.single.message, '这首歌已经不在播放列表里了');
     expect(harness.player.playing, isFalse);
     // 定时器不能留到用例结束（框架会判 pending timer）
     harness.toasts.drainForTest();
@@ -257,9 +294,7 @@ void main() {
 
   // ---- 打开播放列表时把当前行滚到中间（原版 src/App.tsx:671-689） ----
 
-  List<String> manyTitles(int count) => [
-    for (var i = 0; i < count; i++) '歌$i',
-  ];
+  List<String> manyTitles(int count) => [for (var i = 0; i < count; i++) '歌$i'];
 
   testWidgets('打开播放列表时当前行落在列表垂直中间', (tester) async {
     final harness = PanelHarness(titles: manyTitles(30));

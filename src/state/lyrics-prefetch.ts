@@ -8,7 +8,7 @@
  * 当前曲目不走这里，它由 LyricsProvider 走带状态提示的正常流程。
  */
 
-import { matchLyrics, isOnline } from '../lib/lyrics-source.js';
+import { matchLyrics, isOnline, lyricsOriginOf } from '../lib/lyrics-source.js';
 import { patchTrack as patchLocalRecord } from '../lib/local-store.js';
 import type { Track } from './types';
 
@@ -22,9 +22,15 @@ const queued = new Set<string>();
  * 为一批曲目后台补歌词。
  * @param tracks 候选曲目（已有歌词的会被跳过）
  * @param currentId 当前播放曲目 id（它有自己的带状态流程，这里跳过）
+ * @param options.allowMissingDuration 时长还没探到也照样查（导入批次用：
+ *   探针有 3 秒上限，不能因为一首坏文件把整批歌词预取永远跳过）
  * @returns 实际补齐的曲目数
  */
-export async function prefetchLyrics(tracks: Track[], currentId?: string | null): Promise<number> {
+export async function prefetchLyrics(
+  tracks: Track[],
+  currentId?: string | null,
+  { allowMissingDuration = false }: { allowMissingDuration?: boolean } = {},
+): Promise<number> {
   if (!isOnline()) {
     return 0;
   }
@@ -38,7 +44,7 @@ export async function prefetchLyrics(tracks: Track[], currentId?: string | null)
       continue;
     }
     // 本地文件时长还没探到时先跳过：带时长查准率高得多，探到后下一轮会补上
-    if (track.isLocal && !Number.isFinite(track.duration)) {
+    if (track.isLocal && !Number.isFinite(track.duration) && !allowMissingDuration) {
       continue;
     }
     queued.add(track.id);
@@ -50,10 +56,12 @@ export async function prefetchLyrics(tracks: Track[], currentId?: string | null)
           track.lyrics = result.syncedLyrics || '';
           track.lyricsPlain = result.syncedLyrics ? '' : (result.plainLyrics || '');
           track.lyricsSource = 'auto';
+          track.lyricsOrigin = lyricsOriginOf(result.source);
           void patchLocalRecord(track.id, {
             lyrics: track.lyrics,
             lyricsPlain: track.lyricsPlain,
             lyricsSource: 'auto',
+            lyricsOrigin: track.lyricsOrigin,
           });
           filled += 1;
         }

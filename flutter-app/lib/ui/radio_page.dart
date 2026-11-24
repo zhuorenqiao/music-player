@@ -5,6 +5,8 @@
 //
 // 「所属分类」写在播放卡顶部那行小字里（`传统 FM · 音乐台`），换台时跟着换；
 // 下方页签只负责筛台表，两者共用 `radioTabOf()` 那一份分类元数据。
+// 页签支持左右滑动切换：在页签 + 台表这一块横滑，松手过 56px 就翻页，
+// 新表从滑入方向淡进来 —— 与 React `RadioPage.tsx` 同一套口径。
 //
 // 在播时大卡上的同心环会一圈圈慢慢向外扩散（暂停就冻在原地，不跳回）；
 // 列表缩略图不参与 —— 40px 里再扩散只会像噪点。
@@ -12,6 +14,10 @@
 // 颜色一个都不写死：全部走 [AppTokens]，换肤 / 明暗切换时整页跟着翻。
 // 与 React `src/components/RadioPage.tsx` 逐项对齐（文案、尺寸、圆角、字号、间距），
 // 改一处必须改另一处。
+//
+// 页头右侧四颗：睡眠定时器 → 「休眠」互跳 → 「音乐」回退 → 「更多」。
+// 「休眠」是这一页的邻居入口（另一枚在休眠页，是「电台」），三颗带壳的胶囊
+// 共用 `page_link_chip.dart` 的 [PageLinkChip]。
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -22,6 +28,11 @@ import '../radio/radio_station.dart';
 import '../radio/radio_state.dart';
 import '../theme/app_tokens.dart';
 import 'more_menu.dart';
+import 'page_link_chip.dart';
+import 'scroll_physics.dart';
+import 'sleep_moon.dart';
+import 'sleep_timer_button.dart';
+import 'tool_panel.dart';
 
 /// 播放卡圆角：与音乐页那张卡同档（`--radius-xl`）。
 const double _radius = 24;
@@ -29,11 +40,24 @@ const double _radius = 24;
 /// 桌面版心：参考图是手机版式，宽屏把它摊成一张长表会很空。
 const double _maxContent = 760;
 
+/// 页签左右滑动切换的横向位移阈值（px）——与 React `TAB_SWIPE_PX` 同值。
+const double kTabSwipePx = 56;
+
+/// 横向位移须达到纵向的这么多倍才切页（竖着划列表不切）。
+const double kTabSwipeRatio = 1.25;
+
+/// 台表换页时从滑入方向进来的位移（px），与 React `TAB_PANEL_IN_PX` 同值。
+const double kTabPanelInPx = 24;
+
 class RadioPage extends StatefulWidget {
-  const RadioPage({required this.onBack, super.key});
+  const RadioPage({required this.onBack, this.onOpenSleep, super.key});
 
   /// 回音乐播放器（通常是 `Navigator.pop`；电台不停流）。
   final VoidCallback onBack;
+
+  /// 「休眠」入口：整页切到休眠页（由 home_page 接线）。为空时不显示这一颗
+  /// —— 与 [AppHeader] 对可选入口的处理同一套，独立预览 / 测试不必摆一颗死按钮。
+  final VoidCallback? onOpenSleep;
 
   @override
   State<RadioPage> createState() => _RadioPageState();
@@ -43,6 +67,9 @@ class _RadioPageState extends State<RadioPage> {
   /// 当前页签：进页面时跟着「正在收听的台」走，没台就落在音乐台。
   late RadioCategory _active;
 
+  /// 新页签从哪边进来：+1 从右、-1 从左、0 首次进场不播动画。
+  int _enterFrom = 0;
+
   @override
   void initState() {
     super.initState();
@@ -50,16 +77,32 @@ class _RadioPageState extends State<RadioPage> {
         context.read<RadioState>().current?.category ?? RadioCategory.music;
   }
 
+  /// 换页签：手势给了 `direction`（左滑进下一页 = +1），点击时按索引前后推。
+  void _selectTab(RadioCategory next, {int? direction}) {
+    if (next == _active) return;
+    final tabs = radioTabs();
+    final from = tabs.indexWhere((tab) => tab.id == _active);
+    final to = tabs.indexWhere((tab) => tab.id == next);
+    setState(() {
+      _enterFrom = direction ?? (to > from ? 1 : -1);
+      _active = next;
+    });
+  }
+
+  /// 滑动松手：到头就不动（页签不循环，与 React 一致）。
+  void _swipeTab(int step) {
+    final tabs = radioTabs();
+    final index = tabs.indexWhere((tab) => tab.id == _active);
+    final target = index + step;
+    if (target < 0 || target >= tabs.length) return;
+    _selectTab(tabs[target].id, direction: step);
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.tokens;
     final radio = context.watch<RadioState>();
     final stations = radioStationsOf(_active);
-    // 窄屏：右上角两颗（音乐 / 更多）浮在页头之外，落位与音乐页顶栏同源
-    // （`app.css` 小屏媒体块 + `shell.dart` 的 `Positioned`）。insets 要在
-    // [SafeArea] 外面读 —— SafeArea 里 MediaQuery 的 padding 已经被吃掉。
-    final narrow = !isDesktop(MediaQuery.sizeOf(context).width);
-    final insets = MediaQuery.paddingOf(context);
     return Scaffold(
       backgroundColor: tokens.bg,
       body: DecoratedBox(
@@ -71,101 +114,168 @@ class _RadioPageState extends State<RadioPage> {
             colors: [tokens.bgGradA, tokens.bgGradB],
           ),
         ),
-        child: Stack(
-          // 窄屏时「音乐 / 更多」浮在页头之上（与音乐页顶栏同一个落位），
-          // 宽屏仍留在页头那一行里，所以这里只多一层叠加，不动原有排版。
-          fit: StackFit.expand,
-          children: [
-            SafeArea(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.maxWidth;
-                  final desktop = isDesktop(width);
-                  final maxWidth = desktop
-                      ? math.min(
-                          _maxContent,
-                          contentMaxWidth(MediaQuery.sizeOf(context).width),
-                        )
-                      : width;
-                  return Center(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: maxWidth),
-                      child: SingleChildScrollView(
-                        physics: const BouncingScrollPhysics(),
-                        padding: desktop
-                            ? const EdgeInsets.fromLTRB(28, 24, 28, 32)
-                            : EdgeInsets.fromLTRB(
-                                16,
-                                12,
-                                16,
-                                24 + MediaQuery.paddingOf(context).bottom,
-                              ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _Header(onBack: widget.onBack),
-                            _Greeting(desktop: desktop),
-                            SizedBox(height: desktop ? 24 : 20),
-                            _HeroCard(radio: radio, desktop: desktop),
-                            const SizedBox(height: 14),
-                            _StatusLine(radio: radio),
-                            SizedBox(height: desktop ? 22 : 18),
-                            _TabBar(
-                              active: _active,
-                              onChanged: (category) =>
-                                  setState(() => _active = category),
-                            ),
-                            const SizedBox(height: 4),
-                            _StationList(
-                              stations: stations,
-                              radio: radio,
-                              desktop: desktop,
-                            ),
-                            const SizedBox(height: 26),
-                            _FootLine(text: '让声音，慢一点。'),
-                          ],
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final desktop = isDesktop(width);
+              final maxWidth = desktop
+                  ? math.min(
+                      _maxContent,
+                      contentMaxWidth(MediaQuery.sizeOf(context).width),
+                    )
+                  : width;
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: SingleChildScrollView(
+                    key: const Key('radio-scroll'),
+                    // iOS 橡皮筋手感，但触边回弹压浅、放软：5000px/s 甩到底
+                    // 从 122px 收到 46px，首帧位移不再跳一大截
+                    //（细节见 scroll_physics.dart 的注释）。
+                    physics: const SoftBouncingScrollPhysics(),
+                    padding: desktop
+                        ? const EdgeInsets.fromLTRB(28, 24, 28, 32)
+                        : EdgeInsets.fromLTRB(
+                            16,
+                            // 页头内容顶部内缩 18（与 Web 侧 `.app--radio` 的
+                            // `padding-top: calc(18px + env(safe-area-inset-top))` 同档）；
+                            // 刘海 / 状态栏那截由外层 SafeArea 让出。
+                            18,
+                            16,
+                            24 + MediaQuery.paddingOf(context).bottom,
+                          ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _Header(
+                          onBack: widget.onBack,
+                          onOpenSleep: widget.onOpenSleep,
                         ),
-                      ),
+                        _Greeting(desktop: desktop),
+                        SizedBox(height: desktop ? 24 : 20),
+                        _HeroCard(radio: radio, desktop: desktop),
+                        const SizedBox(height: 14),
+                        _StatusLine(radio: radio),
+                        SizedBox(height: desktop ? 22 : 18),
+                        _TabSwipeArea(
+                          active: _active,
+                          enterFrom: _enterFrom,
+                          onSelect: _selectTab,
+                          onSwipe: _swipeTab,
+                          child: _StationList(
+                            stations: stations,
+                            radio: radio,
+                            desktop: desktop,
+                          ),
+                        ),
+                        const SizedBox(height: 26),
+                        _FootLine(text: '让声音，慢一点。'),
+                      ],
                     ),
-                  );
-                },
-              ),
-            ),
-            // 窄屏：两颗按钮浮在视口右上角，横向落位与音乐页顶栏同源；
-            // 竖直方向跟左侧品牌块居中对齐 —— 品牌行从「安全区 + 12」起、40 高
-            // （中心 = 安全区 + 32），按钮 32 高，所以 top = 安全区 + 16。
-            if (narrow)
-              Positioned(
-                top: insets.top + 16,
-                right: insets.right + 10,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _MusicBackChip(onBack: widget.onBack),
-                    const SizedBox(width: 8),
-                    MoreMenu(showLibraryActions: false, iconOnly: true),
-                  ],
+                  ),
                 ),
-              ),
-          ],
+              );
+            },
+          ),
         ),
       ),
     );
   }
 }
 
-/// 页头：左侧「电台」标识；宽屏右侧再排「音乐」回退胶囊 + 「更多」。
+/// 右上角那一组：睡眠定时器 + 「休眠」互跳 + 「音乐」回退 + 「更多」。
+///
+/// 这一组就是页头行尾的普通内容：跟着页面一起滚，滚进视口就看得见、滚出去就看不
+/// 见 —— 与 Web 端同一个意思（那边也只是页头里的 `.radio-head__actions`），不做
+/// 常驻浮层、也不做「上滑隐藏 / 下滑显示」的淡出。
+/// 间距按 [narrow] 分档（窄屏 8px、宽屏 10px），窄屏只留图标。
+class _HeadActions extends StatelessWidget {
+  const _HeadActions({
+    required this.onBack,
+    required this.onOpenSleep,
+    required this.narrow,
+  });
+
+  final VoidCallback onBack;
+  final VoidCallback? onOpenSleep;
+  final bool narrow;
+
+  @override
+  Widget build(BuildContext context) {
+    // 间距 8 与音乐页顶栏同一档（`AppHeader` 里那几个 `SizedBox(width: 8)`）——
+    // 三页的右上角是同一排按钮，切页时不该看到间距变化。
+    const gap = 8.0;
+    final openSleep = onOpenSleep;
+    final row = Row(
+      key: const Key('radio-head-actions'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SleepTimerButton(side: ToolPanelSide.below),
+        SizedBox(width: gap),
+        if (openSleep != null) ...[
+          PageLinkChip(
+            chipKey: const Key('radio-sleep-button'),
+            semanticLabel: '打开助眠页',
+            label: '助眠',
+            tone: PageLinkTone.accentIcon,
+            narrowIconSize: 16,
+            onTap: openSleep,
+            iconBuilder: (size, color) => SleepMoonIcon(size: size, color: color),
+          ),
+          SizedBox(width: gap),
+        ],
+        PageLinkChip(
+          chipKey: const Key('radio-back-button'),
+          semanticLabel: '返回音乐播放器',
+          label: '音乐',
+          // 壳素、音符 accent：与旁边那颗「休眠」写月亮同一条规矩 ——
+          // 另一页 / 另一位置的入口，颜色是它的身份标记。
+          tone: PageLinkTone.accentIcon,
+          narrowIconSize: 16,
+          onTap: onBack,
+          iconBuilder: (size, color) => CustomPaint(
+            size: Size.square(size),
+            painter: MusicNotePainter(color: color),
+          ),
+        ),
+        SizedBox(width: gap),
+        MoreMenu(showLibraryActions: false, iconOnly: narrow),
+      ],
+    );
+    if (!narrow) return row;
+    // 窄屏：页头这一行左右各内缩 16，而 Web 这四颗贴视口右侧 10
+    // （`.radio-head__sleep` / `.__back` / `.__menu` 的 `right` 按 `.app--radio`
+    // 的 padding box 量）。差的 6px 只挪绘制、不占排版，与音乐页顶栏同一落位。
+    //
+    // 纵向同样只挪绘制：这一行原本跟着 40px 品牌块居中（内容上内缩 18 → 中心 38），
+    // 而三页统一口径是**按钮上缘 12、图标中心 28**（音乐页顶栏那条
+    // `Positioned(top: 安全区 + 12)`、Web 侧 `.app__header` / `.radio-head__*`
+    // 的 top: 12px），所以整组上提 10px（38 - 28），切页时这一排不上下跳。
+    return Transform.translate(offset: const Offset(6, -10), child: row);
+  }
+}
+
+/// 页头：左侧「电台」标识；右侧排「睡眠定时器 + 休眠互跳 + 音乐回退 + 更多」。
+///
+/// 睡眠定时器与音乐页控制条上方那颗是同一个 [SleepTimerButton]（滑杆选时长 +
+/// 自定义分钟数 + 开始 / 取消；跑起来后图标旁显示剩余 mm:ss），排「休眠」左边；
+/// 页头在上面，所以面板向下弹、贴按钮右缘展开。到点时它会把电台也一并暂停
+/// （`SleepTimerState.onExpire`，见 app.dart 的接线）。
+///
+/// 「休眠」这一颗与休眠页右上角那颗「电台」互为邻居入口；两页各留一条回音乐
+/// 页的路（「音乐」），停靠的仍是各自迷你条上的暂停 / 关闭。
 ///
 /// 「更多」与音乐页顶栏那颗是同一个 [MoreMenu]，但这里只留「换肤」
 /// （`showLibraryActions: false`）：电台是另一条音频链路，页头不提供
 /// 添加 / 清空播放列表，免得听着电台误操作了音乐曲库。
-/// 窄屏右侧两颗不在这行里 —— 由 [RadioPage] 的 Stack 浮到视口右上角，
-/// 横向与音乐页顶栏同一落位，竖直方向跟这一行的品牌块居中对齐
-/// （`_MusicBackChip` / [MoreMenu] 都收成 32×32 图标）。
+/// 右侧几颗都在这一行里（窄屏只剩 32×32 的图标、定时器保持 26 高），
+/// 竖直方向跟着品牌块居中；页头随页面滚动，滚出去就跟着看不见。
 class _Header extends StatelessWidget {
-  const _Header({required this.onBack});
+  const _Header({required this.onBack, required this.onOpenSleep});
 
   final VoidCallback onBack;
+  final VoidCallback? onOpenSleep;
 
   @override
   Widget build(BuildContext context) {
@@ -188,7 +298,7 @@ class _Header extends StatelessWidget {
           alignment: Alignment.center,
           child: CustomPaint(
             size: const Size.square(20),
-            painter: _BroadcastPainter(color: tokens.accent),
+            painter: BroadcastPainter(color: tokens.accent),
           ),
         ),
         const SizedBox(width: 10),
@@ -220,72 +330,13 @@ class _Header extends StatelessWidget {
             ),
           ],
         ),
-        // 窄屏：这两颗由 [RadioPage] 的 Stack 叠在视口右上角，横向与音乐页顶栏
-        // 同一落位，竖直方向跟下面这组品牌内容居中对齐；页头这一行只留品牌。
-        if (!narrow) ...[
-          const Spacer(),
-          _MusicBackChip(onBack: onBack),
-          const SizedBox(width: 10),
-          MoreMenu(showLibraryActions: false, iconOnly: false),
-        ],
-      ],
-    );
-  }
-}
-
-/// 回音乐播放器：桌面是「音符 + 音乐」胶囊，窄屏只剩音符图标。
-class _MusicBackChip extends StatelessWidget {
-  const _MusicBackChip({required this.onBack});
-
-  final VoidCallback onBack;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.tokens;
-    final narrow = !isDesktop(MediaQuery.sizeOf(context).width);
-    return Semantics(
-      button: true,
-      label: '返回音乐播放器',
-      excludeSemantics: true,
-      onTap: onBack,
-      child: InkWell(
-        key: const Key('radio-back-button'),
-        onTap: onBack,
-        borderRadius: BorderRadius.circular(999),
-        overlayColor: WidgetStatePropertyAll<Color>(tokens.accentSoft),
-        child: Container(
-          height: narrow ? 32 : 36,
-          width: narrow ? 32 : null,
-          padding: narrow
-              ? EdgeInsets.zero
-              : const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: narrow ? null : Border.all(color: tokens.border),
-            color: narrow ? Colors.transparent : tokens.surface,
-          ),
-          alignment: Alignment.center,
-          child: narrow
-              ? CustomPaint(
-                  size: const Size.square(18),
-                  painter: _MusicNotePainter(color: tokens.textDim),
-                )
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CustomPaint(
-                      size: const Size.square(16),
-                      painter: _MusicNotePainter(color: tokens.text),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '音乐',
-                      style: TextStyle(fontSize: 12.5, color: tokens.text),
-                    ),
-                  ],
-                ),
+        const Spacer(),
+        _HeadActions(
+          onBack: onBack,
+          onOpenSleep: onOpenSleep,
+          narrow: narrow,
         ),
-      ),
+      ],
     );
   }
 }
@@ -606,6 +657,86 @@ class _StatusLine extends StatelessWidget {
               letterSpacing: 1.8,
               color: playing ? tokens.accent : tokens.textFaint,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 页签 + 台表的热区：横滑翻页，换页时新台表从滑入方向淡进来。
+///
+/// 只认横向：纵向手势在竞技场里归外层 [SingleChildScrollView]，页面照常滚。
+/// 终点用 `DragEndDetails.globalPosition`（横向识别器把 delta.dy 清零了，
+/// 与 `swipe_to_switch.dart` 里同一条注意）。
+class _TabSwipeArea extends StatefulWidget {
+  const _TabSwipeArea({
+    required this.active,
+    required this.enterFrom,
+    required this.onSelect,
+    required this.onSwipe,
+    required this.child,
+  });
+
+  final RadioCategory active;
+
+  /// +1 新表从右进来、-1 从左、0 首次进场不播。
+  final int enterFrom;
+
+  final ValueChanged<RadioCategory> onSelect;
+
+  /// 左滑 +1（下一页）、右滑 -1（上一页）。
+  final ValueChanged<int> onSwipe;
+
+  final Widget child;
+
+  @override
+  State<_TabSwipeArea> createState() => _TabSwipeAreaState();
+}
+
+class _TabSwipeAreaState extends State<_TabSwipeArea> {
+  Offset _start = Offset.zero;
+
+  void _onEnd(DragEndDetails details) {
+    final moved = details.globalPosition - _start;
+    if (moved.dx.abs() < kTabSwipePx) return;
+    if (moved.dx.abs() <= moved.dy.abs() * kTabSwipeRatio) return;
+    widget.onSwipe(moved.dx < 0 ? 1 : -1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    // 台表换页时就地替换（旧表立刻消失，与 React 端一致），只让新表滑进来：
+    // 用带 key 的隐式动画重建状态，begin 从 0 起，`enterFrom` 首次进场时直接 1。
+    final begin = widget.enterFrom == 0 ? 1.0 : 0.0;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragStart: (details) => _start = details.globalPosition,
+      onHorizontalDragEnd: _onEnd,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _TabBar(active: widget.active, onChanged: widget.onSelect),
+          const SizedBox(height: 4),
+          TweenAnimationBuilder<double>(
+            key: ValueKey<RadioCategory>(widget.active),
+            tween: Tween<double>(begin: begin, end: 1),
+            duration: reduceMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 240),
+            curve: Curves.easeOutCubic,
+            builder: (context, progress, child) => Opacity(
+              opacity: progress.clamp(0.0, 1.0),
+              child: Transform.translate(
+                offset: Offset(
+                  widget.enterFrom * kTabPanelInPx * (1 - progress),
+                  0,
+                ),
+                child: child,
+              ),
+            ),
+            child: SizedBox(width: double.infinity, child: widget.child),
           ),
         ],
       ),
@@ -1044,7 +1175,9 @@ class _StationArtPainter extends CustomPainter {
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1.0
-            ..color = tokens.accent.withValues(alpha: (0.32 - i * 0.09) * ringsAlpha),
+            ..color = tokens.accent.withValues(
+              alpha: (0.32 - i * 0.09) * ringsAlpha,
+            ),
         );
       }
     }
@@ -1284,66 +1417,4 @@ class _PlayGlyphPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _PlayGlyphPainter oldDelegate) =>
       oldDelegate.playing != playing || oldDelegate.color != color;
-}
-
-/// 广播图标（页头用）：与顶栏那颗 [RadioIcon] 同一套规格，只是尺寸更大。
-class _BroadcastPainter extends CustomPainter {
-  const _BroadcastPainter({required this.color});
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final s = size.width / 24;
-    final center = Offset(12 * s, 17.2 * s);
-    canvas.drawCircle(center, 1.9 * s, Paint()..color = color);
-    final stroke = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = 1.6 * s;
-    for (final radius in const [4.6, 7.2, 9.8]) {
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius * s),
-        math.pi,
-        math.pi,
-        false,
-        stroke,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _BroadcastPainter oldDelegate) =>
-      oldDelegate.color != color;
-}
-
-/// 音符图标（「音乐」回退钮）。
-class _MusicNotePainter extends CustomPainter {
-  const _MusicNotePainter({required this.color});
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final s = size.width / 24;
-    final stroke = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8 * s
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    final path = Path()
-      ..moveTo(9 * s, 16.6 * s)
-      ..lineTo(9 * s, 5.4 * s)
-      ..lineTo(18 * s, 3.8 * s)
-      ..lineTo(18 * s, 14.2 * s);
-    canvas.drawPath(path, stroke);
-    canvas.drawCircle(Offset(6.6 * s, 16.8 * s), 2.6 * s, stroke);
-    canvas.drawCircle(Offset(15.6 * s, 14.4 * s), 2.6 * s, stroke);
-  }
-
-  @override
-  bool shouldRepaint(covariant _MusicNotePainter oldDelegate) =>
-      oldDelegate.color != color;
 }

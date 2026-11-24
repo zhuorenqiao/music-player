@@ -25,6 +25,21 @@ void main() {
       expect(cleanTitle('十年 (feat. 甲)'), '十年 (feat. 甲)');
     });
 
+    test('剥尾部无括号伴奏标签：空格 / 连字符 / 直接拼接都能剥，可叠加', () {
+      expect(cleanTitle('飞机场的10:30伴奏'), '飞机场的10:30');
+      expect(cleanTitle('Catherine - 伴奏'), 'Catherine');
+      expect(cleanTitle('Catherine_伴奏版'), 'Catherine');
+      expect(cleanTitle('Catherine 伴奏 完整版'), 'Catherine');
+      expect(cleanTitle('Catherine 纯伴奏'), 'Catherine');
+      expect(cleanTitle('Catherine（伴奏）伴奏'), 'Catherine');
+    });
+
+    test('伴奏本身、英文 Live 不过度剥：只有中文标签才裸剥', () {
+      expect(cleanTitle('伴奏'), '伴奏');
+      expect(cleanTitle('Live Forever'), 'Live Forever');
+      expect(cleanTitle('Catherine Live'), 'Catherine Live');
+    });
+
     test('折叠多空白、剥尾部 -_ 与空白', () {
       expect(cleanTitle('  十年   -  '), '十年');
       expect(cleanTitle('十年__'), '十年');
@@ -52,6 +67,42 @@ void main() {
       expect(q.artistName, '陈奕迅');
       expect(q.duration, 246);
       expect(q.key, '十年|陈奕迅|246');
+    });
+
+    test('带伴奏的曲名归一化：直接拼接 / 连字符尾巴都还原成正式曲名', () {
+      final airport = normalizeQuery(
+        title: '飞机场的10:30伴奏',
+        artist: '陶喆',
+        duration: 301,
+      );
+      expect(airport.trackName, '飞机场的10:30');
+      expect(airport.artistName, '陶喆');
+
+      final catherine = normalizeQuery(
+        title: 'Catherine - 伴奏',
+        artist: '陶喆',
+        duration: 233,
+      );
+      expect(catherine.trackName, 'Catherine');
+      expect(catherine.artistName, '陶喆');
+    });
+
+    test('本地文件名带伴奏：先清尾巴再从「歌手 - 曲名」反推', () {
+      final airport = normalizeQuery(
+        title: '陶喆 - 飞机场的10:30伴奏',
+        artist: '本地文件',
+        duration: 0,
+      );
+      expect(airport.trackName, '飞机场的10:30');
+      expect(airport.artistName, '陶喆');
+
+      final catherine = normalizeQuery(
+        title: '陶喆 - Catherine - 伴奏',
+        artist: '本地文件',
+        duration: 0,
+      );
+      expect(catherine.trackName, 'Catherine');
+      expect(catherine.artistName, '陶喆');
     });
 
     test('key 整串小写', () {

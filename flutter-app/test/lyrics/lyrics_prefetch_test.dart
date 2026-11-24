@@ -13,7 +13,7 @@ import 'package:light_music/playback/track.dart';
 /// 按 trackName 返回预设结果或抛异常，并记录每次调用。
 class FakeMatcher implements LyricsMatcher {
   FakeMatcher({Map<String, LyricsMatch>? byName, this.throwFor})
-  : byName = byName ?? const <String, LyricsMatch>{};
+    : byName = byName ?? const <String, LyricsMatch>{};
 
   final Map<String, LyricsMatch> byName;
   final Object? Function(LyricsQuery)? throwFor;
@@ -70,54 +70,55 @@ const LyricsMatch okSynced = LyricsMatch(
 
 void main() {
   group('LyricsPrefetch.prefetch', () {
-    test('两首无歌词曲目：matcher 调 2 次、返回 2、写回 lyrics/lyricsSource，sleep 2 次 350ms', () async {
-      final matcher = FakeMatcher(
-        byName: {'十年': okSynced, '孤勇者': okSynced},
-      );
-      final sleep = RecordingSleep();
-      final prefetch = LyricsPrefetch(matcher: matcher, sleep: sleep.call);
-      final a = track('1', title: '十年');
-      final b = track('2', title: '孤勇者');
+    test(
+      '两首无歌词曲目：matcher 调 2 次、返回 2、写回 lyrics/lyricsSource，sleep 2 次 350ms',
+      () async {
+        final matcher = FakeMatcher(byName: {'十年': okSynced, '孤勇者': okSynced});
+        final sleep = RecordingSleep();
+        final prefetch = LyricsPrefetch(matcher: matcher, sleep: sleep.call);
+        final a = track('1', title: '十年');
+        final b = track('2', title: '孤勇者');
 
-      final filled = await prefetch.prefetch([a, b]);
+        final filled = await prefetch.prefetch([a, b]);
 
-      expect(filled, 2);
-      expect(matcher.calls.length, 2);
-      expect(a.lyrics, '[00:01.00] 十年词');
-      expect(a.lyricsPlain, '');
-      expect(a.lyricsSource, 'auto');
-      expect(b.lyrics, '[00:01.00] 十年词');
-      expect(b.lyricsSource, 'auto');
-      // sleep 在循环体末尾：每条之后一次，最后一条之后也睡（照抄 React 结构）。
-      expect(sleep.durations.length, 2);
-      for (final d in sleep.durations) {
-        expect(d, const Duration(milliseconds: 350));
-      }
-    });
+        expect(filled, 2);
+        expect(matcher.calls.length, 2);
+        expect(a.lyrics, '[00:01.00] 十年词');
+        expect(a.lyricsPlain, '');
+        expect(a.lyricsSource, 'auto');
+        expect(b.lyrics, '[00:01.00] 十年词');
+        expect(b.lyricsSource, 'auto');
+        // sleep 在循环体末尾：每条之后一次，最后一条之后也睡（照抄 React 结构）。
+        expect(sleep.durations.length, 2);
+        for (final d in sleep.durations) {
+          expect(d, const Duration(milliseconds: 350));
+        }
+      },
+    );
 
-    test('跳过条件逐条：currentId / 已有 lyrics / 已有 lyricsPlain / queued 去重 / 本地无时长', () async {
-      final matcher = FakeMatcher(byName: {'十年': okSynced});
-      final prefetch = LyricsPrefetch(matcher: matcher);
-      final candidates = [
-        track('cur'), // currentId 跳过
-        track('has', lyrics: '[00:01.00] 已有'), // 已有 lyrics 跳过
-        track('plain', lyricsPlain: '已有纯文本'), // 已有 lyricsPlain 跳过
-        track('1'), // 正常补
-        track('1'), // queued 去重：同批重复 id 只调一次
-        track('local', isLocal: true, duration: double.nan), // 本地且无时长跳过
-      ];
+    test(
+      '跳过条件逐条：currentId / 已有 lyrics / 已有 lyricsPlain / queued 去重 / 本地无时长',
+      () async {
+        final matcher = FakeMatcher(byName: {'十年': okSynced});
+        final prefetch = LyricsPrefetch(matcher: matcher);
+        final candidates = [
+          track('cur'), // currentId 跳过
+          track('has', lyrics: '[00:01.00] 已有'), // 已有 lyrics 跳过
+          track('plain', lyricsPlain: '已有纯文本'), // 已有 lyricsPlain 跳过
+          track('1'), // 正常补
+          track('1'), // queued 去重：同批重复 id 只调一次
+          track('local', isLocal: true, duration: double.nan), // 本地且无时长跳过
+        ];
 
-      final filled = await prefetch.prefetch(
-        candidates,
-        currentId: 'cur',
-      );
+        final filled = await prefetch.prefetch(candidates, currentId: 'cur');
 
-      expect(filled, 1);
-      expect(matcher.calls.length, 1);
-      // 已有歌词的两条保持原样。
-      expect(candidates[1].lyricsSource, '');
-      expect(candidates[2].lyricsPlain, '已有纯文本');
-    });
+        expect(filled, 1);
+        expect(matcher.calls.length, 1);
+        // 已有歌词的两条保持原样。
+        expect(candidates[1].lyricsSource, '');
+        expect(candidates[2].lyricsPlain, '已有纯文本');
+      },
+    );
 
     test('manual 不覆盖：matcher 照调但不写回、不计入 filled', () async {
       final matcher = FakeMatcher(byName: {'十年': okSynced});
@@ -136,7 +137,11 @@ void main() {
     test('纯文本结果：synced 空 plain 非空 → lyricsPlain 写入、lyrics 保持空', () async {
       final matcher = FakeMatcher(
         byName: {
-          '十年': const LyricsMatch(status: 'ok', plain: '十年纯文本', source: 'LRCLIB'),
+          '十年': const LyricsMatch(
+            status: 'ok',
+            plain: '十年纯文本',
+            source: 'LRCLIB',
+          ),
         },
       );
       final prefetch = LyricsPrefetch(matcher: matcher);
@@ -153,7 +158,8 @@ void main() {
     test('单条抛异常：3 首、第 1 条抛 → 返回 2、不中断', () async {
       final matcher = FakeMatcher(
         byName: {'孤勇者': okSynced, '富士山下': okSynced},
-        throwFor: (query) => query.trackName == '十年' ? StateError('boom') : null,
+        throwFor: (query) =>
+            query.trackName == '十年' ? StateError('boom') : null,
       );
       final prefetch = LyricsPrefetch(matcher: matcher);
       final a = track('1', title: '十年');
@@ -169,12 +175,24 @@ void main() {
       expect(c.lyrics, '[00:01.00] 十年词');
     });
 
+    test('allowMissingDuration=true：本地时长没探到也照样查（导入批次用）', () async {
+      final matcher = FakeMatcher(byName: {'十年': okSynced});
+      final sleep = RecordingSleep();
+      final prefetch = LyricsPrefetch(matcher: matcher, sleep: sleep.call);
+      final t = track('local', duration: double.nan);
+
+      final filled = await prefetch.prefetch([t], allowMissingDuration: true);
+
+      expect(filled, 1);
+      expect(matcher.calls.length, 1);
+      expect(t.lyrics, '[00:01.00] 十年词');
+      expect(t.lyricsSource, 'auto');
+      expect(sleep.durations.length, 1, reason: '仍按 350ms 串行节奏');
+    });
+
     test('isOnline=false：返回 0、matcher 不被调', () async {
       final matcher = FakeMatcher(byName: {'十年': okSynced});
-      final prefetch = LyricsPrefetch(
-        matcher: matcher,
-        isOnline: () => false,
-      );
+      final prefetch = LyricsPrefetch(matcher: matcher, isOnline: () => false);
       final t = track('1');
 
       final filled = await prefetch.prefetch([t]);

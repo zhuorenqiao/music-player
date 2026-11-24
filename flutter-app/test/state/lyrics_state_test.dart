@@ -54,13 +54,15 @@ Track track({
   String lyrics = '',
   String lyricsPlain = '',
   String lyricsSource = '',
+  String lyricsOrigin = '',
 }) => Track(
   id: id, src: '/m/$id.flac', title: title, artist: artist,
   duration: duration, isLocal: isLocal,
   lyrics: lyrics, lyricsPlain: lyricsPlain, lyricsSource: lyricsSource,
+  lyricsOrigin: lyricsOrigin,
 );
 
-const okSynced = LyricsMatch(status: 'ok', synced: '[00:01]甲\n[00:05]乙', plain: '甲\n乙');
+const okSynced = LyricsMatch(status: 'ok', synced: '[00:01]甲\n[00:05]乙', plain: '甲\n乙', source: 'LRCLIB');
 
 void main() {
   late FakeMatcher matcher;
@@ -101,7 +103,8 @@ void main() {
   test('自动匹配的歌词 → ready，且显示时转简体', () async {
     final t = track(lyrics: '[00:01]妳好', lyricsSource: 'auto');
     final state = build()..attach(t);
-    expect(state.status, '歌词自动匹配自 LRCLIB线上库');
+    // 老档案没有 lyricsOrigin：只敢说「线上歌词库」，不冒充某一家。
+    expect(state.status, '歌词自动匹配自 线上歌词库');
     expect(state.cues.single.text, '你好');
     expect(matcher.calls, isEmpty);
   });
@@ -109,7 +112,7 @@ void main() {
   test('纯文本歌词 → ready + 静态说明；displayLines 长度与行数一致', () async {
     final t = track(lyricsPlain: '甲\n乙', lyricsSource: 'auto');
     final state = build()..attach(t);
-    expect(state.status, '歌词匹配自 LRCLIB线上库 · 原文无时间轴，仅静态显示');
+    expect(state.status, '歌词匹配自 线上歌词库 · 原文无时间轴，仅静态显示');
     expect(state.displayLines.length, 2);
     expect(state.displayLines.first.time.isNaN, isTrue);
   });
@@ -171,9 +174,35 @@ void main() {
     expect(matcher.calls.single.useCache, isTrue);
   });
 
+  test('网易云来源 → 写 lyricsOrigin=netease，状态行显示网易云音乐', () async {
+    final t = track();
+    matcher.handler = (q, useCache) async =>
+        const LyricsMatch(status: 'ok', synced: '[00:01]甲', source: '网易云音乐');
+    final state = build()..attach(t);
+    await state.settle();
+    expect(t.lyricsSource, 'auto');
+    expect(t.lyricsOrigin, 'netease');
+    expect(state.status, '歌词自动匹配自 网易云音乐');
+    // 重开应用（同一个对象重新 attach）也照样显示来源：来源是落库字段。
+    expect(t.toJson()['lyricsOrigin'], 'netease');
+  });
+
+  test('汽水 / 酷狗来源 → 写对应 lyricsOrigin，状态行显示名称', () async {
+    for (final (source, origin) in [('汽水音乐', 'qishui'), ('酷狗音乐', 'kugou')]) {
+      final t = track();
+      matcher.handler = (q, useCache) async =>
+          LyricsMatch(status: 'ok', synced: '[00:01]甲', source: source);
+      final state = build()..attach(t);
+      await state.settle();
+      expect(t.lyricsOrigin, origin);
+      expect(state.status, '歌词自动匹配自 $source');
+      expect(t.toJson()['lyricsOrigin'], origin);
+    }
+  });
+
   test('只拿到纯文本 → 写 lyricsPlain，状态是静态说明', () async {
     final t = track();
-    matcher.handler = (q, useCache) async => const LyricsMatch(status: 'ok', plain: '甲\n乙');
+    matcher.handler = (q, useCache) async => const LyricsMatch(status: 'ok', plain: '甲\n乙', source: 'LRCLIB');
     final state = build()..attach(t);
     await state.settle();
     expect(t.lyrics, '');
@@ -305,7 +334,7 @@ void main() {
       call += 1;
       // 1 = 主匹配；2 = 升级的查缓存段；3 = 升级的绕缓存段。
       // 前两段都只给纯文本，逼它走到第二段，两段升级路径才都被钉住。
-      return call < 3 ? const LyricsMatch(status: 'ok', plain: '甲') : okSynced;
+      return call < 3 ? const LyricsMatch(status: 'ok', plain: '甲', source: 'LRCLIB') : okSynced;
     };
     final state = build()..attach(t);
     await state.settle();

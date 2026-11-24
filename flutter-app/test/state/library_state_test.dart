@@ -6,6 +6,7 @@
 // 末尾那组「回填批次落库」的用例（终审 C1）用真实的带标签文件 + 真封面落盘器：
 // 回填写的是内存里的活对象，但只有**批次完成后再落一次库**才不会在重启后丢掉
 // 标签，所以断言一律从 `LibraryRepository.load()` 读回来验，而不是只看内存。
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -36,10 +37,7 @@ final Uint8List onePixelPng = base64Decode(
 );
 
 /// ID3v2.3 标签 + 一段 MPEG 帧，像真音频（与 import_service_test 同一造法）。
-List<int> withId3(List<List<int>> frames) => [
-  ...id3v2(frames),
-  ...mpegFrame(),
-];
+List<int> withId3(List<List<int>> frames) => [...id3v2(frames), ...mpegFrame()];
 
 /// 记下 save 次数的仓储：验「一批回填只落一次库」这条约束用。
 class _CountingRepository extends LibraryRepository {
@@ -103,6 +101,79 @@ void main() {
       '孤勇者.flac',
     ]);
     expect(fresh.restoring, isFalse);
+  });
+
+  test('升级后一次性补探旧档案里缺时长的曲目，之后不再重跑', () async {
+    final old = Track(
+      id: 'old-no-duration',
+      src: '/m/old.flac',
+      title: '旧歌',
+      duration: double.nan,
+      isLocal: true,
+      metadataProbed: true,
+    );
+    final target = Playlist(tracks: [old]);
+    var probes = 0;
+    final local = LibraryState(
+      prefs: prefs,
+      repo: LibraryRepository(directory: dir.path),
+      importer: ImportService(
+        playlist: target,
+        toasts: toasts,
+        durationProbe: (path) async {
+          probes += 1;
+          return const DurationProbeOutcome(200.0);
+        },
+      ),
+      toasts: toasts,
+    );
+    addTearDown(local.dispose);
+
+    await local.repairDurationOnUpgrade();
+    expect(local.tracks.single.duration, 200.0);
+    expect(probes, 1, reason: '被旧版判过、但仍没时长的曲目也要补一次');
+    expect(await prefs.readString(StorageKeys.durationRepair), '1');
+
+    await local.repairDurationOnUpgrade();
+    expect(probes, 1, reason: '标记写下后不再重跑');
+  });
+
+  test('第一首时长回填就重绘，不等整批收尾', () async {
+    final gates = <String, Completer<DurationProbeOutcome>>{};
+    final target = Playlist(tracks: const []);
+    final local = LibraryState(
+      prefs: prefs,
+      repo: LibraryRepository(directory: dir.path),
+      importer: ImportService(
+        playlist: target,
+        toasts: toasts,
+        durationProbe: (path) {
+          final gate = Completer<DurationProbeOutcome>();
+          gates[path] = gate;
+          return gate.future;
+        },
+      ),
+      toasts: toasts,
+    );
+    addTearDown(local.dispose);
+    var notices = 0;
+    local.addListener(() => notices += 1);
+
+    await local.importPaths(['/m/a.flac', '/m/b.flac']);
+    expect(gates.keys, containsAll(['/m/a.flac', '/m/b.flac']));
+    final baseline = notices;
+
+    gates['/m/a.flac']!.complete(const DurationProbeOutcome(120.0));
+    for (var i = 0; i < 200 && local.tracks.first.duration.isNaN; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(local.tracks.first.duration, 120.0);
+    expect(notices, greaterThan(baseline), reason: '第二首还在探，第一首的时长必须已经推给界面');
+    expect(local.tracks.last.duration.isNaN, isTrue);
+
+    gates['/m/b.flac']!.complete(const DurationProbeOutcome(180.0));
+    await local.enrichmentSettled;
+    expect(local.tracks.last.duration, 180.0);
   });
 
   test('搜索只匹配歌名，关键词大小写不敏感且去空白', () async {
@@ -216,11 +287,7 @@ void main() {
     await LibraryRepository(directory: dir.path).save(
       LibrarySnapshot(
         tracks: state.tracks,
-        order: [
-          state.tracks[2].id,
-          state.tracks[0].id,
-          state.tracks[1].id,
-        ],
+        order: [state.tracks[2].id, state.tracks[0].id, state.tracks[1].id],
         currentId: secondId,
         mode: PlayMode.one,
       ),
@@ -243,7 +310,10 @@ void main() {
   LibraryState buildRecordingState(List<String?> calls) => LibraryState(
     prefs: prefs,
     repo: LibraryRepository(directory: dir.path),
-    importer: ImportService(playlist: Playlist(tracks: const []), toasts: toasts),
+    importer: ImportService(
+      playlist: Playlist(tracks: const []),
+      toasts: toasts,
+    ),
     toasts: toasts,
     onPlaylistChanged: ({String? removedId}) => calls.add(removedId),
   );
@@ -385,10 +455,7 @@ void main() {
     await enriching.importPaths([file.path]);
     final before = notifications;
 
-    await loadUntil(
-      (s) => s.tracks.single.hasDuration,
-      reason: '回填批次落库',
-    );
+    await loadUntil((s) => s.tracks.single.hasDuration, reason: '回填批次落库');
     expect(notifications, greaterThan(before), reason: '回填完成后必须刷一次界面');
   });
 
@@ -503,10 +570,7 @@ void main() {
 
     // 第一次启动：没有探测标记 → 补跑一次，并把标记随批次收尾落盘。
     final firstRepo = _CountingRepository(directory: dir.path);
-    final first = buildEnrichingState(
-      repo: firstRepo,
-      probe: countingProbe,
-    );
+    final first = buildEnrichingState(repo: firstRepo, probe: countingProbe);
     addTearDown(first.dispose);
     await first.restore();
     await first.enrichmentSettled;
@@ -542,11 +606,7 @@ void main() {
       isLocal: true,
     );
     await LibraryRepository(directory: dir.path).save(
-      LibrarySnapshot(
-        tracks: [stale],
-        order: [stale.id],
-        mode: PlayMode.list,
-      ),
+      LibrarySnapshot(tracks: [stale], order: [stale.id], mode: PlayMode.list),
     );
 
     var probes = 0;
@@ -586,11 +646,7 @@ void main() {
       isLocal: true,
     );
     await LibraryRepository(directory: dir.path).save(
-      LibrarySnapshot(
-        tracks: [stale],
-        order: [stale.id],
-        mode: PlayMode.list,
-      ),
+      LibrarySnapshot(tracks: [stale], order: [stale.id], mode: PlayMode.list),
     );
 
     final fresh = buildEnrichingState(
@@ -640,11 +696,7 @@ void main() {
       isLocal: true,
     );
     await LibraryRepository(directory: dir.path).save(
-      LibrarySnapshot(
-        tracks: [stale],
-        order: [stale.id],
-        mode: PlayMode.list,
-      ),
+      LibrarySnapshot(tracks: [stale], order: [stale.id], mode: PlayMode.list),
     );
 
     final counting = _CountingRepository(directory: dir.path);
@@ -662,11 +714,7 @@ void main() {
       isFalse,
       reason: '文件没打开、时长也没探到：这一次什么都没学到',
     );
-    expect(
-      counting.saves,
-      0,
-      reason: '没有新结论就没有要落盘的东西，别每次启动白写一遍整库档案',
-    );
+    expect(counting.saves, 0, reason: '没有新结论就没有要落盘的东西，别每次启动白写一遍整库档案');
   });
 
   // -- 终审 I4：prefs 的 currentId / order 必须如实同步 ----------------------
@@ -741,9 +789,8 @@ void main() {
     final thirdId = ids.last;
     // 老版本存的档 / 仓储重建后的档：顺序在、光标没记。prefs 那份现场是自洽的
     // （order 与文件仓逐位相同），它才是最后一次如实写入的光标。
-    await LibraryRepository(directory: dir.path).save(
-      LibrarySnapshot(tracks: state.tracks, order: ids),
-    );
+    await LibraryRepository(directory: dir.path)
+        .save(LibrarySnapshot(tracks: state.tracks, order: ids));
     await prefs.writeString(StorageKeys.currentId, thirdId);
 
     final fresh = buildState();
@@ -761,9 +808,8 @@ void main() {
     await state.importPaths(['/m/a.flac', '/m/b.flac']);
     await state.enrichmentSettled;
     final ids = state.tracks.map((t) => t.id).toList();
-    await LibraryRepository(directory: dir.path).save(
-      LibrarySnapshot(tracks: state.tracks, order: ids),
-    );
+    await LibraryRepository(directory: dir.path)
+        .save(LibrarySnapshot(tracks: state.tracks, order: ids));
     // 一个早已不在列表里的光标（停在已删曲目上的旧现场）
     await prefs.writeString(StorageKeys.currentId, 'local:ghost');
 
@@ -779,7 +825,8 @@ void main() {
     expect(
       await prefs.readString(StorageKeys.currentId),
       ids.first,
-      reason: '光标落到第一首之后 prefs 的 currentId 要跟着补写一致，'
+      reason:
+          '光标落到第一首之后 prefs 的 currentId 要跟着补写一致，'
           '绝不留「界面指第一首、存档指幽灵」两份真相',
     );
     expect(
@@ -938,11 +985,9 @@ void main() {
     expect(healed.tracks.single.duration, 187.5);
 
     // 但 prefs 那两份痕迹一个字都不许动（R8 的承诺）
-    expect(
-      await prefs.readJson(StorageKeys.order),
-      [staleId],
-      reason: '坏档这一轮只读不写：回填收尾也不许把 order 改写成现场',
-    );
+    expect(await prefs.readJson(StorageKeys.order), [
+      staleId,
+    ], reason: '坏档这一轮只读不写：回填收尾也不许把 order 改写成现场');
     expect(
       await prefs.readString(StorageKeys.currentId),
       staleId,

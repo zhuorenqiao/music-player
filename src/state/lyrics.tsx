@@ -11,13 +11,21 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { parseLRC } from '../lib/lyrics.js';
-import { matchLyrics, isOnline } from '../lib/lyrics-source.js';
+import { matchLyrics, isOnline, lyricsOriginOf, lyricsOriginLabel } from '../lib/lyrics-source.js';
 import { alignTranslation, fetchTranslation, needsTranslation } from '../lib/translate-source.js';
 import { toSimplified } from '../lib/chinese';
 import type { LyricsState, Track } from './types';
 
 /** 匹配失败后自动补一次的间隔（毫秒）。 */
 const AUTO_RETRY_DELAY = 25000;
+
+/** 自动匹配的状态行：来源按持久化的 lyricsOrigin 显示（老档案没有来源时用泛称）。 */
+function autoLyricsStatus(track: Track): string {
+  const label = lyricsOriginLabel(track.lyricsOrigin);
+  return track.lyrics
+    ? `歌词自动匹配自 ${label}`
+    : `歌词匹配自 ${label} · 原文无时间轴，仅静态显示`;
+}
 
 /** 双语显示偏好的存储键（默认开）。 */
 const BILINGUAL_KEY = 'light-music.bilingual';
@@ -349,7 +357,7 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
       setState('ready');
       setStatus(track.lyricsSource === 'manual'
         ? '已使用手动指定的歌词'
-        : (track.lyrics ? '歌词自动匹配自 LRCLIB线上库' : '歌词匹配自 LRCLIB线上库 · 原文无时间轴，仅静态显示'));
+        : autoLyricsStatus(track));
       setShowRetry(false);
       /**
        * 之前匹配到的是纯文本：后台再问一次源站。
@@ -360,7 +368,7 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
         && !upgradedRef.current.has(track.id) && isOnline()) {
         const controller = new AbortController();
         abortRef.current = controller;
-        const apply = (result: { status: string; syncedLyrics?: string }) => {
+        const apply = (result: { status: string; syncedLyrics?: string; source?: string }) => {
           if (controller.signal.aborted) {
             return;
           }
@@ -373,12 +381,13 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
           track.lyrics = result.syncedLyrics;
           track.lyricsPlain = '';
           track.lyricsSource = 'auto';
-          setStatus('歌词自动匹配自 LRCLIB线上库');
+          track.lyricsOrigin = lyricsOriginOf(result.source);
+          setStatus(autoLyricsStatus(track));
           setTick((value) => value + 1);
         };
         // 先看缓存：之前升级成功过的话这里瞬间完成，不必每次重打上游
         void matchLyrics(track, { signal: controller.signal, useCache: true }).then((cached: {
-          status: string; syncedLyrics?: string;
+          status: string; syncedLyrics?: string; source?: string;
         }) => {
           if (controller.signal.aborted) {
             return;
@@ -431,7 +440,7 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
     }, 4000);
 
     void matchLyrics(track, { signal: controller.signal, useCache: !force }).then((result: {
-      status: string; message?: string; reason?: string; syncedLyrics?: string; plainLyrics?: string;
+      status: string; message?: string; reason?: string; syncedLyrics?: string; plainLyrics?: string; source?: string;
     }) => {
       window.clearTimeout(slowHint);
       if (requestId.current !== id || controller.signal.aborted) {
@@ -446,10 +455,11 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
             track.lyricsPlain = result.plainLyrics || '';
           }
           track.lyricsSource = 'auto';
+          track.lyricsOrigin = lyricsOriginOf(result.source);
           setTick((value) => value + 1);
         }
         setState('ready');
-        setStatus(track.lyrics ? '歌词自动匹配自 LRCLIB线上库' : '歌词匹配自 LRCLIB线上库 · 原文无时间轴，仅静态显示');
+        setStatus(autoLyricsStatus(track));
         setShowRetry(false);
         return;
       }
@@ -494,7 +504,7 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
       window.clearTimeout(slowHint);
     };
     // tick 用于「重试」触发；track 换了也要重来
-  }, [track, tick, track?.id, track?.lyrics, track?.lyricsPlain]);
+  }, [track, tick, track?.id, track?.lyrics, track?.lyricsPlain, track?.lyricsOrigin]);
 
   const value = useMemo<LyricsContextValue>(() => ({
     cues,

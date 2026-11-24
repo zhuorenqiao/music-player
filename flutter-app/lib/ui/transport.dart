@@ -290,10 +290,8 @@ class TransportBar extends StatelessWidget {
           // 拉伸：控制行的 space-between 要的是整行宽度，不是按钮自身宽度
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // M3 T11：进度行上方的「transport__wave」行——简约模式左端是
-            // T（歌词高亮色）、水滴（卡面透明/磨砂）与睡眠定时器，其后
-            // WaveStrip；歌词页（沉浸模式）开着时那三颗按钮搬到歌词页页头，
-            // 这行只剩频谱。
+            // 进度行上方：简约模式直接排三颗工具按钮；沉浸模式先排同样的
+            // 工具行，再在它下方显示整行频谱。
             _WaveRow(showWaveStrip: showWaveStrip, strip: waveStrip),
             // 这一行到进度条的间距按 Web 的两条规则分开给：
             //  · 沉浸模式（歌词页，频谱条在场）：`.transport { row-gap: 0 }`
@@ -314,13 +312,7 @@ class TransportBar extends StatelessWidget {
   }
 }
 
-/// 进度行上方那条（App.tsx:973-977 的 transport__wave 对译）：
-/// 左端 T（歌词高亮色，T12）与水滴（卡面透明/磨砂，T7），其后 WaveStrip。
-/// **首页该行 WaveStrip 隐藏**（app.css:1111），[showWaveStrip] 只在歌词页为真。
-///
-/// **歌词页开着 = 沉浸模式**：这时三颗按钮已经搬到歌词页页头（歌名右边），
-/// 这行只剩频谱 —— 与 React 的 `{!immersive && <ToolButtons />}` 同构
-/// （src/App.tsx:1043-1046）。
+/// 进度行上方区域：沉浸模式先排与简约模式同款的三颗工具按钮，再排频谱。
 class _WaveRow extends StatelessWidget {
   const _WaveRow({required this.showWaveStrip, required this.strip});
 
@@ -341,31 +333,28 @@ class _WaveRow extends StatelessWidget {
         if (showWaveStrip) Expanded(child: strip),
       ],
     );
-    // 窄屏歌词页：页头那组（T / 毛玻璃 / 睡眠 + 波形样式下拉）挪到频谱条上方
-    // 单独成行 —— 手机上一只手够不到页头顶端（app.css 的 `.transport__lyric-row`）。
-    // 三颗按钮仍在同一个 Padding 里起排，左端与简约模式那行完全对齐。
-    //
-    // 这一行与上面的歌词页同属「点哪儿都切回简约模式」的热区：手机退出沉浸
-    // 只剩点空白，行里两颗控件之外的地方（按钮之间、贴右的留白）点下去也该退出。
-    // 里层按钮 / 下拉自己会先进竞技场，点它们仍弹各自的面板。
-    if (showWaveStrip && !isDesktop(width)) {
+    // 沉浸模式：三颗按钮统一放在频谱条上方，左端与简约模式完全对齐。
+    // 窄屏另把波形下拉放进这一行，并保留点空白退出手势。
+    if (showWaveStrip) {
+      final tools = Row(children: const [ToolButtons()]);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          GestureDetector(
-            key: const Key('transport-tap-to-simple'),
-            // opaque：Spacer 那块没底的像素也要能点到
-            behavior: HitTestBehavior.opaque,
-            onTap: () => context.read<LyricsPageController?>()?.close(),
-            child: Row(
-              children: const [
-                ToolButtons(),
-                Spacer(),
-                // 面板向上弹：这行已经贴着屏幕底部（React 侧同一处 `bottom: 100%`）
-                WaveStylePicker(side: ToolPanelSide.above),
-              ],
-            ),
-          ),
+          if (!isDesktop(width))
+            GestureDetector(
+              key: const Key('transport-tap-to-simple'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () => context.read<LyricsPageController?>()?.close(),
+              child: Row(
+                children: const [
+                  ToolButtons(),
+                  Spacer(),
+                  WaveStylePicker(side: ToolPanelSide.above),
+                ],
+              ),
+            )
+          else
+            tools,
           const SizedBox(height: 6),
           row,
         ],

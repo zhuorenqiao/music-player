@@ -34,13 +34,19 @@ import 'core/app_prefs.dart';
 import 'core/platform_services.dart';
 import 'core/screen_wake_lock.dart';
 import 'core/storage_keys.dart';
+import 'library/audio_info_duration_opener.dart';
 import 'library/duration_probe.dart';
 import 'library/import_service.dart';
 import 'library/library_repository.dart';
 import 'library/recent_store.dart';
+import 'lyrics/kugou_lyrics.dart';
 import 'lyrics/lyrics_cache.dart';
+import 'lyrics/lyrics_prefetch.dart';
 import 'lyrics/lyrics_source.dart';
 import 'lyrics/manual_lyrics.dart';
+import 'lyrics/netease_lyrics.dart';
+import 'lyrics/page_client.dart';
+import 'lyrics/qishui_lyrics.dart';
 import 'lyrics/translate_cache.dart';
 import 'lyrics/translate_source.dart';
 import 'lyrics/upstream.dart';
@@ -64,6 +70,7 @@ import 'state/library_state.dart';
 import 'state/bilingual_state.dart';
 import 'state/lyrics_page_controller.dart';
 import 'state/lyrics_state.dart';
+import 'state/media_refresh_state.dart';
 import 'state/player_state.dart';
 import 'state/recent_state.dart';
 import 'state/sleep_timer_state.dart';
@@ -110,12 +117,19 @@ Future<void> main() async {
     // buildBootstrap 的默认是不排 Timer 的挂起延时（见参数注释），因为所有
     // testWidgets 都跑在 FakeAsync 里，收尾时要求「没有 pending Timer」。
     lyricsDelay: Future.delayed,
+    // 预取（封面 400ms / 歌词 350ms 串行节流）也必须用真延时：默认的挂起延时
+    // 会让循环在第一条之后永远停住。
+    prefetchDelay: Future.delayed,
+    mediaPrefetch: true,
     // 播放期间屏幕常亮（安卓窗口 flag）。放在这里而不是 buildBootstrap 的默认
     // 值里：测试装配一律走 noop，绝不碰 Activity 的平台通道。
     screenWakeLock: const SystemScreenWakeLock(),
   );
   // 生产入口才打开 2 秒开屏；测试里直接构造 LightMusicApp 时默认跳过。
   runApp(LightMusicApp(bootstrap: bootstrap, showSplash: true));
+  // 本版第一次启动：把旧档案里「被旧探针判过、但时长仍 missing」的曲目补探
+  // 一轮。放在 runApp 之后，不挡首帧；标记写在 prefs，之后不再重跑。
+  unawaited(bootstrap.library.repairDurationOnUpgrade());
 }
 
 /// 建对象、恢复存档、挂上媒体会话。测试可注入假 driver / 假 bridge。
@@ -123,9 +137,10 @@ Future<void> main() async {
 /// [notificationGranted] 为 null 时按 [queryNotificationPermission]（默认
 /// [notificationPermissionGranted]）查询当前状态；直接传 bool 可跳过查询。
 /// [mediaSessionAttachTimeout] 只在测试里缩短。
-/// [durationOpener] 只在测试里注入：生产上是 media_kit 的独立内核 opener
-/// （I1 —— `ImportService.durationProbe` 从前没有任何赋值点，无标签曲目的
-/// 时长就永远缺失），排队与 3000ms 预算由 [DurationProbe] 统一管。
+/// [durationOpener] 只在测试里注入：生产上先读容器头（audio_decoder），
+/// 读不出来再交给 media_kit 的独立内核（I1 —— `ImportService.durationProbe`
+/// 从前没有任何赋值点，无标签曲目的时长就永远缺失），排队与 3000ms 预算由
+/// [DurationProbe] 统一管。
 /// [durationOpenerClose] 与它配对：注入假 opener 时一并注入它的释放接缝，
 /// 好让测试断言 [AppBootstrap.dispose] 真的把探测内核关掉了（终审 A2）；
 /// 生产上不传，用的是 [MediaKitDurationOpener.dispose]。
@@ -164,6 +179,10 @@ Future<AppBootstrap> buildBootstrap({
   // pending-Timer 手法）。
   Future<void> Function(Duration)? prefetchDelay,
   Future<int> Function(List<Track>, {String? currentId})? lyricsPrefetchRun,
+  // 新导入批次 / 冷启动后的封面 + 歌词预加载。生产 `main()` 显式开启并配
+  // `prefetchDelay: Future.delayed`；测试默认关闭 —— 预取循环会在延时接缝上
+  // 挂起，默认开启会让「导入了歌」的用例多出一串无法收尾的后台任务。
+  bool mediaPrefetch = false,
   // M3 T5：外观状态机的注入接缝（测试传 load 好的真实例；生产不传，
   // 内部 load）。接缝模式与 lyricsMatcher / translationFetcher 相同。
   ThemeState? themeState,
@@ -197,8 +216,15 @@ Future<AppBootstrap> buildBootstrap({
   final probeOpener = durationOpener == null
       ? MediaKitDurationOpener(timeoutMs: kDurationProbeTimeoutMs)
       : null;
+  // 生产上先读容器头的时长（audio_decoder），读不出来再交给 media_kit。
+  // 测试注入 durationOpener 时完全绕开这一层，行为与旧用例一致。
+  final Future<double> Function(String)? opener =
+      durationOpener ??
+      (probeOpener == null
+          ? null
+          : AudioInfoDurationOpener(probeOpener.call).call);
   final probe = DurationProbe(
-    durationOpener ?? probeOpener!.call,
+    opener!,
     timeoutMs: kDurationProbeTimeoutMs,
     closeOpener: durationOpenerClose ?? probeOpener?.dispose,
   );
@@ -287,6 +313,10 @@ Future<AppBootstrap> buildBootstrap({
           directory: lyricsCacheDirectory ?? '$dataDirectory/lyrics',
         ),
         index: LyricsIndexCache(prefs),
+        // 歌词主源链：LRCLIB → 汽水 → 酷狗 → 网易云（见 lyrics_source.dart 文件头）。
+        qishui: QishuiLyrics(client: httpClient, pageClient: HttpPageClient()),
+        kugou: KugouLyrics(client: httpClient),
+        netease: NetEaseLyrics(client: httpClient),
         gate: RateLimitGate(),
       );
   final translateSource =
@@ -340,6 +370,50 @@ Future<AppBootstrap> buildBootstrap({
         artistIndex: ArtistIndexCache(prefs),
         sleep: prefetchDelay ?? _neverFireDelay(),
       );
+
+  // 导入批次 / 冷启动的媒体预加载器。两个上游并行，各自按自己的节奏串行：
+  // 封面 400ms、歌词 350ms（公共服务，不能因为「立即」就并行轰）。
+  final lyricsPrefetch = LyricsPrefetch(
+    matcher: lyricsSource,
+    sleep: prefetchDelay ?? _neverFireDelay(),
+  );
+  final mediaRefresh = MediaRefreshState(
+    library: library,
+    cover: cover,
+    matcher: lyricsSource,
+    toasts: toasts,
+    lyrics: lyrics,
+    // 测试默认挂起在延时上；生产 main() 传 Future.delayed。
+    sleep: prefetchDelay ?? _neverFireDelay(),
+    isOnline: () => true,
+  );
+  if (mediaPrefetch) {
+    // 导入一批：等标签 / 时长回填收敛后立即预取**这一批**，不等下一次启动。
+    library.onTracksImported = (tracks) async {
+      final items = <CoverPrefetchItem>[
+        for (final track in tracks)
+          if (track.cover.isEmpty)
+            (
+              title: track.title,
+              artist: track.artist,
+              duration: track.duration,
+              trackId: track.id,
+            ),
+      ];
+      await Future.wait<void>([
+        cover.prefetchCovers(items),
+        lyricsPrefetch.prefetch(
+          tracks,
+          currentId: player.current?.id,
+          allowMissingDuration: true,
+        ),
+      ]);
+      await library.persist();
+      // 当前曲目可能就在这批里：素材落地后让歌词状态机重新读一遍。
+      lyrics.attach(player.current);
+    };
+  }
+
   // 切歌联动（当前曲目在线匹配）：与 syncLyricsTrack 同一个事件源。
   void syncCoverTrack() {
     final track = player.current;
@@ -392,22 +466,37 @@ Future<AppBootstrap> buildBootstrap({
   // 预取一律不阻塞启动（unawaited），但内部仍等 enrichment 落定。
   unawaited(() async {
     await library.enrichmentSettled;
-    // 封面预取（covers.tsx:162-176）：跳过内嵌/已匹配的，400ms 串行。
-    await cover.prefetchCovers(<CoverPrefetchItem>[
+    // 内嵌封面是文件自带的权威图，在线匹配抢不过它 —— 构造列表时就剔掉。
+    final prefetchItems = <CoverPrefetchItem>[
       for (final track in library.playlist.tracks)
-        (
-          title: track.title,
-          artist: track.artist,
-          duration: track.duration,
-          trackId: track.id,
+        if (track.cover.isEmpty)
+          (
+            title: track.title,
+            artist: track.artist,
+            duration: track.duration,
+            trackId: track.id,
+          ),
+    ];
+    if (mediaPrefetch) {
+      // 封面 ∥ 歌词：两条上游互不相关，串行会让冷启动的图 / 词晚一倍到齐。
+      await Future.wait<void>([
+        cover.prefetchCovers(prefetchItems),
+        lyricsPrefetch.prefetch(
+          library.playlist.tracks,
+          currentId: player.current?.id,
+          allowMissingDuration: true,
         ),
-    ]);
-    // 歌词预取（M2a 漏项补齐，lyrics-prefetch.ts 全文对译）：350ms 串行，
-    // 完成后统一落库一次（M2a 批量落库同款裁定）。
-    await (lyricsPrefetchRun ?? _noopLyricsPrefetch)(
-      library.playlist.tracks,
-      currentId: player.current?.id,
-    );
+      ]);
+      lyrics.attach(player.current);
+    } else {
+      // 测试装配的旧行为：只跑封面预取，歌词走可注入接缝（默认 noop）。
+      // 延时接缝默认永不完成，这条链在测试里停在第一首，不会留下 Timer。
+      await cover.prefetchCovers(prefetchItems);
+      await (lyricsPrefetchRun ?? _noopLyricsPrefetch)(
+        library.playlist.tracks,
+        currentId: player.current?.id,
+      );
+    }
     await library.persist();
   }());
 
@@ -466,6 +555,7 @@ Future<AppBootstrap> buildBootstrap({
     durationProbe: probe,
     lyrics: lyrics,
     bilingual: bilingual,
+    mediaRefresh: mediaRefresh,
     onLyricsViewChanged: syncLyricsTrack,
     lyricsPage: lyricsPage,
     cover: cover,
