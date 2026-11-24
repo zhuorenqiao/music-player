@@ -270,8 +270,12 @@ export function RadioProvider({ children }: { children: ReactNode }) {
     }
   }, [pauseMusic]);
 
-  scheduleReconnectRef.current = scheduleReconnect;
-  reconnectNowRef.current = reconnectNow;
+  // 渲染期不许写 ref：改在 effect 里同步最新回调。ref 的所有读取都在
+  // 定时器 / Promise 回调里（必晚于 effect），读取语义不变。
+  useEffect(() => {
+    scheduleReconnectRef.current = scheduleReconnect;
+    reconnectNowRef.current = reconnectNow;
+  }, [scheduleReconnect, reconnectNow]);
 
   /** 起播：换 src → play。失败一律落到稳定态并留一句人话错误。 */
   const start = useCallback((station: RadioStation) => {

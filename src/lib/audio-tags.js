@@ -203,9 +203,14 @@ function cleanText(value) {
  */
 function decodeId3Text(bytes, encoding) {
   if (encoding === 1) {
-    // 带 BOM 的 UTF-16；没有 BOM 时按 UTF-16LE 猜（写标签的工具绝大多数用 LE）
-    const hasBom = bytes[0] === 0xff && bytes[1] === 0xfe;
-    return decodeText(hasBom ? bytes.subarray(2) : bytes, hasBom ? 'utf-16le' : 'utf-16le');
+    // 带 BOM 的 UTF-16：FF FE 是小端、FE FF 是大端；没有 BOM 时按 UTF-16LE 猜（写标签的工具绝大多数用 LE）
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+      return decodeText(bytes.subarray(2), 'utf-16le');
+    }
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+      return decodeText(bytes.subarray(2), 'utf-16be');
+    }
+    return decodeText(bytes, 'utf-16le');
   }
   if (encoding === 2) {
     return decodeText(bytes, 'utf-16be');
@@ -252,14 +257,20 @@ function parseId3v2Frames(tag, version, flags) {
   const unsyncAll = (flags & 0x80) !== 0;
   const body = unsyncAll ? desynchronise(tag) : tag;
 
-  // v2.3 有扩展头（flag 0x40）：4 字节扩展长度 + 扩展标志，帧区整体后移
+  // 扩展头（flag 0x40）：帧区整体后移。size 字段都在 body[0..3]，
+  // v2.3 是普通大端且不含自身 4 字节前缀，v2.4 是 synchsafe 且含自身
   let cursor = 0;
-  if (version === 3 && (flags & 0x40) !== 0) {
-    cursor = 4 + readU32BE(body, 4);
+  if ((flags & 0x40) !== 0) {
+    if (version === 3) {
+      cursor = 4 + readU32BE(body, 0);
+    } else if (version === 4) {
+      cursor = readSynchsafe(body, 0);
+    }
   }
 
   const idLength = version === 2 ? 3 : 4;
-  const headerLength = idLength + 4 + 2;
+  // v2.2 帧头是 3 字节 ID + 3 字节 size（24 位大端，无 flags）共 6 字节；v2.3/2.4 是 4+4+2
+  const headerLength = version === 2 ? 6 : idLength + 4 + 2;
 
   while (cursor + headerLength <= body.length) {
     const id = decodeText(body.subarray(cursor, cursor + idLength), 'iso-8859-1');
@@ -267,15 +278,24 @@ function parseId3v2Frames(tag, version, flags) {
       break; // 进了 padding 区
     }
 
-    const sizeField = body.subarray(cursor + idLength, cursor + idLength + 4);
-    // v2.4 的帧长度是 synchsafe，v2.2/2.3 是普通大端
-    const frameSize = version === 4 ? readSynchsafe(sizeField, 0) : readU32BE(sizeField, 0);
+    let frameSize;
+    let frameFlags = 0;
+    if (version === 2) {
+      // v2.2 的帧长度是 24 位大端
+      const sizeField = body.subarray(cursor + idLength, cursor + idLength + 3);
+      frameSize = (sizeField[0] << 16) | (sizeField[1] << 8) | sizeField[2];
+    } else {
+      const sizeField = body.subarray(cursor + idLength, cursor + idLength + 4);
+      // v2.4 的帧长度是 synchsafe，v2.3 是普通大端
+      frameSize = version === 4 ? readSynchsafe(sizeField, 0) : readU32BE(sizeField, 0);
+      // v2.3 的 flags 取第 1 字节；v2.4 的逐帧 unsync 位在第 2 字节，取它才有意义
+      frameFlags = body[cursor + idLength + (version === 4 ? 5 : 4)];
+    }
     if (frameSize <= 0 || cursor + headerLength + frameSize > body.length) {
       break;
     }
-    const frameFlags = version === 2 ? 0 : (sizeField[0], body[cursor + idLength + 4]);
     let content = body.subarray(cursor + headerLength, cursor + headerLength + frameSize);
-    // v2.4 允许单帧自带 unsync（flags 的第 1 字节 0x02）
+    // v2.4 允许单帧自带 unsync（第 2 个 flags 字节的 0x02 位）
     if (version === 4 && (frameFlags & 0x02) !== 0) {
       content = desynchronise(content);
     }
@@ -373,7 +393,8 @@ function findTerminator(bytes, from, wide) {
     if (!wide) {
       return i;
     }
-    if (bytes[i + 1] === 0x00) {
+    // UTF-16 的双 NUL 结束符必须与起始位置 2 字节对齐，否则会把字符的高位 0x00 当成结束符
+    if ((i - from) % 2 === 0 && bytes[i + 1] === 0x00) {
       return i;
     }
   }
@@ -796,7 +817,7 @@ export async function readAudioTags(file, options = {}) {
 }
 
 /**
- * 解析 OGG：把前几页的 body 拼起来找 Vorbis comment 报文。
+ * 解析 OGG：把前几页的 body 拼起来找 comment 报文（Vorbis / Ogg Opus）。
  * @param {File} file 音频文件
  * @param {Uint8Array} head 头部字节
  * @returns {Promise<object>}
@@ -804,22 +825,31 @@ export async function readAudioTags(file, options = {}) {
 async function parseOgg(file, head) {
   const result = { title: '', artist: '', album: '', albumArtist: '', year: '', picture: null };
   let data = head;
-  // 拼接前几页的负载，直到能看见 comment 报文（Vorbis 的第 2 个报文，以 0x03 'vorbis' 开头）
-  let start = 0;
-  for (let guard = 0; guard < 8; guard += 1) {
-    start = data.indexOf(0x03, start);
-    if (start < 0) {
+  // 拼接前几页的负载，找 comment 报文：Vorbis 是第 2 个报文（以 0x03 'vorbis' 开头），
+  // Ogg Opus 是 'OpusTags' 报文（'OpusHead' 之后的那个），两者结构同 Vorbis Comment
+  let commentStart = -1; // vendor 长度字段的起点
+  for (let guard = 0, probe = 0; guard < 8; guard += 1) {
+    const at = data.indexOf(0x03, probe);
+    if (at < 0) {
       break;
     }
-    if (matchText(data, start + 1, 'vorbis')) {
+    if (matchText(data, at + 1, 'vorbis')) {
+      commentStart = at + 7; // 0x03 + 'vorbis'
       break;
     }
-    start += 1;
+    probe = at + 1;
   }
-  if (start < 0) {
-    return result;
+  if (commentStart < 0) {
+    for (let probe = 0; (probe = data.indexOf(0x4f, probe)) >= 0; probe += 1) {
+      if (matchText(data, probe, 'OpusTags')) {
+        commentStart = probe + 8; // 'OpusTags' 之后即 Vorbis Comment 结构
+        break;
+      }
+    }
   }
-  const commentStart = start + 7; // 0x03 + 'vorbis'
+  if (commentStart < 0) {
+    return result; // 没有 comment 报文：宁缺毋滥，不拿垃圾字节乱解析
+  }
   const vendorLength = readU32LE(data, commentStart);
   let needed = commentStart + 4 + vendorLength + 4;
   if (needed > data.length) {

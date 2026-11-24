@@ -717,6 +717,7 @@ async function requestLrclibDirect(query, params, baseParams, signal) {
         }
         throw new Error(describeFailure(response));
       }
+      const best = pickBest(response.data, query);
       return best ? toResult(best) : { status: 'not-found' };
     },
   });
@@ -840,12 +841,7 @@ async function requestFoldedNetwork(query, signal, { refresh = false } = {}) {
           return { status: 'not-found' };
         }
       }
-      // 线上中转只负责汽水、酷狗两家（它们没有 CORS 头）。这两家没词时
-      // 会带 fallback 标记，客户端继续直连网易云；不能在这里截断。
       const canFallback = payload.status === 'not-found' && payload.fallback === true;
-      if (payload.status === 'not-found' && !canFallback) {
-        return { status: 'not-found' };
-      }
       if (!canFallback) {
         // 代理明确报告上游失败：直接把原因交给界面，不再走浏览器直连（那条路通常更慢）。
         // reason 要一路带到界面：是限流、超时还是连不上，用户的处理方式完全不同。

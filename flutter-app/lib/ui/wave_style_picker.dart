@@ -129,6 +129,7 @@ class _WaveStylePickerState extends State<WaveStylePicker> {
                 active: _active,
                 onActiveChanged: (i) {
                   if (!mounted) return;
+                  if (i == _active) return;
                   setState(() => _active = i);
                   _entry?.markNeedsBuild();
                 },

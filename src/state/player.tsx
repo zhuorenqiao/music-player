@@ -251,6 +251,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // 用户为内置曲目手动挂载的 .lrc 也要跟着持久化
         lyrics: track.lyrics || '',
         lyricsPlain: track.lyricsPlain || '',
+        // 手动 / 自动标记与线上来源同样要落库：丢了它们，重载后 normalizeTrack
+        // 会把歌词来源归成空串，media-refresh 的 manual 保护随之失效。
+        lyricsSource: track.lyricsSource || '',
+        lyricsOrigin: track.lyricsOrigin || '',
       }));
     Storage.write(STORAGE_KEYS.playlist, serializable);
     Storage.write(STORAGE_KEYS.order, (playlist.tracks as Track[]).map((track) => track.id));
@@ -589,7 +593,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             .filter((record) => record?.id && record?.blob)
             .map((record) => [String(record?.id), record?.blob as Blob]),
         );
-        tagsDone = applyAudioTags(restoredLocal, blobById, playlist.tracks as Track[])
+        // 必须链在 tagsDone 后面（而不是整体覆盖）：上面的时长探针链一断，
+        // 底下 prefetchLyrics 就只等标签链，老库曲目（时长还没探到）会被整批跳过。
+        tagsDone = tagsDone
+          .then(() => applyAudioTags(restoredLocal, blobById, playlist.tracks as Track[]))
           .then(async (renamed) => {
             for (const track of renamed) {
               await prefetchCovers([track]);

@@ -49,6 +49,9 @@ const SleepContext = createContext<SleepContextValue | null>(null);
 export function SleepProvider({ children }: { children: ReactNode }) {
   const player = usePlayer();
   const radio = useRadio();
+  /** 只取两个稳定回调：tune / toggle 只做「让位」，不该跟着整个 context value 重建。 */
+  const pauseMusic = player.pause;
+  const pauseRadio = radio.pause;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [current, setCurrent] = useState<SleepTrack | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -57,10 +60,14 @@ export function SleepProvider({ children }: { children: ReactNode }) {
 
   /** 播放态的最新值：音频事件 / 让位 effect 里读的是它，不吃闭包旧值。 */
   const playingRef = useRef(false);
-  playingRef.current = playing;
   /** 当前曲目 id：异步起播回调里判断「用户是不是已经换了别的」。 */
   const currentIdRef = useRef<string | null>(null);
-  currentIdRef.current = current?.id ?? null;
+  // 渲染期不许写 ref：改在 effect 里同步最新值。它先于下面的让位 effect 声明，
+  // 同一次提交里让位 effect 读到的仍是最新值，各处读取语义不变。
+  useEffect(() => {
+    playingRef.current = playing;
+    currentIdRef.current = current?.id ?? null;
+  }, [playing, current]);
   /** 淡入的 rAF 句柄：换曲 / 暂停时要立刻掐掉。 */
   const fadeRef = useRef<number | null>(null);
 
@@ -163,8 +170,8 @@ export function SleepProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current;
     if (!audio) return;
     // 两条链路都先让位：不做这一步就是两路声音叠在一起
-    player.pause();
-    radio.pause();
+    pauseMusic();
+    pauseRadio();
     cancelFade();
     setError(null);
     setLoading(true);
@@ -191,7 +198,7 @@ export function SleepProvider({ children }: { children: ReactNode }) {
         fadeIn(audio);
       }
     }, 30);
-  }, [cancelFade, fadeIn, player, radio]);
+  }, [cancelFade, fadeIn, pauseMusic, pauseRadio]);
 
   const toggle = useCallback(() => {
     const audio = audioRef.current;
@@ -204,8 +211,8 @@ export function SleepProvider({ children }: { children: ReactNode }) {
       pause();
       return;
     }
-    player.pause();
-    radio.pause();
+    pauseMusic();
+    pauseRadio();
     setError(null);
     setLoading(true);
     audio.volume = 0;
@@ -219,7 +226,7 @@ export function SleepProvider({ children }: { children: ReactNode }) {
     } else {
       fadeIn(audio);
     }
-  }, [current, fadeIn, pause, player, radio, tune]);
+  }, [current, fadeIn, pause, pauseMusic, pauseRadio, tune]);
 
   const stop = useCallback(() => {
     const audio = audioRef.current;

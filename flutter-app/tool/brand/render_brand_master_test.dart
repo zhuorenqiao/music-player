@@ -17,13 +17,32 @@ const double kArtSize = 1024;
 
 /// 测试环境不会自动挂 MaterialIcons，图标字会画成空白方块 —— 手动装一次。
 Future<void> loadMaterialIcons() async {
-  final file = File(
-    r'D:\flutter\bin\cache\artifacts\material_fonts\materialicons-regular.otf',
-  );
+  final file = File(_materialIconsPath());
   final bytes = file.readAsBytesSync();
   final loader = FontLoader('MaterialIcons')
     ..addFont(Future<ByteData>.value(ByteData.sublistView(bytes)));
   await loader.load();
+}
+
+/// materialicons-regular.otf 的位置：换机/换盘符不能写死。
+///
+/// 测试宿主（flutter_tester / dart）都活在 `<flutter>/bin/cache/…` 之下，从
+/// `Platform.resolvedExecutable` 向上逐级找 `cache` 锚点；找不到再退
+/// `FLUTTER_ROOT`，最后才回退原硬编码路径。
+String _materialIconsPath() {
+  const rel = 'artifacts/material_fonts/materialicons-regular.otf';
+  var dir = File(Platform.resolvedExecutable).parent;
+  for (var i = 0; i < 8; i++) {
+    for (final candidate in ['${dir.path}/$rel', '${dir.path}/cache/$rel']) {
+      if (File(candidate).existsSync()) return candidate;
+    }
+    final parent = dir.parent;
+    if (parent.path == dir.path) break;
+    dir = parent;
+  }
+  final root = Platform.environment['FLUTTER_ROOT'];
+  if (root != null && root.isNotEmpty) return '$root/bin/cache/$rel';
+  return r'D:\flutter\bin\cache\artifacts\material_fonts\materialicons-regular.otf';
 }
 
 /// 对译 ui/header.dart 里 `_Brand` 的 40×40 logo（半径 13、1px 描边、

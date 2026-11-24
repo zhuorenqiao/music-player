@@ -7,7 +7,8 @@
  *   2. 逐首绕过缓存重新查询（matchLyrics / matchCover 的 useCache:false）；
  *   3. 只覆盖能拿到的结果 —— 查询失败 / 未命中不清掉现有封面与歌词，
  *      手动挂的 .lrc（lyricsSource === 'manual'）不参与、也不覆盖；
- *   4. 命中结果写回 IndexedDB，重启后不用再查一遍。
+ *   4. 命中结果写回：本地曲目落 IndexedDB，非本地曲目走 onCommit（调用方传
+ *      player 的 persist）写回 localStorage —— 否则页面一重载就回滚成旧值。
  *
  * 两条链路（封面 iTunes / 歌词 LRCLIB）互相独立，所以**并行**跑：封面 400ms
  * 一条、歌词 350ms 一条，各自串行节流，对公共接口保持和预取一样的客气节奏。
@@ -55,15 +56,17 @@ export function isMediaRefreshRunning(): boolean {
  *
  * @param tracks 播放列表里的活对象
  * @param options.onUpdate 有结果落地时的节流回调（调用方用 refresh() 重绘）
+ * @param options.onCommit 非本地曲目命中后的持久化回调（调用方传 persist）。
+ *   用回调注入而不是 import player 状态模块，避免 state 模块之间成环。
  */
 export async function refreshAllMedia(
   tracks: Track[],
-  { onUpdate }: { onUpdate?: () => void } = {},
+  { onUpdate, onCommit }: { onUpdate?: () => void; onCommit?: () => void } = {},
 ): Promise<MediaRefreshResult> {
   if (active) {
     return active;
   }
-  const job = runRefresh(tracks, onUpdate);
+  const job = runRefresh(tracks, onUpdate, onCommit);
   active = job;
   try {
     return await job;
@@ -79,6 +82,7 @@ function delay(ms: number): Promise<void> {
 async function runRefresh(
   tracks: Track[],
   onUpdate?: () => void,
+  onCommit?: () => void,
 ): Promise<MediaRefreshResult> {
   const result: MediaRefreshResult = {
     lyrics: 0,
@@ -124,6 +128,9 @@ async function runRefresh(
           track.cover = match.url;
           if (track.isLocal) {
             void patchLocalRecord(track.id, { cover: match.url });
+          } else {
+            // 非本地曲目没有 IndexedDB 记录，不写回 localStorage 重载就回滚
+            onCommit?.();
           }
           result.covers += 1;
           notify();
@@ -161,6 +168,9 @@ async function runRefresh(
               lyricsSource: 'auto',
               lyricsOrigin: track.lyricsOrigin,
             });
+          } else {
+            // 同封面：非本地曲目命中后也要持久化
+            onCommit?.();
           }
           result.lyrics += 1;
           notify();

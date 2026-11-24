@@ -420,8 +420,17 @@ class ImportService {
     // 文件（Windows 共享冲突 / 正被另一个进程独占）标签一个字节也读不到，但时长
     // 是真的；从前只认 `opened`，这类曲目永远不记账 —— 每次启动重开文件、重探
     // 一遍，再由批次收尾把整库档案重写一遍（`library_state.dart` 的收尾落库）。
-    return opened || outcome.isKnown;
+    return _canRecordProbe(opened: opened, outcome: outcome);
   }
+
+  /// 「这一次可以记 `metadataProbed`」的共用判据（[_enrich] /
+  /// [_retryDurationQuiet] 两处同一把尺，别再分叉）：结论可信
+  /// （[DurationProbeOutcome.isConclusive]）**且**这一次确实有见证 —— 读到了
+  /// 文件字节（`opened`），或探到了时长（`outcome.isKnown`，第 4 轮 I9）。
+  bool _canRecordProbe({
+    required bool opened,
+    required DurationProbeOutcome outcome,
+  }) => outcome.isConclusive && (opened || outcome.isKnown);
 
   /// 把已探到的正数时长写进活对象，并通知界面。
   ///
@@ -544,7 +553,10 @@ class ImportService {
     try {
       final outcome = await probe(live.handle.pathish);
       _applyDuration(live, outcome);
-      if (!outcome.isConclusive) return false;
+      // 与 [_enrich] 同一把尺（见 [_canRecordProbe]）：这一路不重读标签、没有
+      // `opened` 见证，能记账的只有「探到了时长」那一种；「探了一趟、结论是没
+      // 时长」在这里没有见证支撑，不记 —— 留给下一次启动再看一眼。
+      if (!_canRecordProbe(opened: false, outcome: outcome)) return false;
       live.metadataProbed = true;
       return true;
     } catch (_) {

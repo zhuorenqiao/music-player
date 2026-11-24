@@ -44,6 +44,10 @@ import 'track_handle.dart';
 /// 要的那首」，单曲循环下就是「刚切过去又从头重播」。
 const int kCompletedOpenSettleMs = 500;
 
+/// 补发暂存 completed 时「位置已到末尾」的容差（秒）：mpv 到 eof 时 time-pos
+/// 与 duration 之间可能差最后一个数据块 / 取整，别要求严格相等。
+const double kCompletedEndToleranceSeconds = 1.0;
+
 class MediaKitDriver implements AudioDriver {
   MediaKitDriver({Player? player}) : _player = player ?? Player() {
     _positionSub = _player.stream.position.listen((value) {
@@ -73,14 +77,23 @@ class MediaKitDriver implements AudioDriver {
       final msSinceOpen = openedAt == null
           ? -1
           : DateTime.now().difference(openedAt).inMilliseconds;
-      if (!MediaKitDriver.isSettledCompletion(
+      if (MediaKitDriver.isSettledCompletion(
         completed: value,
         progressed: _progressed,
         msSinceOpen: msSinceOpen,
       )) {
+        _emit(_completed, null);
         return;
       }
-      _emit(_completed, null);
+      // 静默窗内就到的 completed 不再一律丢弃：0.5 秒内真播完的短音频也走这
+      // 条路，丢掉就永不重发（单曲循环不重播、列表不接续）。先暂存，窗到期时
+      // 复核补发（[_flushPendingCompletion]）—— 真残留照样在复核时被丢。
+      if (_progressed &&
+          openedAt != null &&
+          msSinceOpen >= 0 &&
+          msSinceOpen < kCompletedOpenSettleMs) {
+        _parkPendingCompletion(openedAt);
+      }
     });
     _errorSub = _player.stream.error.listen((message) {
       // mpv 的 error 级日志**不都致命**。media_kit 把 `cplayer` / `lavf` /
@@ -173,6 +186,10 @@ class MediaKitDriver implements AudioDriver {
   /// 本次 [open] 之后，内核是否真的推进过位置（= 这一首真的在出声）。
   bool _progressed = false;
 
+  /// 静默窗内到达、待窗尾复核补发的 completed（值 = 它所属的那次 open 时刻）。
+  DateTime? _pendingCompletedFor;
+  Timer? _pendingCompletedTimer;
+
   bool _disposed = false;
 
   @override
@@ -181,6 +198,10 @@ class MediaKitDriver implements AudioDriver {
     // 换源即重置守卫：新媒体的「播完」必须由它自己重新挣出来（见 [kCompletedOpenSettleMs]）。
     _openedAt = DateTime.now();
     _progressed = false;
+    // 上一首暂存待补发的 completed 到此作废：它属于旧源。
+    _pendingCompletedTimer?.cancel();
+    _pendingCompletedTimer = null;
+    _pendingCompletedFor = null;
     final uri = track.handle.uri;
     try {
       await _player.open(Media(uri), play: false);
@@ -232,6 +253,9 @@ class MediaKitDriver implements AudioDriver {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _pendingCompletedTimer?.cancel();
+    _pendingCompletedTimer = null;
+    _pendingCompletedFor = null;
     await _positionSub.cancel();
     await _durationSub.cancel();
     await _bufferedSub.cancel();
@@ -291,6 +315,55 @@ class MediaKitDriver implements AudioDriver {
   @override
   bool get isLoading => _player.state.buffering;
 
+  /// 暂存静默窗内到达的 completed，窗到期时复核补发。
+  ///
+  /// 只挂一次到窗尾的定时器：同一 open 期间再来的 completed 覆盖暂存即可。
+  void _parkPendingCompletion(DateTime openedAt) {
+    _pendingCompletedFor = openedAt;
+    _pendingCompletedTimer?.cancel();
+    final remain =
+        kCompletedOpenSettleMs -
+        DateTime.now().difference(openedAt).inMilliseconds;
+    _pendingCompletedTimer = Timer(
+      Duration(milliseconds: remain > 0 ? remain : 0),
+      _flushPendingCompletion,
+    );
+  }
+
+  /// 暂存 completed 的补发放行：只认「这次 open 还在 + 位置确实到了末尾」。
+  ///
+  /// 位置这一证是防残留的关键：换源瞬间上一首的 eof 电平可能晚到，届时新曲目
+  /// 早在播（位置远没到末尾）→ 照样丢；真正 0.5 秒内播完的短音频在窗尾复核时
+  /// 位置必然停在末尾（容差 [kCompletedEndToleranceSeconds]）→ 补发放行。
+  /// 时长未知时无从判断，保守不放行（与「静默窗内一律丢弃」的旧行为同结果）。
+  void _flushPendingCompletion() {
+    _pendingCompletedTimer?.cancel();
+    _pendingCompletedTimer = null;
+    final pending = _pendingCompletedFor;
+    _pendingCompletedFor = null;
+    if (_disposed || pending == null) return;
+    if (!identical(_openedAt, pending)) return; // 窗内又换了源：上一首的残留
+    final openedAt = _openedAt;
+    if (openedAt == null) return;
+    final msSinceOpen = DateTime.now().difference(openedAt).inMilliseconds;
+    if (!MediaKitDriver.isSettledCompletion(
+      completed: true,
+      progressed: _progressed,
+      msSinceOpen: msSinceOpen,
+    )) {
+      return;
+    }
+    if (!_atMediaEnd) return;
+    _emit(_completed, null);
+  }
+
+  /// 位置是否已经走到当前媒体的末尾。
+  bool get _atMediaEnd {
+    final duration = durationOrNull;
+    if (duration == null) return false;
+    return position >= duration - kCompletedEndToleranceSeconds;
+  }
+
   /// 销毁后到达的内核回调静默丢弃。
   void _emit<T>(StreamController<T> controller, T value) {
     if (_disposed || controller.isClosed) return;
@@ -323,12 +396,18 @@ class MediaKitDurationOpener {
   Player? _player;
   bool _disposed = false;
 
+  /// 代际令牌：外层 `DurationProbe` 超时会放弃这次 call，但它内部的 open 可能
+  /// 还在飞；只有最新一次 open 有权卸媒体，否则残留的 stop 会把下一首刚 open
+  /// 的媒体停掉，整批串行探测就此级联超时。
+  int _openSeq = 0;
+
   /// 探一个来源（文件路径或已经是 URI）；失败 / 超时都是 NaN，绝不抛。
   ///
   /// 唯一的例外是 [DurationProbeSkipped]：那三支**根本没探**（内核已释放、来源
   /// 不能探、原生库起不来）不许伪装成「这文件没有时长」—— 第 4 轮 C8 的要点是
   /// NaN 这个返回值必须只有一个含义，否则上层会把一次被丢弃的尝试记成永久结论。
   Future<double> call(String source) async {
+    final token = ++_openSeq;
     // 已经释放的探测器不再碰内核（第 4 轮 C8）：退出时排在队列里的探测会一路
     // 跑到这里来，从前它返回 NaN，与「文件没有时长」同形 → 标记照记。
     if (_disposed) throw const DurationProbeSkipped('opener disposed');
@@ -371,10 +450,14 @@ class MediaKitDurationOpener {
         // 取消失败不影响下面那次 stop
       }
       // 无论成败都把媒体卸掉：留着上一首会污染下一首的 duration 流。
-      try {
-        await player.stop();
-      } catch (_) {
-        // 停止失败只当这次没清理，交给下一次探测或 dispose
+      // 但只有最新一次 open 才有权卸（代际令牌）：被外层超时放弃的那次不许
+      // 停掉下一首刚 open 的媒体。
+      if (token == _openSeq) {
+        try {
+          await player.stop();
+        } catch (_) {
+          // 停止失败只当这次没清理，交给下一次探测或 dispose
+        }
       }
     }
   }

@@ -96,9 +96,13 @@ class DurationProbeOutcome {
       status == DurationProbeStatus.timedOut ||
       status == DurationProbeStatus.interrupted;
 
-  /// 这次的答案能不能当作「这个文件自己的结论」落盘（记 `metadataProbed`）。
+  /// 这次的答案能不能当作「这个文件自己的结论」用 —— 记 `metadataProbed` 的
+  /// **必要条件**。
   ///
-  /// 只有正常收场那一种算数：超时、没探、探到一半被关，统统不算。
+  /// 只有正常收场那一种算数：超时、没探、探到一半被关，统统不算。注意它只是
+  /// 必要条件：`ImportService` 真正记账时还要求这一次**有见证** —— 读到了文件
+  /// 字节（`opened`）或探到了时长（[isKnown]），两处同一把尺
+  /// （`ImportService._canRecordProbe`）。
   bool get isConclusive => status == DurationProbeStatus.probed;
 
   /// 真的探到了一个可用时长。

@@ -170,6 +170,10 @@ class RadioState extends ChangeNotifier {
   bool _opened = false;
   bool _disposed = false;
 
+  /// 异步换台守卫（与 sleep_state 同一套 token 机制）：连点两台时只让最后一次
+  /// tune 落定，旧世代在 await 之后一律丢弃结果；pause / stop 也会作废在飞的 tune。
+  int _token = 0;
+
   /// 用户侧决定的暂停（自己按 / 音乐开声让位 / 睡眠定时器到点）：
   /// 只有它们能让「断流重连」闭嘴。
   bool _userPaused = false;
@@ -224,6 +228,7 @@ class RadioState extends ChangeNotifier {
       await toggle();
       return;
     }
+    final token = ++_token;
     _current = station;
     _error = null;
     _lastError = null;
@@ -241,9 +246,9 @@ class RadioState extends ChangeNotifier {
     // 先让音乐让位（同一条装配层的钩子），再开流 —— 顺序反了会有一瞬间两路
     // 声音叠在一起。这里要等暂停真的落下去，不能只发个信号就往下走。
     await onTuned?.call(station);
-    if (_disposed) return;
+    if (_disposed || token != _token) return;
     final opened = await engine.open(station.streamUrl);
-    if (_disposed) return;
+    if (_disposed || token != _token) return;
     if (!opened) {
       _loading = false;
       _playing = false;
@@ -260,7 +265,7 @@ class RadioState extends ChangeNotifier {
       return;
     }
     await engine.play();
-    if (_disposed) return;
+    if (_disposed || token != _token) return;
     // 内核的 playing 流通常紧随其后；这里兜一层，避免按钮一直转圈。
     _loading = false;
     notifyListeners();
@@ -328,6 +333,8 @@ class RadioState extends ChangeNotifier {
   /// 幂等：没开过台只把状态收干净；已经暂停时再调一次不会重复出声。
   Future<void> pause() async {
     if (_disposed) return;
+    // 作废在飞的 tune：让位之后旧世代的 open / play 结果一律丢弃。
+    _token++;
     // 让位是**用户侧**的决定（自己按 / 音乐开声 / 睡眠定时器到点）：
     // 断流重连不许把它推翻，否则「定时结束 → 暂停 → 重连又开声」会成死循环。
     _userPaused = true;
@@ -473,6 +480,8 @@ class RadioState extends ChangeNotifier {
   /// 停流并清空当前台（迷你条上的「关闭」调用）。
   Future<void> stop() async {
     if (_disposed) return;
+    // 作废在飞的 tune：停台之后旧世代不许再把流开回来。
+    _token++;
     _cancelReconnect();
     await engine.stop();
     _current = null;

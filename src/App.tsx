@@ -751,7 +751,7 @@ function Panel({ onClose, onNavigate }: {
   /** 选中曲目开始播放后调用（弹层据此收起） */
   onNavigate?: () => void;
 } = {}) {
-  const { current, tracks, currentIndex, playing, playAt, removeTrack, removeRecent, recent, syncRecent, failedIds, notice, hideNotice, resumeAutoplay, refresh } = usePlayer();
+  const { current, tracks, currentIndex, playing, playAt, removeTrack, removeRecent, recent, syncRecent, failedIds, notice, hideNotice, resumeAutoplay, refresh, persist } = usePlayer();
   /** 播放列表卡跟着播放卡一起做磨砂：用当前曲目的封面当模糊底 */
   const panelCover = useCover(current);
   const { show } = useToast();
@@ -786,7 +786,7 @@ function Panel({ onClose, onNavigate }: {
     setRefreshing(true);
     show(`正在重新获取 ${tracks.length} 首歌曲的封面与歌词…`, 'info', 6000);
     try {
-      const result = await refreshAllMedia(tracks, { onUpdate: refresh });
+      const result = await refreshAllMedia(tracks, { onUpdate: refresh, onCommit: persist });
       if (result.offline) {
         show('当前处于离线状态，无法重新获取封面与歌词', 'error', 6000);
       } else if (result.lyrics === 0 && result.covers === 0) {
@@ -801,7 +801,7 @@ function Panel({ onClose, onNavigate }: {
     } finally {
       setRefreshing(false);
     }
-  }, [refresh, refreshing, show, tracks]);
+  }, [persist, refresh, refreshing, show, tracks]);
   /**
    * 搜索：输入框即时回显，过滤用防抖后的值 —— 输入法打一个词会连发好几次 change，
    * 逐键重建整张列表没必要。清空 / Esc 走 cancel，点了就要立刻看到完整列表。
@@ -912,8 +912,12 @@ function Panel({ onClose, onNavigate }: {
             }
             event.preventDefault();
             event.stopPropagation();
-            setTab(event.key === 'ArrowRight' ? 'recent' : 'playlist');
-            (event.target as HTMLElement).focus();
+            const next = event.key === 'ArrowRight' ? 'recent' : 'playlist';
+            setTab(next);
+            // roving tabindex：焦点搬到新页签按钮，不能留在已经 tabIndex=-1 的旧按钮上（同 RadioTabs）
+            event.currentTarget
+              .querySelector<HTMLButtonElement>(`[aria-controls="${next === 'recent' ? 'paneRecent' : 'panePlaylist'}"]`)
+              ?.focus();
           }}
         >
           <button className="panel__tab" role="tab" type="button" tabIndex={tab === 'playlist' ? 0 : -1} aria-selected={tab === 'playlist'} aria-controls="panePlaylist" onClick={() => setTab('playlist')}>
@@ -1279,10 +1283,12 @@ function Transport({ onOpenQueue, queueOpen, immersive }: {
   const compact = useCompactLayout();
   /**
    * 拖拽中：本地暂存目标位置，**不 seek**，也不让 timeupdate 把滑块拽回去。
-   * 松手（change）才真正跳转，blur 兜底复位 —— 与 vanilla 的 isSeeking 同一套语义。
+   * 松手（pointerup）才真正跳转，blur / pointercancel 兜底复位 —— 与 vanilla 的 isSeeking 同一套语义。
    * 少了它，拖动过程中每移一格都在 seek，播放时钟会跟手指打架。
+   * draggingRef 用 ref 而非 state：事件回调里要拿到「此刻是否在拖」的实时值。
    */
   const [scrub, setScrub] = useState<number | null>(null);
+  const draggingRef = useRef(false);
   const shownTime = scrub ?? time;
   /**
    * 总时长：优先播放器报的 duration，其次曲目元数据。
@@ -1332,14 +1338,36 @@ function Transport({ onOpenQueue, queueOpen, immersive }: {
             aria-label="播放进度"
             aria-valuetext={`${formatTime(shownTime)} / ${formatTime(total)}`}
             disabled={!current}
-            onPointerDown={() => setScrub(time)}
-            onInput={(event) => setScrub(Number(event.currentTarget.value))}
+            onPointerDown={(event) => {
+              draggingRef.current = true;
+              // 抓住指针：松手时指针即使已移出滑块，pointerup 也会回到这里提交
+              event.currentTarget.setPointerCapture(event.pointerId);
+              setScrub(time);
+            }}
+            onInput={(event) => {
+              if (draggingRef.current) setScrub(Number(event.currentTarget.value));
+            }}
             onChange={(event) => {
-              const value = Number(event.currentTarget.value);
-              seek(value);
+              // React 对 range 的 onChange 等价于原生 input，拖动每一格都会触发：
+              // 拖动中只暂存、不 seek（由 pointerup 提交）；键盘方向键没有 pointer 事件，这里直接跳转。
+              if (draggingRef.current) return;
+              seek(Number(event.currentTarget.value));
               setScrub(null);
             }}
-            onBlur={() => setScrub(null)}
+            onPointerUp={(event) => {
+              if (!draggingRef.current) return;
+              draggingRef.current = false;
+              seek(Number(event.currentTarget.value));
+              setScrub(null);
+            }}
+            onPointerCancel={() => {
+              draggingRef.current = false;
+              setScrub(null);
+            }}
+            onBlur={() => {
+              draggingRef.current = false;
+              setScrub(null);
+            }}
           />
         </div>
         <span className="progress__time">{formatTime(total)}</span>
@@ -1959,16 +1987,43 @@ function Shell() {
   const [radioPage, setRadioPage] = useState(false);
   /** 休眠页开关：提前声明，openRadio 要能顺手把休眠页收掉（两页右上角互跳）。 */
   const [sleepPage, setSleepPage] = useState(false);
+
+  /**
+   * 歌词页开 / 关。所有入口（Esc、快捷键 L、「模式」按钮、点空白手势、切去
+   * 电台 / 休眠页）都走这两个函数：close() 顺手把焦点还给开页前的元素，绕过它
+   * 键盘用户按 Esc 后就掉到 body 上。
+   */
+  const open = useCallback(() => {
+    if (!document.body.classList.contains('is-lyrics-page')) {
+      returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    setLyricsPage(true);
+  }, []);
+  const close = useCallback(() => {
+    setLyricsPage(false);
+    const back = returnFocus.current;
+    returnFocus.current = null;
+    window.requestAnimationFrame(() => {
+      const target = back && document.contains(back) ? back : document.querySelector<HTMLElement>('.stage__cover-wrap');
+      target?.focus({ preventScroll: true });
+    });
+  }, []);
+  const toggle = useCallback(
+    () => (document.body.classList.contains('is-lyrics-page') ? close() : open()),
+    [close, open],
+  );
+
   const openRadio = useCallback(() => {
     // 进电台页等于离开音乐页的沉浸视图：不同步退出的话 body 上的 is-lyrics-page
     // 会继续锁住整页高度（那边 `body.is-lyrics-page .app { height: 100vh;
-    // overflow: hidden }` 的优先级比 .app--radio 高），电台列表就滚不动了
-    setLyricsPage(false);
+    // overflow: hidden }` 的优先级比 .app--radio 高），电台列表就滚不动了。
+    // 走 close() 而不是 setLyricsPage(false)：要触发焦点归还
+    close();
     // 从休眠页点「电台」过来时，休眠页必须退场：两页的 body 类
     // （is-radio-page / is-sleep-page）同时挂着会让两套布局互相打架
     setSleepPage(false);
     setRadioPage(true);
-  }, []);
+  }, [close]);
   /**
    * 回音乐页：**不停台**。电台继续在后台放，`.player` 卡内那条 MiniRadio
    * 交代「还在响的是哪一台」；要停只有两条路 —— 条上的暂停 / 关闭，或者
@@ -1983,11 +2038,12 @@ function Shell() {
    * 因为 openRadio 要先把它收掉。
    */
   const openSleep = useCallback(() => {
-    // 与进电台页同理：先退出沉浸歌词页，否则 body 上的高度锁会把休眠页的滚动锁死
-    setLyricsPage(false);
+    // 与进电台页同理：先退出沉浸歌词页，否则 body 上的高度锁会把休眠页的滚动锁死。
+    // 走 close() 而不是 setLyricsPage(false)：要触发焦点归还
+    close();
     setRadioPage(false);
     setSleepPage(true);
-  }, []);
+  }, [close]);
   const closeSleep = useCallback(() => setSleepPage(false), []);
 
   // 视图切换：body 上的类决定布局（与 vanilla 同一套 CSS 开关）
@@ -2006,23 +2062,8 @@ function Shell() {
     return () => document.body.classList.remove('is-sleep-page');
   }, [sleepPage]);
 
+  // 跨组件入口（曲目区 / 控制条的点空白手势）从 window 事件进来
   useEffect(() => {
-    const open = () => {
-      if (!document.body.classList.contains('is-lyrics-page')) {
-        returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      }
-      setLyricsPage(true);
-    };
-    const close = () => {
-      setLyricsPage(false);
-      const back = returnFocus.current;
-      returnFocus.current = null;
-      window.requestAnimationFrame(() => {
-        const target = back && document.contains(back) ? back : document.querySelector<HTMLElement>('.stage__cover-wrap');
-        target?.focus({ preventScroll: true });
-      });
-    };
-    const toggle = () => (document.body.classList.contains('is-lyrics-page') ? close() : open());
     window.addEventListener('app:open-lyrics-page', open);
     window.addEventListener('app:close-lyrics-page', close);
     window.addEventListener('app:toggle-lyrics-page', toggle);
@@ -2031,7 +2072,7 @@ function Shell() {
       window.removeEventListener('app:close-lyrics-page', close);
       window.removeEventListener('app:toggle-lyrics-page', toggle);
     };
-  }, []);
+  }, [close, open, toggle]);
 
   /**
    * 任意一次真实交互都可能解除自动播放限制 —— 但只试有限次（计数在 player 里）。
@@ -2097,7 +2138,8 @@ function Shell() {
       }
       if (event.key === 'Escape' && lyricsPage) {
         event.preventDefault();
-        setLyricsPage(false);
+        // 走 close 而不是 setLyricsPage(false)：要触发焦点归还
+        close();
         return;
       }
       if (event.altKey || event.ctrlKey || event.metaKey) {
@@ -2142,7 +2184,8 @@ function Shell() {
           playPrev();
           break;
         case 'KeyL':
-          setLyricsPage((value) => !value);
+          // 走 toggle：开页要记录 returnFocus，关页要归还焦点
+          toggle();
           break;
         default:
           break;
@@ -2150,7 +2193,7 @@ function Shell() {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [closeLightbox, closeRadio, closeSleep, lightbox, lyricsPage, playNext, playPrev, queueOpen, radioPage, seekBy, setVolume, sleepPage, togglePlay, volume]);
+  }, [close, closeLightbox, closeRadio, closeSleep, lightbox, lyricsPage, playNext, playPrev, queueOpen, radioPage, seekBy, setVolume, sleepPage, toggle, togglePlay, volume]);
 
   // 整页拖放导入
   useEffect(() => {
@@ -2207,7 +2250,7 @@ function Shell() {
           <div className="app">
             <Header
               immersive={lyricsPage}
-              onSwitchView={() => setLyricsPage((value) => !value)}
+              onSwitchView={toggle}
               onOpenRadio={openRadio}
               onOpenSleep={openSleep}
               onAdd={onMenuAdd}

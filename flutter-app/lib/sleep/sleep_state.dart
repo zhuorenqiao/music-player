@@ -100,6 +100,7 @@ class SleepState extends ChangeNotifier {
       final path = await _cache.fileFor(track);
       if (_disposed || token != _token) return;
       final opened = await _engine.open(path);
+      if (_disposed || token != _token) return;
       if (!opened) {
         _loading = false;
         _playing = false;
@@ -108,7 +109,6 @@ class SleepState extends ChangeNotifier {
         return;
       }
       _loaded = true;
-      if (_disposed || token != _token) return;
       // 生成期间用户可能又按了音乐 / 电台：再让一次，别让两路一起响
       if (_player.playing || _radio.playing) {
         await _player.pause();
@@ -159,6 +159,7 @@ class SleepState extends ChangeNotifier {
         final path = await _cache.fileFor(track);
         if (_disposed || token != _token) return;
         final opened = await _engine.open(path);
+        if (_disposed || token != _token) return;
         if (!opened) {
           _loading = false;
           _error = '这段声景没能出声，再点一次试试';

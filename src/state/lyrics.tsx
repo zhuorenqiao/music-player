@@ -503,8 +503,10 @@ export function LyricsProvider({ track, children }: { track: Track | null; child
     return () => {
       window.clearTimeout(slowHint);
     };
-    // tick 用于「重试」触发；track 换了也要重来
-  }, [track, tick, track?.id, track?.lyrics, track?.lyricsPlain, track?.lyricsOrigin]);
+    // tick 用于「重试」触发；track 换了也要重来。
+    // duration 必须进依赖：probeTrackDuration 是就地改可变 track 的 duration（引用不变），
+    // 不盯住它的话，本地曲目「时长没探到先等」那条分支永远等不到 effect 重跑。
+  }, [track, tick, track?.id, track?.duration, track?.lyrics, track?.lyricsPlain, track?.lyricsOrigin]);
 
   const value = useMemo<LyricsContextValue>(() => ({
     cues,

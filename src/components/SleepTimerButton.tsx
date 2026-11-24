@@ -213,6 +213,8 @@ export function SleepTimerButton({ variant }: { variant?: 'head' }) {
           /* 面板里点数字/拖滑杆别把手势冒泡到页面（滑切歌 / 点空白返回） */
           onPointerDown={(event) => event.stopPropagation()}
           onTouchStart={(event) => event.stopPropagation()}
+          /* click 也要截：portal 的事件沿组件树冒泡，不截会冒到 transport 的「点空白切歌词页」热区 */
+          onClick={(event) => event.stopPropagation()}
           onDragStart={(event) => event.preventDefault()}
           onContextMenu={(event) => event.preventDefault()}
         >

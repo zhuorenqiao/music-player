@@ -614,12 +614,19 @@ class LibraryState extends ChangeNotifier {
           ];
           if (ids.isNotEmpty) {
             final batch = importer.repairMissingDurations(ids);
-            if (batch != null && await batch) {
+            // batch 为 null = 无事可做，也算完成，避免空跑；返回 false = 整批补探
+            // 零收获（全超时 / 盘没挂载）—— 这时**不写**标记：下次启动还有机会，
+            // 不能把唯一一次升级自愈机会烧掉。
+            final learned = batch == null ? true : await batch;
+            if (learned) {
               await persist();
               _changed();
+              await prefs.writeString(StorageKeys.durationRepair, '1');
             }
+          } else {
+            // 没有要修的冻结记录：无事可做也算完成，别每次启动空跑一遍扫描。
+            await prefs.writeString(StorageKeys.durationRepair, '1');
           }
-          await prefs.writeString(StorageKeys.durationRepair, '1');
         })
         .catchError((Object _) {
           // 补探/写标记失败只当这次没做：下次启动还有机会，绝不冒到界面层。

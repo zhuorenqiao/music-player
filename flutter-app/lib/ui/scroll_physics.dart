@@ -138,7 +138,7 @@ class _SoftBouncingScrollSimulation extends Simulation {
         _springTime = _frictionSimulation.timeAtX(leadingExtent);
         _springSimulation = _underscrollSimulation(
           leadingExtent,
-          math.min(_frictionSimulation.dx(_springTime), maxBounceVelocity),
+          math.max(_frictionSimulation.dx(_springTime), -maxBounceVelocity),
         );
         assert(_springTime.isFinite);
       } else {

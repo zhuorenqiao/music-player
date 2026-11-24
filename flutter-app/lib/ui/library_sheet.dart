@@ -117,18 +117,18 @@ class _SheetPanelState extends State<_SheetPanel> {
     super.didChangeDependencies();
     final next = ModalRoute.of(context)?.animation;
     if (identical(next, _routeAnimation)) return;
-    _routeAnimation?.removeListener(_onStatusChanged);
+    _routeAnimation?.removeStatusListener(_onStatusChanged);
     _routeAnimation = next;
-    next?.addListener(_onStatusChanged);
+    next?.addStatusListener(_onStatusChanged);
   }
 
-  void _onStatusChanged() {
+  void _onStatusChanged(AnimationStatus _) {
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _routeAnimation?.removeListener(_onStatusChanged);
+    _routeAnimation?.removeStatusListener(_onStatusChanged);
     super.dispose();
   }
 

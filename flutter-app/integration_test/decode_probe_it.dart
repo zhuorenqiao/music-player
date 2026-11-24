@@ -3,6 +3,7 @@
 // M3 T1 首日风险闸的真机形态：`flutter test integration_test/decode_probe_it.dart
 // -d windows`（原生宿主里跑，MethodChannel 可用）。结论写进 M3-ACCEPTANCE §C。
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:audio_decoder/audio_decoder.dart';
@@ -15,7 +16,7 @@ Uint8List _synthWav() {
   final data = BytesBuilder();
   for (var i = 0; i < sampleRate; i++) {
     final v =
-        (0.5 * 32767 * (2 * 3.141592653589793 * 440 * i / sampleRate)).round();
+        (0.5 * 32767 * math.sin(2 * math.pi * 440 * i / sampleRate)).round();
     data.add([v & 0xFF, (v >> 8) & 0xFF]);
   }
   final pcm = data.takeBytes();
